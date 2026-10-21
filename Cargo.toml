@@ -1,0 +1,18 @@
+[package]
+name = "umotif"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Sequence motif types, conversions and analysis, following the universalmotif R package"
+license = "MIT"
+readme = "README.md"
+keywords = ["bioinformatics", "motif", "pwm", "genomics"]
+categories = ["science"]
+
+[dependencies]
+rand = "0.10.3"
+rand_distr = "0.6.0"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
