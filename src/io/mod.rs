@@ -6,6 +6,7 @@
 //! produce the same text as its `write_*()` functions.
 
 pub mod cisbp;
+pub mod fasta;
 pub mod homer;
 pub mod jaspar;
 pub mod matrix;

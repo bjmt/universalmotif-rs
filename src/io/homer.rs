@@ -2,6 +2,7 @@
 
 use super::{content_lines, fmt_err, format_fixed, format_r_number, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;
+use crate::cdf::ScoreDistribution;
 use crate::convert::convert_type;
 use crate::error::{Error, Result};
 use crate::matrix::Matrix;
@@ -98,13 +99,21 @@ pub fn read(text: &str) -> Result<Vec<Motif>> {
 }
 
 /// How the log-odds detection threshold written into HOMER headers is set.
+///
+/// Thresholds are on HOMER's own score scale. HOMER scores a site as the sum
+/// of `ln(p / 0.25)` over its positions, using the probabilities as written
+/// in the file (three decimals) with a floor of 0.001.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Threshold {
-    /// A fraction of each motif's maximum possible log-odds score, either one
+    /// A fraction of each motif's maximum possible HOMER score, either one
     /// value for all motifs or one per motif.
     Logodds(Vec<f64>),
-    /// Absolute log-odds scores, either one value or one per motif.
+    /// HOMER scores, either one value or one per motif.
     LogoddsAbs(Vec<f64>),
+    /// A HOMER score that random sites (from a uniform background) reach
+    /// with at most this probability, either one value or one per motif. It
+    /// is conservative by at most 0.001 per motif position.
+    Pvalue(Vec<f64>),
 }
 
 impl Default for Threshold {
@@ -113,10 +122,24 @@ impl Default for Threshold {
     }
 }
 
+/// HOMER's scoring matrix for a PPM as it would be written to a file:
+/// `ln(max(p, 0.001) / 0.25)` with `p` rounded to three decimals, as in
+/// `Motif::logxform()` in HOMER's `cpp/Motif2.cpp`.
+pub fn homer_score_matrix(ppm: &Matrix) -> Matrix {
+    ppm.map_columns(|c| {
+        c.iter()
+            .map(|&p| {
+                let p: f64 = format_fixed(p, 3).parse().unwrap_or(p);
+                (p.max(0.001) / 0.25).ln()
+            })
+            .collect()
+    })
+}
+
 /// Write DNA or RNA motifs in HOMER format.
 pub fn write(motifs: &[Motif], threshold: &Threshold) -> Result<String> {
     let values = match threshold {
-        Threshold::Logodds(v) | Threshold::LogoddsAbs(v) => v,
+        Threshold::Logodds(v) | Threshold::LogoddsAbs(v) | Threshold::Pvalue(v) => v,
     };
     if values.len() != 1 && values.len() != motifs.len() {
         return fmt_err("a single threshold or one per motif should be provided");
@@ -129,19 +152,27 @@ pub fn write(motifs: &[Motif], threshold: &Threshold) -> Result<String> {
             ));
         }
         let t = values[if values.len() == 1 { 0 } else { i }];
+        let ppm = convert_type(m, MotifType::Ppm, None, false)?;
+        let scores = homer_score_matrix(&ppm.matrix);
         let thr = match threshold {
             Threshold::LogoddsAbs(_) => t,
+            Threshold::Pvalue(_) => {
+                // The distribution is computed on a grid where each entry is
+                // truncated to 1/1000, which can lower a site's score by up
+                // to 0.001 per position. HOMER uses exact scores, so the
+                // cutoff is raised by that much to keep every site HOMER
+                // accepts within the P-value.
+                let grid = ScoreDistribution::new(&scores, &[0.25; 4]).score(t);
+                grid + scores.ncol() as f64 / 1000.0
+            }
             Threshold::Logodds(_) => {
-                let pwm = convert_type(m, MotifType::Pwm, None, false)?;
-                let max: f64 = pwm
-                    .matrix
+                let max: f64 = scores
                     .columns()
                     .map(|c| c.iter().copied().fold(f64::NEG_INFINITY, f64::max))
                     .sum();
                 max * t
             }
         };
-        let ppm = convert_type(m, MotifType::Ppm, None, false)?;
         lines.push(format!(
             ">{}\t{}\t{}",
             m.consensus.as_deref().unwrap_or(""),

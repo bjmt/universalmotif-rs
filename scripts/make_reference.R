@@ -594,6 +594,8 @@ for (ms in list(w_dna, w_meta))
   add_write("homer", ms, list(), function(m, f) write_homer(m, f))
 add_write("homer", w_dna[1:3], list(threshold = I(0.5)),
           function(m, f) write_homer(m, f, threshold = 0.5))
+add_write("homer", w_dna[1:3], list(threshold = I(1e-4), threshold_type = "pvalue"),
+          function(m, f) write_homer(m, f, threshold = 1e-4, threshold.type = "pvalue"))
 add_write("homer", w_dna[1:3], list(threshold = I(c(5, 6.5, 7)), threshold_type = "logodds_abs"),
           function(m, f) write_homer(m, f, threshold = c(5, 6.5, 7), threshold.type = "logodds.abs"))
 
@@ -623,3 +625,88 @@ for (a in matrix_args) {
 add_write("matrix", w_aa, list(), function(m, f) write_matrix(m, f))
 
 write_ref(list(read = read_cases, write = write_cases), "io.json")
+
+# ---------------------------------------------------------------------------
+# P-values (method = "dynamic") and sequence scanning
+
+pv_motifs <- c(
+  list(examplemotif, ArabidopsisMotif),
+  jaspar[1:3],
+  list(
+    convert_type(examplemotif, "PWM", pseudocount = 1),
+    create_motif("TTGACWS"),
+    create_motif(c("ACGU", "ACGA", "UCGU"), nsites = 3, pseudocount = 1),
+    create_motif(c("ACDE", "ACDF", "GCDE", "ACKE"), type = "PCM", pseudocount = 1),
+    create_motif(c("xyz", "xzz", "yyz"), type = "PCM", pseudocount = 1),
+    create_motif(matrix(c(0.5, -0.2, 0.1, 0, 0, 0, 0.3, -0.1), nrow = 4,
+                        dimnames = list(DNA_BASES, NULL)), type = "CWM")
+  )
+)
+pv_motifs <- lapply(pv_motifs, function(m) { m@multifreq <- list(); m })
+pvals_in <- c(1, 0.9, 0.5, 0.1, 0.01, 1e-3, 1e-4, 1e-6, 1e-8, 1e-12, 1e-300)
+
+pv_cases <- list()
+for (m in pv_motifs) {
+  pwm <- tryCatch(suppressMessages(convert_type(normalize(m), "PWM"))@motif,
+                  error = function(e) convert_type(m, "PWM")@motif)
+  pwm[!is.finite(pwm)] <- -10
+  lo <- sum(apply(pwm, 2, min)); hi <- sum(apply(pwm, 2, max))
+  scores <- c(lo - 1, seq(lo, hi, length.out = 11), hi + 1, 0, 1.001, -1.001)
+  bkgs <- list(NULL)
+  if (m@alphabet == "DNA") bkgs <- c(bkgs, list(c(A = 0.3, C = 0.2, G = 0.2, T = 0.3)))
+  for (b in bkgs) {
+    args <- list()
+    if (!is.null(b)) args$bkg <- vec(b)
+    r1 <- attempt(if (is.null(b)) motif_pvalue(m, score = scores)
+                  else motif_pvalue(m, score = scores, bkg.probs = b))
+    r2 <- attempt(if (is.null(b)) motif_pvalue(m, pvalue = pvals_in)
+                  else motif_pvalue(m, pvalue = pvals_in, bkg.probs = b))
+    pv_cases[[length(pv_cases) + 1]] <- list(
+      input = motif_record(m), args = args,
+      scores = vec(scores), pvalues = if (r1$ok) vec(r1$value) else NULL,
+      error = if (!r1$ok) r1$error else NULL,
+      pvalue_in = vec(pvals_in), score_out = if (r2$ok) vec(r2$value) else NULL
+    )
+  }
+}
+write_ref(list(cases = pv_cases), "pvalue.json")
+
+data(ArabidopsisPromoters, package = NULL, envir = environment(), lib.loc = NULL)
+proms <- ArabidopsisPromoters[1:12]
+Biostrings::writeXStringSet(proms, fp("promoters.fa"))
+extra <- Biostrings::DNAStringSet(c(
+  with_n = "ACGTTTGACCAAAAAAAANNNNNAAAAAAAAAAAAGTCAAACGT",
+  short = "ACGT",
+  plain = "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"))
+Biostrings::writeXStringSet(extra, fp("extra.fa"))
+
+scan_motifs <- c(list(ArabidopsisMotif, examplemotif), jaspar[1:3],
+                 list(create_motif("TTGACWS")))
+scan_motifs <- lapply(scan_motifs, function(m) { m@multifreq <- list(); m })
+scan_cases <- list()
+add_scan <- function(file, seqs, args) {
+  r <- attempt(do.call(scan_sequences_lite,
+                       c(list(motifs = scan_motifs, sequences = seqs,
+                              return.granges = FALSE), args)))
+  case <- list(file = file, args = args)
+  if (r$ok) {
+    d <- r$value
+    case$hits <- list(
+      motif = I(d$motif), motif_i = I(d$motif.i), sequence = I(d$sequence),
+      sequence_i = I(d$sequence.i), start = I(d$start), end = I(d$end),
+      strand = I(d$strand), score = vec(d$score), score_pct = vec(d$score.pct),
+      match = I(d$match), pvalue = vec(d$pvalue))
+  } else case$error <- r$error
+  scan_cases[[length(scan_cases) + 1]] <<- case
+}
+add_scan("promoters.fa", proms, list())
+add_scan("promoters.fa", proms, list(pvalue = 1e-3))
+add_scan("promoters.fa", proms, list(pvalue = 1e-3, RC = FALSE))
+add_scan("promoters.fa", proms, list(pvalue = 1e-3, no.overlaps = TRUE))
+add_scan("promoters.fa", proms, list(pvalue = 1e-3, no.overlaps = TRUE,
+                                     no.overlaps.by = "score"))
+add_scan("promoters.fa", proms, list(pvalue = 1e-3, no.overlaps = TRUE,
+                                     no.overlaps.by.strand = TRUE,
+                                     no.overlaps.by.motif = TRUE))
+add_scan("extra.fa", extra[c(1, 3)], list(pvalue = 0.05))
+write_ref(list(motifs = lapply(scan_motifs, motif_record), cases = scan_cases), "scan.json")

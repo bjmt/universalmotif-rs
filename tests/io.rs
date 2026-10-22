@@ -220,6 +220,20 @@ fn writers_match_r() {
             None => assert!(got.is_err(), "{ctx}: R failed with {}", case["error"]),
             Some(want) => {
                 let got = got.unwrap_or_else(|e| panic!("{ctx}: {e}"));
+                if case["format"] == "homer" {
+                    // Thresholds follow HOMER's own scoring rather than the
+                    // R package's (see DIVERGENCES.md and homer_thresholds()).
+                    let strip = |t: &str| {
+                        t.lines()
+                            .map(|l| match l.strip_prefix('>') {
+                                Some(h) => h.split('\t').take(2).collect::<Vec<_>>().join("\t"),
+                                None => l.to_string(),
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(strip(&got), strip(want), "{ctx}");
+                    continue;
+                }
                 if got != want {
                     for (k, (g, w)) in got.lines().zip(want.lines()).enumerate() {
                         assert_eq!(g, w, "{ctx}: line {}", k + 1);
@@ -244,4 +258,48 @@ fn written_files_read_back() {
         assert_eq!(a.name, m.name);
         assert_close_vec(a.matrix.as_slice(), m.matrix.as_slice(), "meme round trip");
     }
+}
+
+/// HOMER scores a site as the sum of ln(max(p, 0.001) / 0.25) over the
+/// probabilities written in the file; check the written thresholds on that
+/// scale.
+#[test]
+fn homer_thresholds() {
+    let motifs = jaspar::read(&reference_file("jaspar.txt")).unwrap();
+    let read_back = |text: &str| -> Vec<(f64, f64)> {
+        let mut out = Vec::new();
+        let mut max = 0.0;
+        let mut thr = None;
+        for l in text.lines() {
+            if let Some(h) = l.strip_prefix('>') {
+                if let Some(t) = thr.take() {
+                    out.push((t, max));
+                }
+                thr = Some(h.split('\t').nth(2).unwrap().parse::<f64>().unwrap());
+                max = 0.0;
+            } else {
+                max += l
+                    .split('\t')
+                    .map(|v| (v.parse::<f64>().unwrap().max(0.001) / 0.25).ln())
+                    .fold(f64::NEG_INFINITY, f64::max);
+            }
+        }
+        out.push((thr.unwrap(), max));
+        out
+    };
+    let text = homer::write(&motifs, &homer::Threshold::Logodds(vec![0.8])).unwrap();
+    for (t, max) in read_back(&text) {
+        assert!((t - 0.8 * max).abs() < 1e-12, "{t} vs {}", 0.8 * max);
+    }
+    let text = homer::write(&motifs, &homer::Threshold::Pvalue(vec![1e-4])).unwrap();
+    for (t, max) in read_back(&text) {
+        assert!(t > 0.0 && t <= max, "{t} vs max {max}");
+    }
+    // A 6-mer with no ambiguity: only the consensus site has a P-value of
+    // 1/4^6, so the cutoff must sit above the best site with one mismatch.
+    let m = universalmotif::create::from_strings(&["ACGTAC"], None, &Default::default()).unwrap();
+    let text = homer::write(&[m], &homer::Threshold::Pvalue(vec![0.25f64.powi(6)])).unwrap();
+    let (t, max) = read_back(&text)[0];
+    let one_mismatch = 5.0 * 4f64.ln() + (0.001f64 / 0.25).ln();
+    assert!(t > one_mismatch && t <= max, "{t} vs {one_mismatch}, {max}");
 }

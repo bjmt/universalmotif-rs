@@ -9,9 +9,10 @@ package, and it is the engine behind the Python version
 ([universalmotif-py](../universalmotif-py)).
 
 The library is at an early stage. Motif creation, type conversion, the
-basic operations, and reading and writing MEME, JASPAR, HOMER, TRANSFAC,
-CIS-BP, UniPROBE and plain matrix files are done; P-values, scanning,
-comparison, shuffling and motif discovery will follow.
+basic operations, reading and writing motif files (MEME, JASPAR, HOMER,
+TRANSFAC, CIS-BP, UniPROBE, plain matrices and FASTA), exact P-values and
+sequence scanning are done; comparison, shuffling and motif discovery will
+follow.
 
 ## Example
 

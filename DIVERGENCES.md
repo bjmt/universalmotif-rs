@@ -76,8 +76,28 @@ change is listed here so the R package can be fixed to match.
   to 5.3e-32), so values read by the two packages can differ in the last
   bit.
 
+### Scanning and P-values
+
+- **HOMER thresholds are on the wrong scale.** `write_homer()` computes the
+  log-odds detection threshold from the motif's log2 PWM (with its own
+  background and pseudocount). HOMER scores sites with natural logs against
+  a fixed 0.25 background, flooring probabilities at 0.001
+  (`Motif::logxform()` in HOMER's `cpp/Motif2.cpp`), so the thresholds the R
+  package writes are about 44% too high on HOMER's scale. The port computes
+  them with HOMER's own scoring of the probabilities as written. P-value
+  thresholds use a uniform background, as HOMER assumes, and are raised by
+  0.001 per position so that integer-grid rounding cannot let in sites above
+  the P-value.
+- **Short sequences stop the scan.** `scan_sequences_lite()` fails if any
+  sequence is shorter than a motif. The port reports no hits for that motif
+  and sequence and carries on.
+- **Lower-case sequences.** The port scans lower-case letters like
+  upper-case ones (Biostrings sequences are always upper case).
+
 ## Additions
 
+- **FASTA files.** The port reads and writes FASTA files, since scanning
+  needs sequences; the R package relies on Biostrings for this.
 - **CIS-BP and UniPROBE writers.** The R package can read these formats but
   not write them. The port writes both (UniPROBE in its minimal form), and its
   files read correctly with the R package's `read_cisbp()` and
@@ -105,3 +125,6 @@ change is listed here so the R package can be fixed to match.
 - Schneider's small-sample correction for information content.
 - The non-lite versions of functions that have a lite counterpart in
   the R package.
+- `motif_pvalue(method = "exhaustive")`: the branch-and-bound P-value
+  search and the random score search. Only the exact dynamic method is
+  ported.
