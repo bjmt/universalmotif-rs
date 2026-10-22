@@ -1,4 +1,4 @@
-//! umotif: sequence motif types, conversions and analysis.
+//! universalmotif: sequence motif types, conversions and analysis.
 //!
 //! The central type is [`Motif`], a position matrix over an [`Alphabet`]
 //! together with its metadata. Motifs are created with the functions in

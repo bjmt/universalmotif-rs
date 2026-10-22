@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use umotif::{GapInfo, Matrix, Motif, Strand};
+use universalmotif::{GapInfo, Matrix, Motif, Strand};
 
 #[test]
 fn builder_matches_r() {

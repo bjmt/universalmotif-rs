@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use serde_json::Value;
-use umotif::{Alphabet, GapInfo, Matrix, Motif, MotifParts, MotifType, Strand};
+use universalmotif::{Alphabet, GapInfo, Matrix, Motif, MotifParts, MotifType, Strand};
 
 pub fn load(file: &str) -> Vec<Value> {
     load_key(file, "cases")

@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use umotif::convert::convert_type;
+use universalmotif::convert::convert_type;
 
 #[test]
 fn convert_type_matches_r() {

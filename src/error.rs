@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Errors returned by umotif.
+/// Errors returned by this crate.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum Error {
     /// A motif failed validation; each entry describes one problem.

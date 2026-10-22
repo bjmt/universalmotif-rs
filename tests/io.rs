@@ -4,8 +4,8 @@ mod common;
 
 use common::*;
 use serde_json::Value;
-use umotif::io::{cisbp, homer, jaspar, matrix, meme, transfac, uniprobe};
-use umotif::{Motif, Result};
+use universalmotif::io::{cisbp, homer, jaspar, matrix, meme, transfac, uniprobe};
+use universalmotif::{Motif, Result};
 
 /// Strings from R. `read.table()` turns numeric-looking columns (such as
 /// sequence names "1", "2") into numbers, so those are accepted too.
@@ -76,7 +76,7 @@ fn readers_match_r() {
         let Some(want) = case["motifs"].as_array() else {
             assert!(
                 got.is_err(),
-                "{ctx}: R failed with {}, umotif did not",
+                "{ctx}: R failed with {}, the crate did not",
                 case["error"]
             );
             continue;

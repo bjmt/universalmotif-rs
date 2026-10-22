@@ -1,8 +1,9 @@
 #!/usr/bin/env Rscript
 #
-# Export reference values from universalmotif for the umotif test suite.
+# Export reference values from the universalmotif R package for this crate's
+# test suite.
 #
-# Usage (from the root of the umotif repository):
+# Usage (from the root of this repository):
 #   Rscript scripts/make_reference.R [path/to/universalmotif]
 #
 # universalmotif is loaded from source with pkgload so the values match the

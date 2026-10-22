@@ -1,7 +1,7 @@
 //! Reader cases that universalmotif gets wrong (see DIVERGENCES.md).
 
-use umotif::io::{cisbp, homer, jaspar, matrix, meme, transfac};
-use umotif::{Alphabet, MotifType};
+use universalmotif::io::{cisbp, homer, jaspar, matrix, meme, transfac};
+use universalmotif::{Alphabet, MotifType};
 
 #[test]
 fn jaspar_rows_in_any_order() {
@@ -111,8 +111,8 @@ fn matrix_comments_and_prefix_headers() {
 /// back unchanged, apart from the conversion to probabilities.
 #[test]
 fn cisbp_and_uniprobe_writers_round_trip() {
-    use umotif::convert::convert_type;
-    use umotif::io::uniprobe;
+    use universalmotif::convert::convert_type;
+    use universalmotif::io::uniprobe;
     let mut motifs = jaspar::read(include_str!("reference/files/jaspar.txt")).unwrap();
     motifs.extend(transfac::read(include_str!("reference/files/transfac_meta.txt")).unwrap());
     let ppms: Vec<_> = motifs

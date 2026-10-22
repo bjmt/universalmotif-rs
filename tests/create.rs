@@ -3,8 +3,8 @@
 mod common;
 
 use common::*;
-use umotif::create::{CreateOptions, from_matrix, from_strings};
-use umotif::{Matrix, MotifType};
+use universalmotif::create::{CreateOptions, from_matrix, from_strings};
+use universalmotif::{Matrix, MotifType};
 
 #[test]
 fn create_matches_r() {
@@ -41,7 +41,7 @@ fn create_matches_r() {
                 let got = from_matrix(m, Some(&rows), alph, &opts);
                 // universalmotif drops the row names of single-column
                 // matrices while sorting them and then fails (see
-                // DIVERGENCES.md); umotif handles them.
+                // DIVERGENCES.md); this crate handles them.
                 if cols.len() == 1 && case["motif"].is_null() {
                     let m = got.unwrap_or_else(|e| panic!("{ctx}: {e}"));
                     assert_eq!(m.motif_type, MotifType::Pcm);

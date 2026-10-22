@@ -3,7 +3,9 @@
 mod common;
 
 use common::*;
-use umotif::ops::{TrimFrom, normalize, reverse_complement, round_motif, trim_cwm, trim_motif};
+use universalmotif::ops::{
+    TrimFrom, normalize, reverse_complement, round_motif, trim_cwm, trim_motif,
+};
 
 #[test]
 fn ops_match_r() {
@@ -20,7 +22,7 @@ fn ops_match_r() {
             "normalize" => normalize(&input).map(Some),
             "trim_motifs" => {
                 // universalmotif stores nsites = 100 in trimmed motifs that had
-                // none (see DIVERGENCES.md); umotif leaves it empty.
+                // none (see DIVERGENCES.md); this crate leaves it empty.
                 skip.nsites = input.nsites.is_none();
                 trim_motif(&input, num(&a["min_ic"]), trim_from())
             }

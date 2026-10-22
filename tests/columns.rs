@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use umotif::convert::*;
+use universalmotif::convert::*;
 
 #[test]
 fn column_functions_match_r() {
@@ -101,7 +101,7 @@ fn column_functions_match_r() {
 /// Values hard-coded in universalmotif's own tests (tests/testthat/test_utils.R).
 #[test]
 fn values_from_universalmotif_tests() {
-    use umotif::MotifType;
+    use universalmotif::MotifType;
     let rnd = |v: Vec<f64>, d: i32| {
         let f = 10f64.powi(d);
         v.iter().map(|x| (x * f).round() / f).collect::<Vec<_>>()
