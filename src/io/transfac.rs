@@ -1,4 +1,4 @@
-//! TRANSFAC matrices (`read_transfac()` / `write_transfac()`).
+//! TRANSFAC matrices.
 
 use super::{content_lines, fmt_err, format_r_number, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;
@@ -9,13 +9,13 @@ use crate::motif::{Motif, MotifType};
 
 /// Read TRANSFAC motifs.
 ///
-/// Records are separated by `//` lines. The matrix follows a `P0` (or `PO`)
-/// line, and the `AC`, `ID`, `NA`, `HC` and `OS` fields give the name,
-/// alternate name, family and organism. The name is the accession if there is
-/// one, with the identifier or factor name as the alternate name. Records
-/// without a matrix, such as the `VV` header of TRANSFAC releases, are
-/// skipped. Motifs are returned as PCMs; positions with fewer counts than the
-/// largest are scaled up to it.
+/// Records are separated by `//` lines. The matrix follows a `P0` or `PO` line,
+/// and the `AC`, `ID`, `NA`, `HC` and `OS` fields give the name, alternate
+/// name, family and organism. The name is the accession if there is one, with
+/// the identifier or factor name as the alternate name. Records without a
+/// matrix, such as the `VV` header of TRANSFAC releases, are skipped. Motifs
+/// are returned as PCMs; positions with fewer counts than the largest are
+/// scaled up to it.
 pub fn read(text: &str) -> Result<Vec<Motif>> {
     let lines: Vec<&str> = content_lines(text)
         .into_iter()

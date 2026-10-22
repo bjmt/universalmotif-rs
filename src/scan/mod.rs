@@ -1,19 +1,19 @@
-//! Scanning sequences for motif hits (`scan_sequences_lite()`).
+//! Scanning sequences for motif hits.
 //!
-//! Each motif is turned into a PWM, a score threshold is found from the
-//! P-value cutoff (see [`crate::pvalue`]), and every window of every sequence
-//! scoring at least the threshold is reported, on both strands by default
-//! for DNA and RNA and on the forward strand for other alphabets.
-//! Scores use the same integer grid as the P-value computations, so a hit's
-//! P-value is always within the cutoff.
+//! Each motif is turned into a PWM, a score threshold is found from the P-value
+//! cutoff as described in [`crate::pvalue`], and every window of every sequence
+//! scoring at least the threshold is reported, on both strands by default for
+//! DNA and RNA and on the forward strand for other alphabets. Scores use the
+//! same integer grid as the P-value computations, so a hit's P-value is always
+//! within the cutoff.
 //!
-//! Sequences are packed at two bits per letter (see [`crate::packed`]), and
-//! each group of four motif positions is scored with one lookup in a table of
-//! all 256 four-letter combinations. Other alphabets are coded at a byte
-//! per letter and scored two positions per lookup. Work is split into chunks
-//! of the sequences, so a single long sequence still uses every thread, and
-//! motifs are taken in batches so that the P-value tables held at once stay
-//! small.
+//! DNA and RNA sequences are packed at two bits per letter, as described in
+//! [`crate::packed`], and each group of four motif positions is scored with one
+//! lookup in a table of all 256 four-letter combinations. Other alphabets are
+//! coded at a byte per letter and scored two positions per lookup. Work is
+//! split into chunks of the sequences, so a single long sequence still uses
+//! every thread, and motifs are taken in batches so that the P-value tables
+//! held at once stay small.
 
 use rayon::prelude::*;
 
@@ -41,7 +41,7 @@ pub enum OverlapPriority {
     Score,
 }
 
-/// Removal of overlapping hits (see [`crate::dedup`]).
+/// Removal of overlapping hits, as done by [`crate::dedup`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NoOverlaps {
     pub by: OverlapPriority,
@@ -62,13 +62,12 @@ pub struct ScanOptions {
     pub no_overlaps: Option<NoOverlaps>,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
-    /// Scan gapped motifs with their gaps (otherwise their gaps are
-    /// ignored).
+    /// Scan gapped motifs with their gaps; otherwise their gaps are ignored.
     pub use_gaps: bool,
     /// Bonferroni-correct gapped motifs' P-values for the number of
     /// combinations of gap sizes tried: the score threshold comes from the
-    /// cutoff divided by that number, and P-values are multiplied by it (up
-    /// to 1). Off by default, as in the R package.
+    /// cutoff divided by that number, and P-values are multiplied by it, up to
+    /// 1. Off by default.
     pub correct_gaps: bool,
 }
 
@@ -92,9 +91,9 @@ pub struct Hit {
     pub motif: usize,
     /// Index of the sequence.
     pub sequence: usize,
-    /// First position of the hit on the forward strand (1-based).
+    /// 1-based first position of the hit on the forward strand.
     pub start: usize,
-    /// Last position of the hit on the forward strand (1-based, inclusive).
+    /// Last position of the hit on the forward strand, 1-based and inclusive.
     pub end: usize,
     pub strand: Strand,
     pub score: f64,
@@ -105,20 +104,20 @@ pub struct Hit {
     pub pvalue: f64,
 }
 
-/// Hits as columns, one entry per hit, ordered by motif, sequence and start
-/// (with `+` strand hits first). Indices and positions are `i64` so the
-/// columns can be handed to Arrow as they are. The matched letters are not
-/// stored; [`HitTable::matched`] reads them from the sequences (and
-/// [`HitTable::matched_encoded`] from encoded ones).
+/// Hits as columns, one entry per hit, ordered by motif, sequence and start,
+/// with `+` strand hits first. Indices and positions are `i64` so the columns
+/// can be handed to Arrow as they are. The matched letters are not stored;
+/// [`HitTable::matched`] reads them from the sequences and
+/// [`HitTable::matched_encoded`] from encoded ones.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HitTable {
     /// Index of the motif.
     pub motif: Vec<i64>,
     /// Index of the sequence.
     pub sequence: Vec<i64>,
-    /// First position on the forward strand (1-based).
+    /// 1-based first position on the forward strand.
     pub start: Vec<i64>,
-    /// Last position on the forward strand (1-based, inclusive).
+    /// Last position on the forward strand, 1-based and inclusive.
     pub end: Vec<i64>,
     /// Whether the hit is on the `-` strand.
     pub minus: Vec<bool>,
@@ -127,10 +126,10 @@ pub struct HitTable {
     pub score_pct: Vec<f64>,
     pub pvalue: Vec<f64>,
     rna: bool,
-    /// Whether matched letters are reported in upper case (all but custom
-    /// alphabets).
+    /// Whether matched letters are reported in upper case, as they are for all
+    /// but custom alphabets.
     upper: bool,
-    /// Each hit's combination of gap sizes (0 for motifs without gaps).
+    /// Each hit's combination of gap sizes, or 0 for motifs without gaps.
     combo: Vec<u16>,
     /// The gaps of each motif scanned with them.
     gaps: Vec<Option<GapShape>>,
@@ -159,9 +158,9 @@ impl HitTable {
         }
     }
 
-    /// Write the letters matched by hit `i` (upper case, reverse
-    /// complemented for `-` strand hits, and with dots in the gaps of
-    /// gapped motifs) into `out`, replacing its contents.
+    /// Write the letters matched by hit `i` into `out`, replacing its contents.
+    /// They are in upper case, reverse complemented for `-` strand hits, and
+    /// with dots in the gaps of gapped motifs.
     pub fn matched_into<S: AsRef<str>>(&self, i: usize, sequences: &[S], out: &mut Vec<u8>) {
         let seq = sequences[self.sequence[i] as usize].as_ref().as_bytes();
         let bytes = &seq[self.start[i] as usize - 1..self.end[i] as usize];
@@ -194,15 +193,16 @@ impl HitTable {
         self.mark_gaps(i, out);
     }
 
-    /// The letters matched by hit `i` (see
-    /// [`HitTable::matched_encoded_into`]).
+    /// The letters matched by hit `i`, as written by
+    /// [`HitTable::matched_encoded_into`].
     pub fn matched_encoded(&self, i: usize, seqs: &EncodedSequences) -> String {
         let mut out = Vec::new();
         self.matched_encoded_into(i, seqs, &mut out);
         String::from_utf8_lossy(&out).into_owned()
     }
 
-    /// The letters matched by hit `i` (see [`HitTable::matched_into`]).
+    /// The letters matched by hit `i`, as written by
+    /// [`HitTable::matched_into`].
     pub fn matched<S: AsRef<str>>(&self, i: usize, sequences: &[S]) -> String {
         let mut out = Vec::new();
         self.matched_into(i, sequences, &mut out);
@@ -271,7 +271,7 @@ fn rc_bytes(seq: &[u8], rna: bool) -> String {
 }
 
 /// Integer scores for each group of four positions, indexed by the group's
-/// letters packed into one byte (see [`PackedSeq::quad`]). A last group of
+/// letters packed into one byte as by [`PackedSeq::quad`]. A last group of
 /// fewer than four positions ignores the extra letters.
 struct Scorer {
     groups: Vec<[i32; 256]>,
@@ -301,10 +301,10 @@ impl Scorer {
     }
 }
 
-/// Integer scores for groups of `span` positions (two, or one for alphabets
-/// of more than 64 letters) for alphabets other than DNA and RNA, indexed by
-/// the group's letter codes as a base-n number. A last group of fewer
-/// positions ignores the extra letters.
+/// Integer scores for groups of `span` positions for alphabets other than DNA
+/// and RNA, indexed by the group's letter codes as a base-n number. Groups are
+/// two positions long, or one for alphabets of more than 64 letters, and a last
+/// group of fewer positions ignores the extra letters.
 struct CodedScorer {
     groups: Vec<Vec<i32>>,
 }
@@ -334,9 +334,9 @@ impl CodedScorer {
     }
 }
 
-/// How each motif is scored: DNA and RNA on packed sequences, one scorer
-/// per strand; other alphabets letter by letter, forward strand only;
-/// gapped motifs piece by piece (see [`gapped`]).
+/// How each motif is scored: DNA and RNA on packed sequences, one scorer per
+/// strand; other alphabets letter by letter, forward strand only; gapped motifs
+/// piece by piece, as in [`gapped`].
 enum Scorers {
     Packed(Vec<(Strand, Scorer)>),
     Coded(CodedScorer),
@@ -346,14 +346,14 @@ enum Scorers {
 /// Window starts per unit of work; the decoded letters stay in cache.
 const CHUNK: usize = 1 << 16;
 
-/// Grid points of P-value tails held at once while scanning (32 MB).
+/// Grid points of P-value tails held at once while scanning, 32 MB worth.
 const TAIL_BUDGET: usize = 1 << 22;
 
 /// Motifs prepared in parallel at a time while filling a batch.
 const PREPARE_GROUP: usize = 32;
 
-/// Letters of sequence read at a time by [`scan_fasta`] (a 16 MB batch for
-/// DNA and RNA).
+/// Letters of sequence read at a time by [`scan_fasta`], a 16 MB batch for DNA
+/// and RNA.
 const STREAM_BATCH: usize = 1 << 26;
 
 /// Buffers [`scan_fasta`] keeps for reuse.
@@ -362,9 +362,11 @@ const SPARE_BUFFERS: usize = 4;
 /// What scanning needs to know about one motif.
 struct Prepared {
     width: usize,
-    /// The widest window the motif covers (its width unless it is gapped).
+    /// The widest window the motif covers, which is its width unless it is
+    /// gapped.
     span: usize,
-    /// What P-values are multiplied by (see [`ScanOptions::correct_gaps`]).
+    /// What P-values are multiplied by, as set by
+    /// [`ScanOptions::correct_gaps`].
     pvalue_scale: f64,
     min_score: i32,
     max_score: f64,
@@ -414,8 +416,8 @@ struct RawHit {
     pvalue: f64,
 }
 
-/// Scan the windows starting in `starts` of one stretch of a sequence free
-/// of unknown letters (ending at `seg_end`) with every motif. The packed
+/// Scan with every motif the windows starting in `starts` of one stretch of a
+/// sequence free of unknown letters, which ends at `seg_end`. The packed
 /// letters are decoded once into one byte per position, holding the four
 /// letters that start there.
 #[allow(clippy::too_many_arguments)]
@@ -583,8 +585,8 @@ fn scan_chunk_gapped(
     }
 }
 
-/// The gapped motifs' part of [`scan_chunk_coded`] (see
-/// [`scan_chunk_gapped`]).
+/// The gapped motifs' part of [`scan_chunk_coded`], handed to
+/// [`scan_chunk_gapped`].
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn scan_chunk_coded_gapped(
@@ -830,16 +832,16 @@ fn finish(
 
 /// Scan sequences for hits of the motifs, returning them as columns.
 ///
-/// Letters of DNA, RNA and amino acid sequences are matched
-/// case-insensitively, and letters of custom alphabets exactly; other
-/// letters (such as `N` or `X`) never contribute to a hit. Only DNA and RNA
-/// have a reverse strand. Sequences shorter than a motif simply have no hits
-/// for it. Hits are ordered by motif, sequence and start, with `+` strand
-/// hits first.
+/// Letters of DNA, RNA and amino acid sequences are matched case-insensitively,
+/// and letters of custom alphabets exactly; other letters, such as `N` or `X`,
+/// never contribute to a hit. Only DNA and RNA have a reverse strand. Sequences
+/// shorter than a motif simply have no hits for it. Hits are ordered by motif,
+/// sequence and start, with `+` strand hits first.
 ///
-/// The sequences are encoded for scanning first (see [`crate::packed`]);
-/// to scan the same sequences more than once, or to scan a FASTA file
-/// without holding it as text, see [`scan_encoded`] and [`scan_fasta`].
+/// The sequences are encoded for scanning first, as described in
+/// [`crate::packed`]; to scan the same sequences more than once, or to scan a
+/// FASTA file without holding it as text, see [`scan_encoded`] and
+/// [`scan_fasta`].
 pub fn scan_table<S: AsRef<str> + Sync>(
     motifs: &[Motif],
     sequences: &[S],
@@ -929,8 +931,8 @@ pub fn scan_encoded(
     Ok(finish(raw, &shapes, opts, &alphabet).0)
 }
 
-/// Hits from [`scan_fasta`], with the letters each one matched (since the
-/// sequences themselves are not kept).
+/// Hits from [`scan_fasta`], with the letters each one matched, since the
+/// sequences themselves are not kept.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FastaHits {
     /// The name of every sequence in the file, in order.
@@ -953,7 +955,7 @@ impl FastaHits {
         self.table.is_empty()
     }
 
-    /// The letters matched by hit `i` (as [`HitTable::matched_into`]).
+    /// The letters matched by hit `i`, as with [`HitTable::matched_into`].
     pub fn matched(&self, i: usize) -> &str {
         let t = &self.table;
         let w = (t.end[i] - t.start[i] + 1) as usize;
@@ -961,10 +963,10 @@ impl FastaHits {
     }
 }
 
-/// [`scan_table`] for the sequences of a FASTA file (which may be gzipped,
-/// bgzip included), read a batch at a time on a thread of its own while the
-/// last batch is scanned, so the file is never held in memory whole.
-/// Sequence indices follow the file's records.
+/// [`scan_table`] for the sequences of a FASTA file, which may be gzipped or
+/// bgzipped. The file is read a batch at a time on a thread of its own while
+/// the last batch is scanned, so it is never held in memory whole. Sequence
+/// indices follow the file's records.
 ///
 /// # Example
 ///
@@ -1142,9 +1144,9 @@ fn scan_fasta_with(
     Ok(out)
 }
 
-/// Scan sequences for hits of the motifs, one [`Hit`] per hit
-/// (see [`scan_table`], which this wraps, for the details). For many hits,
-/// [`scan_table`] takes far less memory.
+/// Scan sequences for hits of the motifs, one [`Hit`] per hit. This wraps
+/// [`scan_table`], which has the details and takes far less memory for many
+/// hits.
 pub fn scan_sequences<S: AsRef<str> + Sync>(
     motifs: &[Motif],
     sequences: &[S],

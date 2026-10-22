@@ -1,13 +1,12 @@
-//! De novo motif discovery (`motif_finder()`).
+//! De novo motif discovery with [`motif_finder`].
 //!
-//! A port of universalmotif's `src/motif_finder.cpp`, itself a port of
-//! `yamme` from yamtk. For each motif width, k-mer seeds enriched in the
-//! positive sequences (by Fisher's exact test on per-sequence presence) are
-//! grown into PPMs from their Hamming-1 neighbours, refined by rescanning,
-//! and accepted if hits are enriched over the negative sequences. Accepted
-//! motifs mask their sites before the next search. Motifs found at different
-//! widths that cover the same sites are deduplicated, Benjamini-Hochberg
-//! q-values are computed, and low-information flanks are trimmed.
+//! For each motif width, k-mer seeds enriched in the positive sequences, by
+//! Fisher's exact test on per-sequence presence, are grown into PPMs from their
+//! Hamming-1 neighbours, refined by rescanning, and accepted if hits are
+//! enriched over the negative sequences. Accepted motifs mask their sites
+//! before the next search. Motifs found at different widths that cover the same
+//! sites are deduplicated, Benjamini-Hochberg q-values are computed, and
+//! low-information flanks are trimmed.
 
 use std::collections::HashMap;
 
@@ -224,8 +223,8 @@ fn hamming(mut a: u64, mut b: u64, w: usize) -> u64 {
     mm
 }
 
-/// `ln(n!)` for every `n` up to the number of sequences, so Fisher tests
-/// need no `lgamma` calls of their own (the values are the same).
+/// `ln(n!)` for every `n` up to the number of sequences, so Fisher tests need
+/// no `lgamma` calls of their own; the values are the same.
 struct LogFact(Vec<f64>);
 
 impl LogFact {
@@ -238,7 +237,8 @@ impl LogFact {
     }
 }
 
-/// One-sided (greater) Fisher's exact test P-value for a 2x2 table.
+/// One-sided Fisher's exact test P-value for a 2x2 table, with the "greater"
+/// alternative.
 fn fisher_greater(lf: &LogFact, a: u64, b: u64, c: u64, d: u64) -> f64 {
     let (r1, r2) = (a + b, c + d);
     let c1 = a + c;
@@ -281,8 +281,8 @@ fn score_at(m: &FMotif, seq: &[u8], off: usize) -> (i32, i32) {
     (s, src)
 }
 
-/// For each k-mer (or the smaller of it and its reverse complement), the
-/// number of sequences containing it, sorted by k-mer.
+/// For each k-mer, or the smaller of it and its reverse complement, the number
+/// of sequences containing it, sorted by k-mer.
 fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> Vec<(u64, u64)> {
     let mask = if w == 32 {
         u64::MAX
@@ -631,7 +631,7 @@ impl Default for FinderOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FoundMotif {
     pub motif: Motif,
-    /// Rank by P-value (1-based).
+    /// 1-based rank by P-value.
     pub rank: usize,
     /// Positive and negative sequences with at least one hit.
     pub seqs_pos: u64,
@@ -645,8 +645,8 @@ pub struct FoundMotif {
     pub qvalue: f64,
 }
 
-/// The background used by [`motif_finder`]: A, C, G and T (or U)
-/// frequencies over all sequences, floored at 0.001.
+/// The background used by [`motif_finder`]: A, C, G and T or U frequencies over
+/// all sequences, floored at 0.001.
 pub fn finder_background<S: AsRef<str>>(pos: &[S], neg: &[S]) -> [f64; 4] {
     let mut counts = [0f64; 4];
     for s in pos.iter().chain(neg) {
@@ -667,10 +667,10 @@ pub fn finder_background<S: AsRef<str>>(pos: &[S], neg: &[S]) -> [f64; 4] {
     bkg.map(|b| b / s)
 }
 
-/// Find motifs enriched in DNA or RNA sequences relative to negative
-/// sequences (by default the positives shuffled, keeping `shuffle_k`-lets).
-/// Motifs come back as PPMs named `motif_1`, `motif_2` and so on, in order
-/// of P-value, with the q-value stored as their E-value.
+/// Find motifs enriched in DNA or RNA sequences relative to negative sequences,
+/// which by default are the positives shuffled keeping `shuffle_k`-lets. Motifs
+/// come back as PPMs named `motif_1`, `motif_2` and so on, in order of P-value,
+/// with the q-value stored as their E-value.
 pub fn motif_finder<S: AsRef<str> + Sync>(
     sequences: &[S],
     negatives: Option<&[S]>,

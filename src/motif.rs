@@ -1,8 +1,4 @@
 //! The motif type, its builder and its validation rules.
-//!
-//! These follow the `universalmotif` S4 class: the defaults applied by
-//! [`MotifBuilder::build`] are those of `universalmotif_cpp()`, and
-//! [`MotifParts::validate`] mirrors `validObject_universalmotif()`.
 
 use std::fmt;
 use std::ops::Deref;
@@ -19,7 +15,7 @@ pub enum MotifType {
     Pcm,
     /// Position probability matrix.
     Ppm,
-    /// Position weight matrix (log2 odds).
+    /// Position weight matrix of log2 odds.
     Pwm,
     /// Information content matrix.
     Icm,
@@ -101,8 +97,8 @@ impl fmt::Display for Strand {
     }
 }
 
-/// Gaps inside a motif. Gap `i` sits after column `gaploc[i]` (counting from
-/// 1) and spans `mingap[i]` to `maxgap[i]` positions.
+/// Gaps inside a motif. Gap `i` sits after column `gaploc[i]`, counting from 1,
+/// and spans `mingap[i]` to `maxgap[i]` positions.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GapInfo {
     pub isgapped: bool,
@@ -250,10 +246,10 @@ impl MotifParts {
 
 /// A validated sequence motif.
 ///
-/// Fields are read through [`Deref`] to [`MotifParts`] (so `motif.name`,
-/// `motif.matrix` and so on work directly). To change a motif, go through
-/// [`Motif::into_parts`] and [`Motif::from_parts`], or one of the functions
-/// in [`crate::convert`] and [`crate::ops`].
+/// Fields are read through [`Deref`] to [`MotifParts`], so `motif.name`,
+/// `motif.matrix` and so on work directly. To change a motif, go through
+/// [`Motif::into_parts`] and [`Motif::from_parts`], or one of the functions in
+/// [`crate::convert`] and [`crate::ops`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Motif(MotifParts);
 
@@ -285,7 +281,7 @@ impl Motif {
         MotifBuilder::new(matrix, alphabet)
     }
 
-    /// Motif width (number of positions).
+    /// Motif width, the number of positions.
     pub fn width(&self) -> usize {
         self.0.matrix.ncol()
     }
@@ -336,8 +332,7 @@ impl Motif {
     }
 }
 
-/// Builds a [`Motif`] with the same defaults universalmotif applies when
-/// creating a motif object.
+/// Builds a [`Motif`], filling in defaults for anything not given.
 ///
 /// - The type is guessed when not given: PCM if every value is 0 or at least
 ///   1, PPM if columns sum to about 1, ICM if nothing is negative, and PWM
@@ -551,7 +546,7 @@ impl MotifBuilder {
     }
 }
 
-/// Format a number roughly the way R prints it: shortest round-trip form,
+/// Format a number for printing: shortest round-trip form,
 /// switching to scientific notation for very small or large values.
 fn fmt_num(x: f64) -> String {
     if x.is_infinite() {
@@ -580,7 +575,7 @@ fn shorten(s: &str) -> String {
     }
 }
 
-/// A printout modelled on universalmotif's `show()` method.
+/// A printout of the motif's metadata followed by its matrix.
 impl fmt::Display for Motif {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let p = &self.0;

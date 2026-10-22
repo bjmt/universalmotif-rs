@@ -1,4 +1,4 @@
-//! JASPAR count matrices (`read_jaspar()` / `write_jaspar()`).
+//! JASPAR count matrices.
 
 use super::{content_lines, fmt_err, join_lines, num};
 use crate::alphabet::Alphabet;
@@ -11,10 +11,10 @@ use crate::motif::{Motif, MotifType};
 /// Read JASPAR-formatted motifs.
 ///
 /// Each motif starts with a `>name altname` header followed by one row per
-/// letter, either labelled (`A [ 1 2 3 ]`) or as bare numbers. Labelled rows
-/// may come in any order and the alphabet is taken from the labels; bare rows
-/// are read as DNA (four rows) or amino acids (twenty rows). Motifs are read
-/// as PCMs with `nsites` set to the largest column sum.
+/// letter, either labelled as in `A [ 1 2 3 ]` or as bare numbers. Labelled
+/// rows may come in any order and the alphabet is taken from the labels; four
+/// bare rows are read as DNA and twenty as amino acids. Motifs are read as PCMs
+/// with `nsites` set to the largest column sum.
 pub fn read(text: &str) -> Result<Vec<Motif>> {
     let lines = content_lines(text);
     let headers: Vec<usize> = (0..lines.len())

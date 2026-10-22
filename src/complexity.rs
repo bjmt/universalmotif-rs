@@ -1,4 +1,5 @@
-//! Sequence complexity (`calc_complexity()` and `sequence_complexity()`).
+//! Sequence complexity, of whole sequences with [`complexity`] and in sliding
+//! windows with [`sequence_complexity`].
 
 use std::collections::BTreeSet;
 
@@ -11,8 +12,8 @@ use crate::pvalue::with_threads;
 /// Complexity measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Method {
-    /// Wootton and Federhen's complexity (the probability of a sequence's
-    /// letter composition).
+    /// Wootton and Federhen's complexity, the probability of a sequence's
+    /// letter composition.
     #[default]
     WoottonFederhen,
     /// The entropy approximation of Wootton and Federhen's complexity.
@@ -22,7 +23,7 @@ pub enum Method {
     Trifonov,
     /// The sum of words seen over the sum of possible words.
     TrifonovFast,
-    /// The DUST score (DNA only): repeated trinucleotides.
+    /// The DUST score of repeated trinucleotides, for DNA only.
     Dust,
 }
 
@@ -54,8 +55,8 @@ fn distinct_words(seq: &[u8], n: usize) -> f64 {
     seq.windows(n).collect::<BTreeSet<_>>().len() as f64
 }
 
-/// The complexity of one sequence. `alph` gives the possible letters (by
-/// default those in the sequence); `max_word` limits Trifonov word sizes.
+/// The complexity of one sequence. `alph` gives the possible letters, by
+/// default those in the sequence, and `max_word` limits Trifonov word sizes.
 pub fn complexity(seq: &str, method: Method, alph: Option<&str>, max_word: usize) -> f64 {
     let s = seq.as_bytes();
     let alph: Vec<u8> = match alph {
@@ -145,8 +146,8 @@ pub struct WindowComplexity {
     pub complexity: f64,
 }
 
-/// Complexity in sliding windows along sequences, as universalmotif's
-/// `sequence_complexity()`. Windows longer than a sequence shrink to it.
+/// Complexity in sliding windows along sequences. Windows longer than a
+/// sequence shrink to it.
 pub fn sequence_complexity<S: AsRef<str> + Sync>(
     seqs: &[S],
     opts: &ComplexityOptions,

@@ -1,5 +1,5 @@
 //! Creating motifs from matrices, consensus strings, sets of sites, or at
-//! random. These follow the `create_motif()` methods in universalmotif.
+//! random.
 
 use rand::{Rng, RngExt};
 use rand_distr::{Distribution, Gamma, Poisson};
@@ -18,8 +18,8 @@ pub struct CreateOptions {
     pub name: String,
     pub pseudocount: f64,
     pub nsites: Option<f64>,
-    /// One background frequency per letter; uniform when `None` (random
-    /// motifs draw one instead).
+    /// One background frequency per letter. It is uniform when `None`, except
+    /// that random motifs draw one instead.
     pub bkg: Option<Vec<f64>>,
     pub altname: Option<String>,
     pub family: Option<String>,
@@ -103,9 +103,8 @@ pub fn guess_matrix_alphabet(letters: &[char]) -> Result<Alphabet> {
 /// If `row_letters` is given, the rows are first sorted by letter, and the
 /// alphabet is guessed from the letters when `alphabet` is `None`. Without row
 /// letters the alphabet must be given and the rows must already be in its
-/// order. The matrix type is detected from the values (unless
-/// `opts.motif_type` is CWM) and the motif is then converted to
-/// `opts.motif_type`.
+/// order. The matrix type is detected from the values unless `opts.motif_type`
+/// is CWM, and the motif is then converted to `opts.motif_type`.
 pub fn from_matrix(
     matrix: Matrix,
     row_letters: Option<&[char]>,
@@ -218,12 +217,12 @@ fn check_string_letters(letters: &[char], alphabet: &Alphabet) -> Result<()> {
 
 /// Create a motif from strings.
 ///
-/// A single string is read as a consensus sequence (IUPAC codes are accepted
-/// for DNA and amino acids). Several strings of equal length are read as
-/// aligned sites and counted; `nsites` then defaults to the number of
-/// strings. The alphabet is guessed from the letters when `None`: DNA (with
-/// IUPAC codes), then RNA, then amino acids, and otherwise a custom alphabet
-/// of the letters present.
+/// A single string is read as a consensus sequence, in which IUPAC codes are
+/// accepted for DNA and amino acids. Several strings of equal length are read
+/// as aligned sites and counted; `nsites` then defaults to the number of
+/// strings. The alphabet is guessed from the letters when `None`: DNA with
+/// IUPAC codes, then RNA, then amino acids, and otherwise a custom alphabet of
+/// the letters present.
 ///
 /// # Example
 ///
@@ -321,8 +320,8 @@ pub fn from_strings(
         .builder(matrix, alphabet)
         .motif_type(Some(MotifType::Ppm))
         .build()?;
-    // universalmotif passes PPMs through counts before returning them, which
-    // cleans up the small values used for consensus letters.
+    // PPMs are passed through counts before being returned, which cleans up
+    // the small values used for consensus letters.
     let motif = if opts.motif_type == MotifType::Ppm {
         convert_type(&motif, MotifType::Pcm, None, false)?
     } else {

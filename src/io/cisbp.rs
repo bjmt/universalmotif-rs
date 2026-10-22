@@ -1,4 +1,4 @@
-//! CIS-BP motif files (`read_cisbp()`, plus a writer universalmotif lacks).
+//! CIS-BP motif files.
 
 use super::{content_lines, fmt_err, format_shortest, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;
@@ -36,7 +36,7 @@ fn value_after<'a>(line: &'a str, key: &[&str]) -> Option<&'a str> {
 
 /// Read CIS-BP motifs.
 ///
-/// Each matrix starts with a `Pos` header naming the letters (DNA or RNA)
+/// Each matrix starts with a `Pos` header naming the DNA or RNA letters,
 /// followed by one row per position. The `TF`, `TF Name`, `Family` and
 /// `Species` lines before it give the name, alternate name, family and
 /// organism.

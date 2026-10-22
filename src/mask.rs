@@ -1,4 +1,5 @@
-//! Masking sequences (universalmotif's `mask_seqs()` and `mask_ranges()`).
+//! Masking sequences by pattern with [`mask_seqs`] and by position with
+//! [`mask_ranges`].
 
 use crate::alphabet::Alphabet;
 use crate::error::{Result, arg_err};
@@ -12,8 +13,8 @@ fn check_letter(letter: char) -> Result<u8> {
     }
 }
 
-/// Mask every occurrence of `pattern` (overlapping ones included) in
-/// `seq`, matching letters in either case.
+/// Mask every occurrence of `pattern` in `seq`, overlapping ones included,
+/// matching letters in either case.
 fn mask_pattern(seq: &mut [u8], pattern: &[u8], letter: u8) {
     let m = pattern.len();
     if m == 0 || seq.len() < m {
@@ -32,10 +33,10 @@ fn mask_pattern(seq: &mut [u8], pattern: &[u8], letter: u8) {
     }
 }
 
-/// Replace every occurrence of `pattern` in the sequences with `letter`,
-/// as universalmotif's `mask_seqs()`. Overlapping occurrences are all
-/// masked, and letters match in either case. With `rc` (DNA and RNA only),
-/// occurrences of the reverse complement are then masked too.
+/// Replace every occurrence of `pattern` in the sequences with `letter`.
+/// Overlapping occurrences are all masked, and letters match in either case.
+/// For DNA and RNA, `rc` masks the occurrences of the reverse complement as
+/// well.
 pub fn mask_seqs<S: AsRef<str>>(
     seqs: &[S],
     pattern: &str,
@@ -64,9 +65,9 @@ pub fn mask_seqs<S: AsRef<str>>(
         .collect())
 }
 
-/// Replace the positions in `ranges` (1-based and inclusive) of `seq` with
-/// `letter`, as universalmotif's `mask_ranges()` does for one sequence.
-/// Ranges may overlap; one reaching outside the sequence is an error.
+/// Replace the positions in `ranges` of `seq` with `letter`, where ranges are
+/// 1-based and inclusive. Ranges may overlap; one reaching outside the sequence
+/// is an error.
 pub fn mask_ranges(seq: &str, ranges: &[(i64, i64)], letter: char) -> Result<String> {
     let letter = check_letter(letter)?;
     let mut bytes = seq.as_bytes().to_vec();

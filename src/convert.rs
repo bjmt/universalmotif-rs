@@ -1,15 +1,11 @@
 //! Conversions between motif types, information content and consensus
 //! letters.
-//!
-//! The column functions follow `src/utils-exported.cpp` in universalmotif,
-//! and [`convert_type`] follows `R/convert_type.R`.
 
 use crate::error::{Error, Result};
 use crate::matrix::{sum, which_max};
 use crate::motif::{Motif, MotifType};
 
-/// Return a uniform background when `bkg` does not have one value per letter,
-/// as the C++ sources do.
+/// Return a uniform background when `bkg` does not have one value per letter.
 fn bkg_or_uniform(bkg: &[f64], n: usize) -> Vec<f64> {
     if bkg.len() == n {
         bkg.to_vec()
@@ -33,8 +29,8 @@ pub fn pcm_to_ppm(pos: &[f64], pseudocount: f64) -> Vec<f64> {
 }
 
 /// Probabilities to counts. Each value is rounded, and any rounding error is
-/// added to the largest count so the column sums to `nsites`. An `nsites` of
-/// 1 or less (or NaN) is replaced by 100.
+/// added to the largest count so the column sums to `nsites`. An `nsites` of 1
+/// or less, or NaN, is replaced by 100.
 pub fn ppm_to_pcm(pos: &[f64], nsites: f64) -> Vec<f64> {
     let nsites = if nsites.is_nan() || nsites <= 1.0 {
         100.0
@@ -50,9 +46,9 @@ pub fn ppm_to_pcm(pos: &[f64], nsites: f64) -> Vec<f64> {
     out
 }
 
-/// Probabilities to log2 odds against `bkg`. With a positive `pseudocount`
-/// the column first goes through counts (using `nsites`) so the pseudocount
-/// can be applied.
+/// Probabilities to log2 odds against `bkg`. With a positive `pseudocount` the
+/// column first goes through counts, using `nsites`, so the pseudocount can be
+/// applied.
 pub fn ppm_to_pwm(pos: &[f64], bkg: &[f64], pseudocount: f64, nsites: f64) -> Vec<f64> {
     let nsites = if nsites.is_nan() || nsites <= 1.0 {
         100.0
@@ -94,9 +90,9 @@ pub fn pwm_to_ppm(pos: &[f64], bkg: &[f64]) -> Vec<f64> {
     out
 }
 
-/// Probabilities to information content heights, either Shannon IC (each
-/// probability scaled by the column's total IC) or relative entropy against
-/// `bkg`.
+/// Probabilities to information content heights, either as Shannon IC, with
+/// each probability scaled by the column's total IC, or as relative entropy
+/// against `bkg`.
 pub fn ppm_to_icm(pos: &[f64], bkg: &[f64], relative_entropy: bool) -> Vec<f64> {
     let n = pos.len();
     let bkg = if bkg.len() != n {
@@ -179,8 +175,8 @@ fn to_consensus_ppm(pos: &[f64], motif_type: MotifType, pseudocount: f64) -> Vec
     }
 }
 
-/// IUPAC consensus letter of a DNA or RNA column (four values in A, C, G,
-/// T/U order).
+/// IUPAC consensus letter of a DNA or RNA column of four values in A, C, G, T/U
+/// order.
 pub fn consensus_letter(pos: &[f64], rna: bool, motif_type: MotifType, pseudocount: f64) -> char {
     assert_eq!(pos.len(), 4, "a DNA/RNA column needs four values");
     let p = to_consensus_ppm(pos, motif_type, pseudocount);
@@ -233,8 +229,8 @@ pub fn consensus_letter(pos: &[f64], rna: bool, motif_type: MotifType, pseudocou
     'N'
 }
 
-/// Consensus letter of an amino acid column (twenty values in
-/// [`crate::alphabet::AMINO_ACIDS`] order), including the B, Z, J and X
+/// Consensus letter of an amino acid column of twenty values in
+/// [`crate::alphabet::AMINO_ACIDS`] order, including the B, Z, J and X
 /// ambiguity codes.
 pub fn consensus_letter_aa(pos: &[f64], motif_type: MotifType, pseudocount: f64) -> char {
     assert_eq!(pos.len(), 20, "an amino acid column needs twenty values");
@@ -291,8 +287,8 @@ pub fn consensus_to_ppm(letter: char) -> Result<[f64; 4]> {
 }
 
 /// An amino acid column for a consensus letter. B, Z and J split their mass
-/// between two residues, and the other non-standard symbols (X, U, O, `*`,
-/// `-`, `+`, `.`) give a uniform column.
+/// between two residues, and the other non-standard symbols X, U, O, `*`, `-`,
+/// `+` and `.` give a uniform column.
 pub fn consensus_to_ppm_aa(letter: char) -> Result<[f64; 20]> {
     let mut out = [0.001; 20];
     if let Some(i) = crate::alphabet::AMINO_ACIDS
@@ -333,7 +329,7 @@ pub fn consensus_to_ppm_aa(letter: char) -> Result<[f64; 20]> {
 /// weights cannot be recovered from probabilities. Converting a motif to its
 /// own type returns it unchanged.
 ///
-/// As in universalmotif, the consensus and total IC are left as they were.
+/// The consensus and total IC are left as they were.
 ///
 /// # Example
 ///
@@ -413,7 +409,7 @@ pub fn convert_type(
         | (MotifType::Icm, MotifType::Icm) => unreachable!(),
     };
 
-    // R replaces NA (and NaN) with 0 after every conversion.
+    // Any NaN becomes 0 after every conversion.
     out = out.map_columns(|c| {
         c.iter()
             .map(|&v| if v.is_nan() { 0.0 } else { v })

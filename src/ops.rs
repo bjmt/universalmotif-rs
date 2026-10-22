@@ -93,7 +93,7 @@ fn keep_columns(motif: &Motif, keep: std::ops::Range<usize>) -> (Matrix, GapInfo
     (motif.matrix.slice_columns(keep), gap)
 }
 
-/// Rebuild the derived slots (total IC and consensus) after the matrix
+/// Rebuild the derived fields, the total IC and consensus, after the matrix
 /// changed, leaving everything else as it was.
 fn refresh(motif: &Motif, matrix: Matrix, gap: GapInfo, ic_type: MotifType) -> Result<Motif> {
     let mut p = motif.clone().into_parts();
@@ -147,10 +147,11 @@ pub fn trim_motif(motif: &Motif, min_ic: f64, trim_from: TrimFrom) -> Result<Opt
 
 /// Trim the edges of a contribution weight matrix.
 ///
-/// A column is kept if the sum of its absolute values reaches the cutoff,
-/// which is `abs_threshold` if given and otherwise `trim_threshold` times the
-/// largest column sum. Everything from the first to the last kept column is
-/// retained (on the chosen ends). Returns `None` if no column is left.
+/// A column is kept if the sum of its absolute values reaches the cutoff, which
+/// is `abs_threshold` if given and otherwise `trim_threshold` times the largest
+/// column sum. Columns are only removed from the chosen ends, up to the first
+/// kept column from each, so everything in between is retained. Returns `None`
+/// if no column is left.
 pub fn trim_cwm(
     motif: &Motif,
     trim_threshold: f64,
@@ -203,9 +204,9 @@ pub fn trim_cwm(
     refresh(motif, matrix, gap, MotifType::Cwm).map(Some)
 }
 
-/// Set probabilities below `pct_tolerance` to zero and renormalise each
-/// column. The motif is converted to a PPM (without a pseudocount) for the
-/// rounding and then back to its original type.
+/// Set probabilities below `pct_tolerance` to zero and renormalise each column.
+/// The motif is converted to a PPM without a pseudocount for the rounding and
+/// then back to its original type.
 pub fn round_motif(motif: &Motif, pct_tolerance: f64) -> Result<Motif> {
     if !(0.0..=1.0).contains(&pct_tolerance) {
         return arg_err("pct_tolerance must be a numeric value between 0 and 1");
@@ -236,10 +237,10 @@ pub fn normalize(motif: &Motif) -> Result<Motif> {
     convert_type(&pcm, motif.motif_type, Some(pseudo), false)
 }
 
-/// Add gaps to a motif, as universalmotif's `add_gap()`: gap `i` follows
-/// column `gaploc[i]` (counting from 1, by default the middle of the motif)
-/// and spans `mingap[i]` to `maxgap[i]` positions. Shorter lists are
-/// recycled to the length of the longest.
+/// Add gaps to a motif: gap `i` follows column `gaploc[i]`, counting from 1,
+/// and spans `mingap[i]` to `maxgap[i]` positions. Without `gaploc`, the gap
+/// goes in the middle of the motif. Shorter lists are recycled to the length of
+/// the longest.
 pub fn add_gap(
     motif: &Motif,
     gaploc: Option<&[usize]>,
@@ -270,9 +271,8 @@ pub fn add_gap(
     Motif::from_parts(p)
 }
 
-/// Turn a motif's gaps off, as universalmotif's `ungap()`. The gap
-/// positions and sizes are kept (so [`add_gap`] can restore them) unless
-/// `delete`.
+/// Turn a motif's gaps off. Unless `delete`, the gap positions and sizes are
+/// kept so that [`add_gap`] can restore them.
 pub fn ungap(motif: &Motif, delete: bool) -> Motif {
     let mut p = motif.clone().into_parts();
     if delete {
@@ -283,8 +283,8 @@ pub fn ungap(motif: &Motif, delete: bool) -> Motif {
     Motif::from_parts(p).expect("removing gaps keeps a motif valid")
 }
 
-/// Switch a motif between the DNA and RNA alphabets, as universalmotif's
-/// `switch_alph()`. The matrix and background stay as they are.
+/// Switch a motif between the DNA and RNA alphabets. The matrix and
+/// background stay as they are.
 pub fn switch_alph(motif: &Motif) -> Result<Motif> {
     let (to, from_letter, to_letter) = match motif.alphabet {
         Alphabet::Dna => (Alphabet::Rna, 'T', 'U'),

@@ -5,9 +5,8 @@ use crate::error::{Result, arg_err};
 /// A dense `nrow x ncol` matrix of `f64`, where rows are alphabet letters and
 /// columns are motif positions.
 ///
-/// Values are stored position-major (each column is contiguous), which is the
-/// same memory layout as a column-major R matrix or a Fortran-ordered numpy
-/// array of shape `(nrow, ncol)`.
+/// Values are stored position-major, with each column contiguous, which is
+/// column-major order for an array of shape `(nrow, ncol)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Matrix {
     nrow: usize,
@@ -16,7 +15,7 @@ pub struct Matrix {
 }
 
 impl Matrix {
-    /// Wrap position-major data (column after column).
+    /// Wrap position-major data, given column after column.
     pub fn from_vec(nrow: usize, ncol: usize, data: Vec<f64>) -> Result<Self> {
         if nrow == 0 {
             return arg_err("a motif matrix needs at least one row");
@@ -126,13 +125,13 @@ impl Matrix {
     }
 }
 
-/// Left-to-right sum, matching `std::accumulate` in the C++ sources.
+/// Plain left-to-right sum, with no reordering or compensation.
 pub(crate) fn sum(x: &[f64]) -> f64 {
     x.iter().fold(0.0, |a, &b| a + b)
 }
 
-/// Index of the first maximum, with the comparison semantics of
-/// `std::max_element` and R's `which.max` (NaN never replaces a value).
+/// Index of the first maximum. A value replaces the best so far only if it
+/// is strictly greater, so NaN never replaces a value.
 pub(crate) fn which_max(x: &[f64]) -> usize {
     let mut best = 0;
     for (i, &v) in x.iter().enumerate().skip(1) {

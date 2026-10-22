@@ -1,10 +1,10 @@
 //! Statistical helpers: binomial and hypergeometric probabilities, Fisher's
 //! exact test and P-value adjustment.
 //!
-//! The hypergeometric functions follow R's nmath library (`dbinom_raw()`,
-//! `dhyper()` and `phyper()`), so tails are computed directly rather than as
-//! one minus the other tail, and stay accurate down to the smallest
-//! P-values.
+//! The binomial density uses Loader's saddle-point method, and hypergeometric
+//! tails are summed as a series relative to the density at the cut-off, so
+//! tails are computed directly rather than as one minus the other tail, and
+//! stay accurate down to the smallest P-values.
 
 const LN_2PI: f64 = 1.837_877_066_409_345_5;
 const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_8;
@@ -55,8 +55,8 @@ fn bd0(x: f64, np: f64) -> f64 {
     x * (x / np).ln() + np - x
 }
 
-/// Binomial probability of `x` successes in `n` trials, with `q = 1 - p`
-/// given separately for accuracy (R's `dbinom_raw()`).
+/// Binomial probability of `x` successes in `n` trials by Loader's saddle-point
+/// method, with `q = 1 - p` given separately for accuracy.
 fn dbinom_raw(x: f64, n: f64, p: f64, q: f64) -> f64 {
     if p == 0.0 {
         return if x == 0.0 { 1.0 } else { 0.0 };
@@ -95,7 +95,7 @@ pub fn dbinom(x: u64, n: u64, p: f64) -> f64 {
 }
 
 /// Probability of at least `k` successes in `n` trials with success
-/// probability `p`, as R's `pbinom(k - 1, n, p, lower.tail = FALSE)`.
+/// probability `p`.
 pub fn pbinom_upper(k: u64, n: u64, p: f64) -> f64 {
     if k == 0 {
         return 1.0;
@@ -136,7 +136,7 @@ pub fn pbinom_upper(k: u64, n: u64, p: f64) -> f64 {
 }
 
 /// Probability of drawing `x` red balls in `n` draws without replacement
-/// from `r` red and `b` black ones (R's `dhyper()`).
+/// from `r` red and `b` black ones.
 pub fn dhyper(x: u64, r: u64, b: u64, n: u64) -> f64 {
     if n < x || r < x || n - x > b {
         return 0.0;
@@ -153,7 +153,7 @@ pub fn dhyper(x: u64, r: u64, b: u64, n: u64) -> f64 {
     p1 * p2 / p3
 }
 
-/// The ratio of the lower tail to the density at `x` (R's `pdhyper()`).
+/// The ratio of the lower tail to the density at `x`.
 fn pdhyper(mut x: f64, nr: f64, nb: f64, n: f64) -> f64 {
     let mut sum = 0.0;
     let mut term = 1.0;
@@ -165,9 +165,9 @@ fn pdhyper(mut x: f64, nr: f64, nb: f64, n: f64) -> f64 {
     1.0 + sum
 }
 
-/// Hypergeometric distribution function (R's `phyper()`): the probability
-/// of at most `x` red balls (or more than `x` if `lower` is false) in `n`
-/// draws from `nr` red and `nb` black ones. Negative `x` is allowed.
+/// Hypergeometric distribution function: the probability of at most `x` red
+/// balls in `n` draws from `nr` red and `nb` black ones, or of more than `x` if
+/// `lower` is false. Negative `x` is allowed.
 pub fn phyper(x: i64, nr: u64, nb: u64, n: u64, lower: bool) -> f64 {
     let (mut x, mut nr, mut nb, n) = (x as f64, nr as f64, nb as f64, n as f64);
     let mut lower = lower;
@@ -194,18 +194,18 @@ pub fn phyper(x: i64, nr: u64, nb: u64, n: u64, lower: bool) -> f64 {
     if lower { d * pd } else { 0.5 - d * pd + 0.5 }
 }
 
-/// One-sided ("greater") Fisher's exact test of the 2x2 table
-/// `[[a, b], [c, d]]`: the probability of `a` or more in the top-left cell
-/// given the margins, as R's `fisher.test(alternative = "greater")`.
+/// One-sided Fisher's exact test of the 2x2 table `[[a, b], [c, d]]` for the
+/// "greater" alternative: the probability of `a` or more in the top-left cell
+/// given the margins.
 pub fn fisher_greater(a: u64, b: u64, c: u64, d: u64) -> f64 {
     phyper(a as i64 - 1, a + c, b + d, a + b, false)
 }
 
-/// Benjamini-Hochberg adjusted P-values, as R's `p.adjust(method = "BH")`.
+/// Benjamini-Hochberg adjusted P-values.
 pub fn p_adjust_bh(p: &[f64]) -> Vec<f64> {
     let n = p.len();
     let mut order: Vec<usize> = (0..n).collect();
-    // Decreasing P-values; R's order() is stable, so ties keep input order.
+    // Decreasing P-values; the sort is stable, so ties keep input order.
     order.sort_by(|&a, &b| p[b].total_cmp(&p[a]));
     let mut out = vec![0.0; n];
     let mut running = f64::INFINITY;
@@ -217,14 +217,14 @@ pub fn p_adjust_bh(p: &[f64]) -> Vec<f64> {
     out
 }
 
-/// Bonferroni adjusted P-values, as R's `p.adjust(method = "bonferroni")`.
+/// Bonferroni adjusted P-values, capped at 1.
 pub fn p_adjust_bonferroni(p: &[f64]) -> Vec<f64> {
     let n = p.len() as f64;
     p.iter().map(|&x| (x * n).min(1.0)).collect()
 }
 
-/// The median, as R's `median()` (the mean of the middle two values for an
-/// even count), or `None` for no values.
+/// The median, or `None` for no values. For an even count it is the mean of the
+/// middle two values.
 pub fn median(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;

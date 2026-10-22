@@ -1,14 +1,14 @@
-//! Motif enrichment near genomic anchors (`motif_proximity()`).
+//! Motif enrichment near genomic anchors, tested by [`motif_proximity`].
 //!
-//! The genome-wide counterpart of [`crate::peaks`]: are a motif's hits
-//! closer to a set of anchor coordinates (summits, TSSs, SNPs) than chance
+//! The genome-wide counterpart of [`crate::peaks`]: are a motif's hits closer
+//! to a set of anchor coordinates, such as summits, TSSs or SNPs, than chance
 //! would put them? Each hit is placed at its middle position. For each
-//! candidate distance `d`, the near zone is every scanned position within
-//! `d` of an anchor; under the null that hits are uniform over the scanned
-//! universe, the number in the zone is binomial.
-//! The best distance is Bonferroni-corrected for the distances tried. A
-//! permutation null (random anchors) and a one-sided Kolmogorov-Smirnov test
-//! of the distances to the nearest anchor are also available.
+//! candidate distance `d`, the near zone is every scanned position within `d`
+//! of an anchor; under the null that hits are uniform over the scanned
+//! universe, the number in the zone is binomial. The best distance is
+//! Bonferroni-corrected for the distances tried. A permutation null with random
+//! anchors and a one-sided Kolmogorov-Smirnov test of the distances to the
+//! nearest anchor are also available.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -51,7 +51,7 @@ impl ProximityMethod {
 /// What [`motif_proximity`] counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProximityCount {
-    /// Hits in the near zone (overlapping hits of a motif count once).
+    /// Hits in the near zone, where overlapping hits of a motif count once.
     Hits,
     /// Anchors with a hit nearby.
     Anchors,
@@ -104,7 +104,7 @@ impl Default for ProximityOptions {
 /// A motif hit for [`motif_proximity`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProximityHit {
-    /// Motif (any identifier; results come in increasing order of it).
+    /// Motif identifier, of any value; results come in increasing order of it.
     pub motif: usize,
     pub range: GRange,
     pub score: f64,
@@ -114,7 +114,7 @@ pub struct ProximityHit {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proximity {
     pub motif: usize,
-    /// Hits tested (or anchors, when counting anchors).
+    /// Hits tested, or anchors when counting anchors.
     pub nhits: usize,
     /// The most significant distance.
     pub best_dist: Option<i64>,
@@ -127,11 +127,11 @@ pub struct Proximity {
     pub pvalue: f64,
     /// Benjamini-Hochberg q-value across motifs.
     pub qvalue: f64,
-    /// Kolmogorov-Smirnov statistic (KS method only).
+    /// Kolmogorov-Smirnov statistic, for the KS method only.
     pub ks_d: Option<f64>,
-    /// Distance from each hit's middle to its nearest anchor (0 inside it),
-    /// negative upstream of it in the anchor's orientation; `None` when no
-    /// anchor shares its chromosome.
+    /// Distance from each hit's middle to its nearest anchor, which is 0 inside
+    /// the anchor and negative upstream of it in the anchor's orientation;
+    /// `None` when no anchor shares its chromosome.
     pub dist_to_nearest: Vec<Option<f64>>,
 }
 
@@ -147,7 +147,7 @@ impl Universe {
     }
 }
 
-/// The middle position of a range (the lower one for even widths).
+/// The middle position of a range, taking the lower one for even widths.
 fn middle(r: &GRange) -> GRange {
     let m = (r.start + r.end).div_euclid(2);
     GRange {
@@ -157,8 +157,8 @@ fn middle(r: &GRange) -> GRange {
     }
 }
 
-/// Hits that overlap one another (on the same strand unless
-/// `ignore_strand`) keep only the best-scoring one.
+/// Of hits that overlap one another on the same strand, or on either strand
+/// with `ignore_strand`, only the best-scoring one is kept.
 fn collapse(hits: &[ProximityHit], ignore_strand: bool) -> Vec<ProximityHit> {
     let mut keep = vec![false; hits.len()];
     let mut by_group: HashMap<(usize, Option<GStrand>), Vec<usize>> = HashMap::new();
@@ -246,8 +246,8 @@ struct Scan {
     n_tested: usize,
 }
 
-/// The best-scoring distance for one set of hits (sorted by chromosome and
-/// start) and anchors.
+/// The best-scoring distance for anchors and one set of hits sorted by
+/// chromosome and start.
 fn scan(
     hits: &[GRange],
     anchors: &[GRange],
@@ -407,9 +407,9 @@ impl NullCdf {
     }
 }
 
-/// One-sided ("greater") Kolmogorov-Smirnov test, as R's `ks.test()`: the
-/// exact distribution for fewer than 100 values without ties, otherwise the
-/// asymptotic one.
+/// One-sided Kolmogorov-Smirnov test for the "greater" alternative, using the
+/// exact distribution for fewer than 100 values without ties and the asymptotic
+/// one otherwise.
 fn ks_greater(x: &[f64], cdf: impl Fn(f64) -> f64) -> (f64, f64) {
     let mut v = x.to_vec();
     v.sort_by(f64::total_cmp);
@@ -489,12 +489,11 @@ fn permute_anchors(
     Ok(out)
 }
 
-/// Test each motif's hits for proximity to `anchors`, as universalmotif's
-/// `motif_proximity()`. `universe` is the scanned regions (the null
-/// support) and `chrom_lengths` the chromosome lengths where known (zones
-/// are clipped to them). Only chromosomes carrying anchors are used.
-/// Returns one result per motif with hits, in increasing order of motif,
-/// unfiltered.
+/// Test each motif's hits for proximity to `anchors`. `universe` is the scanned
+/// regions, which form the null support, and `chrom_lengths` the chromosome
+/// lengths where known, to which zones are clipped. Only chromosomes carrying
+/// anchors are used. Returns one result per motif with hits, in increasing
+/// order of motif, unfiltered.
 pub fn motif_proximity(
     hits: &[ProximityHit],
     anchors: &[GRange],

@@ -1,13 +1,11 @@
 //! Scores of individual matches: score ranges, the score of a word, every
-//! word above a score and the probability of a word under the background
-//! (universalmotif's `motif_range()`, `motif_score()`, `score_match()`,
-//! `get_matches()`, `get_scores()`, `prob_match()` and `prob_match_bkg()`).
+//! word above a score and the probability of a word under the background.
 //!
-//! Scores use the motif's PWM on the same integer grid as scanning: each
-//! entry is multiplied by 1000 and truncated. Unless non-finite values are
-//! allowed, a PWM with `-Inf` entries gets a pseudocount first (see
-//! [`crate::ops::normalize`]); when they are allowed, a word using such an
-//! entry scores `-Inf`.
+//! Scores use the motif's PWM on the same integer grid as scanning: each entry
+//! is multiplied by 1000 and truncated. Unless non-finite values are allowed, a
+//! PWM with `-Inf` entries first gets a pseudocount from
+//! [`crate::ops::normalize`]; when they are allowed, a word using such an entry
+//! scores `-Inf`.
 
 use crate::alphabet::Alphabet;
 use crate::cdf::grid_value;
@@ -39,9 +37,8 @@ fn grid_columns(pwm: &Motif) -> Vec<Vec<Option<i64>>> {
         .collect()
 }
 
-/// The lowest and highest possible scores, as universalmotif's
-/// `motif_range()`. With non-finite values allowed, the lowest score can be
-/// `-Inf`.
+/// The lowest and highest possible scores. With non-finite values allowed,
+/// the lowest score can be `-Inf`.
 pub fn motif_range(motif: &Motif, allow_nonfinite: bool) -> Result<(f64, f64)> {
     let cols = grid_columns(&scoring_pwm(motif, allow_nonfinite)?);
     let mut lo = 0.0;
@@ -76,9 +73,9 @@ impl ThresholdType {
     }
 }
 
-/// Scores at fractions (from 0 to 1) of the motif's score range, as
-/// universalmotif's `motif_score()`. Non-finite entries are left out of the
-/// lowest score, so the `Total` type is only meaningful without them.
+/// Scores at fractions of the motif's score range, from 0 to 1. Non-finite
+/// entries are left out of the lowest score, so the `Total` type is only
+/// meaningful without them.
 pub fn motif_score(
     motif: &Motif,
     thresholds: &[f64],
@@ -141,8 +138,8 @@ fn word_rows(motif: &Motif, word: &str) -> Result<Vec<usize>> {
     })
 }
 
-/// The score of each word, as universalmotif's `score_match()`: each PWM
-/// entry is truncated to three decimals, and so is the total.
+/// The score of each word: each PWM entry is truncated to three decimals,
+/// and so is the total.
 pub fn score_match<S: AsRef<str>>(
     motif: &Motif,
     words: &[S],
@@ -178,8 +175,7 @@ pub fn score_match<S: AsRef<str>>(
         .collect()
 }
 
-/// Every possible score of the motif, highest first, as universalmotif's
-/// `get_scores()`. There are as many as the alphabet size to the power of
+/// Every possible score of the motif, highest first. There are as many as the alphabet size to the power of
 /// the width, so this is only for small motifs.
 pub fn get_scores(motif: &Motif, allow_nonfinite: bool) -> Result<Vec<f64>> {
     let cols = grid_columns(&scoring_pwm(motif, allow_nonfinite)?);
@@ -204,9 +200,11 @@ pub fn get_scores(motif: &Motif, allow_nonfinite: bool) -> Result<Vec<f64>> {
     Ok(out)
 }
 
-/// Every word scoring at least `score`, as universalmotif's
-/// `get_matches()` (found by branch and bound, in the same order). A score
-/// of `+Inf` has no matches; a score outside the motif's range is an error.
+/// Every word scoring at least `score`, found by branch and bound. Within
+/// each column letters are ranked by score, and words come out ordered by
+/// those ranks, with the column holding the highest-scoring letter varying
+/// fastest. A score of `+Inf` has no matches; a score outside the motif's
+/// range is an error.
 ///
 /// # Example
 ///
@@ -244,7 +242,9 @@ pub fn get_matches(motif: &Motif, score: f64, allow_nonfinite: bool) -> Result<V
     }
     let target = (score * 1000.0).trunc() as i64;
     let width = pwm.width();
-    // Non-finite entries take the R package's stand-in for minus infinity.
+    // Non-finite entries take a stand-in for minus infinity, low enough to
+    // rule out any word using one but small enough that a whole word of
+    // them still fits in an i32.
     let floor = -(i32::MAX as i64) / width as i64;
     let cols: Vec<Vec<i64>> = grid_columns(&pwm)
         .into_iter()
@@ -309,10 +309,10 @@ pub fn get_matches(motif: &Motif, score: f64, allow_nonfinite: bool) -> Result<V
     Ok(out)
 }
 
-/// The probability of each word under the motif's background, as
-/// universalmotif's `prob_match()`. Unless `allow_zero`, a background with
-/// zeros gets the motif's pseudocount (1 if it has none) spread over the
-/// letters, scaled by its `nsites` (100 if it has none).
+/// The probability of each word under the motif's background. Unless
+/// `allow_zero`, a background with zeros gets the motif's pseudocount spread
+/// over the letters and scaled by its `nsites`, taking 1 and 100 respectively
+/// when the motif has none.
 pub fn prob_match<S: AsRef<str>>(motif: &Motif, words: &[S], allow_zero: bool) -> Result<Vec<f64>> {
     let mut bkg = motif.bkg.clone();
     if !allow_zero && bkg.contains(&0.0) {
@@ -335,7 +335,7 @@ pub fn prob_match<S: AsRef<str>>(motif: &Motif, words: &[S], allow_zero: bool) -
 }
 
 /// The probability of each word under a background given as letter
-/// frequencies, as universalmotif's `prob_match_bkg()`.
+/// frequencies.
 pub fn prob_match_bkg<S: AsRef<str>>(bkg: &[(char, f64)], words: &[S]) -> Result<Vec<f64>> {
     words
         .iter()

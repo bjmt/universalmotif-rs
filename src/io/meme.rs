@@ -1,10 +1,10 @@
-//! MEME motif files (`read_meme()` / `write_meme()`).
+//! MEME motif files.
 //!
 //! Both full MEME/DREME/STREME output and the minimal MEME motif format are
 //! read. Besides the motifs, full MEME output can be mined for the sites each
-//! motif was built from ([`read_sites`]), the per-site P-values
-//! ([`read_site_pvalues`]) and the combined block diagrams
-//! ([`read_combined`]).
+//! motif was built from with [`read_sites`], the per-site P-values with
+//! [`read_site_pvalues`] and the combined block diagrams with
+//! [`read_combined`].
 
 use super::{content_lines, fmt_err, format_fixed, format_r_number, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;
@@ -21,7 +21,7 @@ fn meme_rank(c: char) -> usize {
 }
 
 /// Content lines without comments and the `****` / `----` rulers of MEME
-/// output, which universalmotif also drops before parsing.
+/// output.
 fn meme_lines(text: &str) -> Vec<&str> {
     content_lines(text)
         .into_iter()
@@ -140,8 +140,7 @@ fn parse_header(lines: &[&str]) -> Result<Header> {
     })
 }
 
-/// Read `key= value` (or `key=value`) from a `letter-probability matrix:`
-/// line.
+/// Read `key= value` or `key=value` from a `letter-probability matrix:` line.
 fn matrix_field<'a>(tokens: &[&'a str], key: &str) -> Option<&'a str> {
     let with_eq = format!("{key}=");
     for (i, t) in tokens.iter().enumerate() {
@@ -208,8 +207,8 @@ fn raw_motifs<'a>(lines: &'a [&'a str]) -> Result<Vec<RawMotif<'a>>> {
 /// Options for [`read()`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReadOptions {
-    /// Read the matrices as contribution weight matrices (as written by
-    /// TF-MoDISco) rather than probabilities.
+    /// Read the matrices as contribution weight matrices, as written by
+    /// TF-MoDISco, rather than probabilities.
     pub cwm: bool,
 }
 
@@ -422,8 +421,9 @@ pub struct CombinedSite {
     pub diagram: String,
 }
 
-/// Read the combined block diagrams (non-overlapping sites per sequence) of
-/// MEME output. Diagrams continued over several lines are joined.
+/// Read the combined block diagrams of MEME output, which give the
+/// non-overlapping sites in each sequence. Diagrams continued over several
+/// lines are joined.
 pub fn read_combined(text: &str) -> Result<Vec<CombinedSite>> {
     let lines = meme_lines(text);
     let Some(start) = lines
@@ -463,8 +463,8 @@ pub fn read_combined(text: &str) -> Result<Vec<CombinedSite>> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteOptions {
     pub version: u32,
-    /// Background frequencies in the order letters are written (A, C, G, T
-    /// for DNA). By default the motifs' shared background is used, or a
+    /// Background frequencies in the order letters are written, which for DNA
+    /// is A, C, G, T. By default the motifs' shared background is used, or a
     /// uniform one if they differ.
     pub bkg: Option<Vec<f64>>,
     /// The `strands:` value. By default it comes from the motifs.
@@ -617,7 +617,7 @@ pub fn write(motifs: &[Motif], opts: &WriteOptions) -> Result<String> {
     Ok(join_lines(&lines))
 }
 
-/// A MEME alphabet definition (see [`write_alphabet`]).
+/// A MEME alphabet definition, written by [`write_alphabet`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AlphabetDefinition {
     /// The core letters, in order.
@@ -629,16 +629,15 @@ pub struct AlphabetDefinition {
     /// `"DNA"`, `"RNA"` or `"PROTEIN"`, for alphabets that extend one.
     pub like: Option<String>,
     pub name: Option<String>,
-    /// A name for each letter (all core and complement letters need one if
-    /// any are given).
+    /// A name for each letter. If any are given, all core and complement
+    /// letters need one.
     pub letter_names: Vec<(char, String)>,
-    /// A colour for each letter, as hexadecimal RGB (all letters need one if
-    /// any are given).
+    /// A colour for each letter, as hexadecimal RGB. If any are given, all
+    /// letters need one.
     pub colours: Vec<(char, String)>,
 }
 
-/// Write a MEME custom alphabet definition, as universalmotif's
-/// `meme_alph()`.
+/// Write a MEME custom alphabet definition.
 pub fn write_alphabet(def: &AlphabetDefinition) -> Result<String> {
     let mut head = String::from("ALPHABET");
     if let Some(name) = &def.name {

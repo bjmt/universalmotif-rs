@@ -1,5 +1,5 @@
-//! Genomic ranges: the small part of GenomicRanges that motif proximity
-//! testing needs (reduce, intersect, overlaps, flanks and distances).
+//! Genomic ranges and the few operations on them that motif proximity testing
+//! needs: reducing, intersecting, overlaps, flanks and distances.
 //!
 //! Ranges are 1-based and inclusive, on chromosomes identified by index. A
 //! range with `end < start` is empty.
@@ -11,7 +11,7 @@ use crate::error::{Result, arg_err};
 pub enum GStrand {
     Plus,
     Minus,
-    /// No strand (`*`).
+    /// No strand, written `*`.
     Any,
 }
 
@@ -58,10 +58,9 @@ impl GRange {
     }
 }
 
-/// Merge ranges (ignoring strand) whose gap is smaller than `min_gap`, as
-/// GenomicRanges' `reduce()`: with `min_gap = 1` adjacent ranges merge,
-/// with 0 only overlapping ones do. Empty ranges are dropped; the result is
-/// sorted by chromosome and start.
+/// Merge ranges whose gap is smaller than `min_gap`, ignoring strand: with
+/// `min_gap = 1` adjacent ranges merge, with 0 only overlapping ones do. Empty
+/// ranges are dropped; the result is sorted by chromosome and start.
 pub fn reduce(ranges: &[GRange], min_gap: i64) -> Vec<GRange> {
     let mut v: Vec<GRange> = ranges.iter().filter(|r| !r.is_empty()).copied().collect();
     v.sort_by_key(|r| (r.chrom, r.start, r.end));
@@ -77,7 +76,7 @@ pub fn reduce(ranges: &[GRange], min_gap: i64) -> Vec<GRange> {
     out
 }
 
-/// Intersection of two reduced range sets (as from [`reduce`]).
+/// Intersection of two reduced range sets, as made by [`reduce`].
 pub fn intersect(a: &[GRange], b: &[GRange]) -> Vec<GRange> {
     let (mut i, mut j) = (0, 0);
     let mut out = Vec::new();
@@ -119,8 +118,9 @@ pub fn overlaps_any(q: &GRange, reduced: &[GRange]) -> bool {
     reduced.get(k).is_some_and(|r| r.overlaps(q))
 }
 
-/// How many of `queries` (sorted by chromosome and start) overlap the
-/// reduced ranges; the same as counting with [`overlaps_any`], in one pass.
+/// How many of `queries` overlap the reduced ranges, counted in one pass but
+/// the same as counting with [`overlaps_any`]. The queries must be sorted by
+/// chromosome and start.
 pub(crate) fn count_overlapping(queries: &[GRange], reduced: &[GRange]) -> usize {
     let mut k = 0;
     let mut n = 0;
@@ -162,9 +162,9 @@ impl Orientation {
     }
 }
 
-/// The positions within `d` of an anchor (GenomicRanges' widening, or
-/// `flank()` for directional zones; unstranded anchors count as `+`),
-/// clipped to the chromosome when its length is known (`trim()`).
+/// The positions within `d` of an anchor, on both sides of it or, for
+/// directional zones, on one side only, clipped to the chromosome when its
+/// length is known. Unstranded anchors count as `+`.
 pub fn zone(anchor: &GRange, d: i64, orientation: Orientation, chrom_len: Option<i64>) -> GRange {
     let minus = anchor.strand == GStrand::Minus;
     let (start, end) = match orientation {
@@ -176,7 +176,7 @@ pub fn zone(anchor: &GRange, d: i64, orientation: Orientation, chrom_len: Option
     };
     let mut z = GRange::new(anchor.chrom, start, end);
     if let Some(len) = chrom_len {
-        // trim(): clip to [1, len]; a range wholly outside becomes empty.
+        // Clip to [1, len]; a range wholly outside becomes empty.
         if z.end < 1 {
             z.start = 1;
             z.end = 0;
@@ -192,7 +192,7 @@ pub fn zone(anchor: &GRange, d: i64, orientation: Orientation, chrom_len: Option
 }
 
 /// The gap between two ranges on the same chromosome: 0 when they overlap
-/// or touch, as GenomicRanges' `distance()`.
+/// or touch.
 pub fn distance(a: &GRange, b: &GRange) -> i64 {
     (b.start - a.end - 1).max(a.start - b.end - 1).max(0)
 }
@@ -222,8 +222,7 @@ impl AnchorIndex {
     }
 
     /// The original index of the anchor nearest to `q` on its chromosome,
-    /// with the distance; ties go to the lowest index, as GenomicRanges'
-    /// `distanceToNearest()`.
+    /// with the distance; ties go to the lowest index.
     pub(crate) fn nearest(&self, q: &GRange) -> Option<(usize, i64)> {
         let lo = self.sorted.partition_point(|(a, _)| a.chrom < q.chrom);
         let hi = self.sorted.partition_point(|(a, _)| a.chrom <= q.chrom);
@@ -260,9 +259,9 @@ impl AnchorIndex {
     }
 
     /// The anchor nearest to position `pos` on chromosome `chrom`, with the
-    /// number of positions from `pos` to the anchor (0 inside it, so a zone
-    /// widened by `d` contains `pos` exactly when this is at most `d`).
-    /// Ties go to the lowest index.
+    /// number of positions from `pos` to the anchor. That number is 0 inside
+    /// the anchor, so a zone widened by `d` contains `pos` exactly when it is
+    /// at most `d`. Ties go to the lowest index.
     pub(crate) fn nearest_position(&self, chrom: usize, pos: i64) -> Option<(usize, i64)> {
         let q = GRange::new(chrom, pos, pos);
         let (i, gap) = self.nearest(&q)?;

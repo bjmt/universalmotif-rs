@@ -78,7 +78,7 @@ impl Alphabet {
         matches!(self, Alphabet::Dna | Alphabet::Rna)
     }
 
-    /// The alphabet name as universalmotif stores it: `"DNA"`, `"RNA"`,
+    /// The alphabet's name: `"DNA"`, `"RNA"`,
     /// `"AA"`, or the concatenated letters of a custom alphabet.
     pub fn name(&self) -> String {
         match self {

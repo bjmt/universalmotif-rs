@@ -1,5 +1,5 @@
-//! Sampling sites from motifs and implanting them into sequences
-//! (`sample_sites()` and `implant_motifs()`).
+//! Sampling sites from motifs with [`sample_sites`] and implanting them into
+//! sequences with [`implant_motifs`].
 
 use rand::RngExt;
 use rand::rngs::StdRng;
@@ -42,7 +42,7 @@ pub enum ImplantMode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplantOptions {
     pub mode: ImplantMode,
-    /// Implant on either strand at random (otherwise only `+`).
+    /// Implant on either strand at random, rather than only on `+`.
     pub both_strands: bool,
     /// Random positions are the mean of this many uniform draws, so values
     /// above 1 favour the middle of sequences.
@@ -95,10 +95,9 @@ fn collides(s: usize, e: usize, placed: &[(usize, usize)], gap: usize) -> bool {
         .any(|&(ps, pe)| s <= pe + gap && e + gap >= ps)
 }
 
-/// Plant sites sampled from DNA or RNA motifs into sequences, as
-/// universalmotif's `implant_motifs()`. Each implant uses a motif chosen at
-/// random (if there are several) and overwrites the sequence at its
-/// position.
+/// Plant sites sampled from DNA or RNA motifs into sequences. Each implant uses
+/// a motif chosen at random when there are several, and overwrites the sequence
+/// at its position.
 pub fn implant_motifs<S: AsRef<str>>(
     motifs: &[Motif],
     sequences: &[S],

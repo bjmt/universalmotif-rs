@@ -1,21 +1,20 @@
 //! Sequence motifs: creating, converting, reading and writing them, and
 //! using them to scan, compare, cluster and test sequences.
 //!
-//! This crate is a port of the [universalmotif] R/Bioconductor package, and
-//! the engine behind its Python version. Its results are checked against the
-//! R package; where the two differ on purpose (mostly bugs fixed in the
-//! port), [DIVERGENCES.md] explains why.
+//! This crate is a port of the [universalmotif] R/Bioconductor package and
+//! the engine behind its Python version; [DIVERGENCES.md] lists where the
+//! two differ on purpose.
 //!
 //! [universalmotif]: https://bioconductor.org/packages/universalmotif
 //! [DIVERGENCES.md]: https://github.com/bjmt/universalmotif-rs/blob/main/DIVERGENCES.md
 //!
 //! # The motif type
 //!
-//! A [`Motif`] is a position matrix over an [`Alphabet`] (DNA, RNA, amino
-//! acids or a custom set of letters) together with its metadata: name,
-//! background frequencies, pseudocount, site count, gaps and so on. The
-//! matrix is a count, probability, weight, information content or
-//! contribution matrix ([`MotifType`]). Motifs are immutable once built and
+//! A [`Motif`] is a position matrix over an [`Alphabet`] of DNA, RNA, amino
+//! acids or a custom set of letters, together with its metadata: name,
+//! background frequencies, pseudocount, site count, gaps and so on. Its
+//! [`MotifType`] says whether the matrix holds counts, probabilities, weights,
+//! information content or contributions. Motifs are immutable once built and
 //! always valid; [`MotifBuilder`] and [`MotifParts`] build them.
 //!
 //! # A first example
@@ -61,10 +60,8 @@
 //! | Sequences: k-lets, complexity, shuffling, sampling, masking | [`kmer`], [`complexity`], [`shuffle`], [`sample`], [`mask`] |
 //! | De novo motif discovery | [`finder`] |
 //!
-//! Functions are named after their counterparts in the R package. Where the
-//! R package has both a full and a `_lite` version, the crate follows the
-//! lite one. Functions that do a lot of work take a thread count
-//! (`nthreads`, 0 for all cores) in their options.
+//! Functions that do a lot of work take a thread count, `nthreads`, in their
+//! options, where 0 means all cores.
 
 pub mod alphabet;
 pub mod convert;

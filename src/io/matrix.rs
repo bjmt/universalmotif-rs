@@ -1,4 +1,4 @@
-//! Plain numeric matrices (`read_matrix()` / `write_matrix()`).
+//! Plain numeric matrices.
 
 use super::{fmt_err, format_fixed, join_lines, num};
 use crate::alphabet::Alphabet;
@@ -35,13 +35,13 @@ pub struct ReadOptions {
     pub alphabet: Alphabet,
     /// The matrix type; detected from the values when `None`.
     pub motif_type: Option<MotifType>,
-    /// Line separating motifs (an empty string means blank lines). `None`
+    /// Line separating motifs, where an empty string means blank lines. `None`
     /// means motifs are only separated by headers.
     pub sep: Option<String>,
     pub headers: Headers,
-    /// Whether each row (or, with `Positions::Rows`, the first line) holds
-    /// letter labels. The labels are skipped; rows are read in alphabet
-    /// order.
+    /// Whether each row holds a letter label, or with `Positions::Rows` whether
+    /// the first line holds them. The labels are skipped; rows are read in
+    /// alphabet order.
     pub rownames: bool,
     /// Lines starting with this text are ignored.
     pub comment: Option<String>,

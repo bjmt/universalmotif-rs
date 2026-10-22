@@ -1,19 +1,17 @@
-//! Motif comparison (`compare_motifs_lite()`).
+//! Motif comparison with [`compare_motifs`].
 //!
-//! Two motifs are compared by sliding one along the other (and, for DNA and
-//! RNA, its reverse complement) and summing, over the overlapping columns, the
-//! Pearson correlation of each column pair centred on a uniform background.
-//! The best alignment is kept. Its significance comes from the distribution
-//! of that sum under a null model of target columns, computed exactly by
-//! convolution, Bonferroni-corrected for the number of alignments tried.
-//! This follows universalmotif's `src/compare_motifs_lite.cpp`, itself a port
-//! of `yamcmp` from yamtk.
+//! Two motifs are compared by sliding one along the other and summing, over the
+//! overlapping columns, the Pearson correlation of each column pair centred on
+//! a uniform background; for DNA and RNA the reverse complement is tried as
+//! well. The best alignment is kept. Its significance comes from the
+//! distribution of that sum under a null model of target columns, computed
+//! exactly by convolution, Bonferroni-corrected for the number of alignments
+//! tried.
 //!
-//! Unlike the R package's lite version, motifs of any alphabet can be
-//! compared: columns are centred on 1/n for an n-letter alphabet (which makes
-//! the score the Pearson correlation of probability columns), reverse
-//! complements are only tried for DNA and RNA, and the parametric null is
-//! only available for DNA and RNA.
+//! Motifs of any alphabet can be compared. Columns are centred on 1/n for an
+//! n-letter alphabet, which makes the score the Pearson correlation of
+//! probability columns. Reverse complements are only tried, and the parametric
+//! null is only available, for DNA and RNA.
 
 use rayon::prelude::*;
 
@@ -30,8 +28,8 @@ const ENUM_DIRICHLET_N: f64 = 4.0;
 const CONSENSUS_THRESHOLD: f64 = 0.75;
 const TIE_TOLERANCE: f64 = 1e-10;
 
-/// A motif column of probabilities. Fixed-size arrays are used for DNA and
-/// RNA (4 letters) and amino acids (20), so that code is compiled for those
+/// A motif column of probabilities. Fixed-size arrays of 4 letters for DNA and
+/// RNA and of 20 for amino acids are used so that code is compiled for those
 /// sizes; other alphabets use vectors.
 trait Col: Clone + Send + Sync {
     fn from_slice(v: &[f64]) -> Self;
@@ -58,8 +56,8 @@ impl Col for Vec<f64> {
     }
 }
 
-/// Pearson correlation of two probability columns, which is centred on
-/// 1/n (0.25 for DNA and RNA).
+/// Pearson correlation of two probability columns, which is centred on 1/n, or
+/// 0.25 for DNA and RNA.
 #[inline(always)]
 fn pcc_column<C: Col>(q: &C, t: &C) -> f64 {
     let (q, t) = (q.values(), t.values());
@@ -129,8 +127,8 @@ fn consensus_char(p: &[f64]) -> char {
     iupac(mask)
 }
 
-/// Reverse complement of DNA or RNA columns (in A, C, G, T order the
-/// complement reverses each column).
+/// Reverse complement of DNA or RNA columns. In A, C, G, T order the complement
+/// reverses each column.
 fn rc_columns<C: Col>(m: &[C]) -> Vec<C> {
     m.iter()
         .rev()
@@ -193,13 +191,13 @@ pub enum NullModel {
 /// Options for comparisons.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompareOptions {
-    /// Fewest overlapping columns an alignment may have (lowered to the
-    /// width of the narrower motif when needed).
+    /// Fewest overlapping columns an alignment may have, lowered to the width
+    /// of the narrower motif when needed.
     pub min_overlap: usize,
     /// Also try the reverse complement of each query.
     pub rc: bool,
     pub null: NullModel,
-    /// Background (A, C, G, T) for the parametric null.
+    /// Background for the parametric null, in A, C, G, T order.
     pub bkg: [f64; 4],
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
@@ -224,10 +222,9 @@ pub struct Alignment {
     pub target: usize,
     /// Sum of column correlations over the overlap.
     pub score: f64,
-    /// Number of overlapping columns (0 if no alignment was possible).
+    /// Number of overlapping columns, or 0 if no alignment was possible.
     pub overlap: usize,
-    /// Query column (in the oriented query) facing target column 0; can be
-    /// negative.
+    /// Column of the oriented query facing target column 0; can be negative.
     pub offset: i64,
     /// `Minus` if the query's reverse complement aligned best.
     pub strand: Strand,
@@ -397,7 +394,8 @@ fn tail_prob(pmf: &[f64], bin: usize) -> f64 {
     pmf[bin..].iter().fold(0.0, |a, &b| a + b).clamp(0.0, 1.0)
 }
 
-/// Where a motif sits in a shared column frame (see [`anchor_layout`]).
+/// Where a motif sits in a shared column frame, as laid out by
+/// [`anchor_layout`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Placement {
     /// Empty columns to the left of the motif.
@@ -407,8 +405,7 @@ pub struct Placement {
 }
 
 /// Lay motifs out in a common column frame by aligning each one to
-/// `motifs[anchor]`, as universalmotif's `view_motifs_lite()` does. Motifs
-/// that do not overlap the anchor by at least `opts.min_overlap` columns
+/// `motifs[anchor]`. Motifs that do not overlap the anchor by at least `opts.min_overlap` columns
 /// are placed at the anchor's left edge. Returns the placements and the
 /// frame width.
 pub fn anchor_layout(
@@ -580,8 +577,7 @@ pub struct Comparison {
     /// Benjamini-Hochberg adjusted P-value, among the comparisons of the
     /// same query.
     pub qvalue: f64,
-    /// Consensus of the aligned query columns (in the query's own
-    /// orientation).
+    /// Consensus of the aligned query columns, in the query's own orientation.
     pub query_consensus: String,
     /// Consensus of the aligned target columns.
     pub target_consensus: String,
@@ -611,9 +607,9 @@ fn consensus_range<C: Col>(cols: &[C], start: i64, len: usize, alphabet: &Alphab
         .collect()
 }
 
-/// Compare each query motif with every motif (itself included).
+/// Compare each query motif with every motif, itself included.
 ///
-/// Returns one [`Comparison`] per (query, target) pair, ordered by query and
+/// Returns one [`Comparison`] per query and target pair, ordered by query and
 /// then target, without any filtering.
 ///
 /// # Example

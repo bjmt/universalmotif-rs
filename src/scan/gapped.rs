@@ -1,9 +1,10 @@
 //! Scanning with gapped motifs.
 //!
 //! A gapped motif is pieces of columns with a gap of variable size after
-//! each piece but the last. The R package scans every combination of gap
-//! sizes as a separate motif, with blank columns in the gaps. Here each
-//! piece is scored once per position, and the combinations are tried by
+//! each piece but the last, so each combination of gap sizes amounts to a
+//! separate motif with blank columns in the gaps. Rather than scanning each
+//! of those, every piece is scored once per position, and the combinations
+//! are tried by
 //! adding the pieces' scores, piece by piece, dropping a partial combination
 //! as soon as the pieces still to come can no longer reach the threshold.
 //! The scores, and so the thresholds and P-values, are those of the motif
@@ -16,7 +17,7 @@ use crate::motif::{Motif, Strand};
 
 /// Where a motif's gaps are and how large they can be, in the motif's own
 /// orientation. Combinations of gap sizes are numbered with the first gap
-/// varying fastest, as R's `expand.grid()` orders them.
+/// varying fastest.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GapShape {
     /// The widths of the pieces between gaps.
@@ -107,9 +108,8 @@ impl GapShape {
         self.widths.iter().sum::<usize>() + self.sizes.iter().map(|s| s.1).sum::<usize>()
     }
 
-    /// Replace the letters in the gaps of combination `combo` with dots, as
-    /// the R package shows them; `letters` is the match in the motif's own
-    /// orientation.
+    /// Replace the letters in the gaps of combination `combo` with dots;
+    /// `letters` is the match in the motif's own orientation.
     pub(crate) fn mark_gaps(&self, combo: u16, letters: &mut [u8]) {
         let mut at = 0;
         for (w, g) in self.widths.iter().zip(self.gap_sizes(combo)) {
@@ -120,8 +120,8 @@ impl GapShape {
     }
 }
 
-/// How one piece is scored: on packed letters (DNA and RNA) or letter
-/// codes (other alphabets).
+/// How one piece is scored: on packed letters for DNA and RNA, or on letter
+/// codes for other alphabets.
 pub(super) enum PieceScorer {
     Packed(Scorer),
     Coded(CodedScorer),
@@ -195,9 +195,9 @@ pub(super) struct GappedScorer {
 }
 
 impl GappedScorer {
-    /// Lay out `pwm` (the motif's scoring matrix, without gaps) with the
-    /// gaps of `shape`. The reverse strand (with `rc`, for DNA and RNA) uses
-    /// the reverse complement of each piece, in reverse order.
+    /// Lay out `pwm`, the motif's scoring matrix without gaps, with the gaps of
+    /// `shape`. With `rc`, the reverse strand of DNA and RNA uses the reverse
+    /// complement of each piece, in reverse order.
     pub(super) fn new(pwm: &Matrix, shape: GapShape, nucleotide: bool, rc: bool) -> GappedScorer {
         let mut pieces = Vec::new();
         let mut at = 0;
@@ -227,9 +227,9 @@ impl GappedScorer {
 
     /// Find the hits of motif `mi` starting in `starts` of a stretch of
     /// sequence `si` free of unknown letters and ending at `seg_end`.
-    /// `score(piece, p)` scores a piece at position `p`, for pieces ending
-    /// by `stop` (the end of the letters decoded for the chunk); `buf` holds
-    /// the pieces' scores between calls.
+    /// `score(piece, p)` scores a piece at position `p`, for pieces ending by
+    /// `stop`, the end of the letters decoded for the chunk; `buf` holds the
+    /// pieces' scores between calls.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn scan(
         &self,

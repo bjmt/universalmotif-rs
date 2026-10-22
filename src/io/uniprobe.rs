@@ -1,5 +1,4 @@
-//! UniPROBE motif files (`read_uniprobe()`, plus a writer universalmotif
-//! lacks).
+//! UniPROBE motif files.
 
 use super::{content_lines, fmt_err, format_shortest, join_lines, num};
 use crate::alphabet::Alphabet;
@@ -41,10 +40,10 @@ fn read_rows(lines: &[&str], i: usize, name: &str) -> Result<Matrix> {
     Matrix::from_columns(&cols)
 }
 
-/// Read UniPROBE motifs, either from full output files (with
-/// `# Motif:` headers, where the probability matrix is used and the
-/// enrichment score is kept in `extrainfo`) or from minimal files of a name
-/// line followed by `A:`, `C:`, `G:` and `T:` rows.
+/// Read UniPROBE motifs, either from full output files with `# Motif:` headers,
+/// where the probability matrix is used and the enrichment score is kept in
+/// `extrainfo`, or from minimal files of a name line followed by `A:`, `C:`,
+/// `G:` and `T:` rows.
 pub fn read(text: &str) -> Result<Vec<Motif>> {
     let lines = content_lines(text);
     let mut motifs = Vec::new();

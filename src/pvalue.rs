@@ -1,10 +1,8 @@
-//! Motif P-values and score thresholds (`motif_pvalue()`).
+//! Motif P-values and score thresholds.
 //!
 //! A motif's P-value for a score is the probability that a random site, drawn
-//! from the background, scores at least that much. It is computed exactly
-//! from the motif's score distribution (see [`crate::cdf`]), which is
-//! universalmotif's `method = "dynamic"`. The exhaustive branch-and-bound
-//! method and its random score search are not ported.
+//! from the background, scores at least that much. It is computed exactly from
+//! the motif's score distribution, as described in [`crate::cdf`].
 
 use rayon::prelude::*;
 
@@ -34,9 +32,9 @@ impl Default for PvalueOptions {
     }
 }
 
-/// Run `f` on a thread pool of `nthreads` threads (0 for all available).
-/// Parallel iterators inside `f` use this pool, so they never spread to
-/// more threads than asked for.
+/// Run `f` on a thread pool of `nthreads` threads, or all available for 0.
+/// Parallel iterators inside `f` use this pool, so they never spread to more
+/// threads than asked for.
 pub(crate) fn with_threads<T: Send>(nthreads: usize, f: impl FnOnce() -> T + Send) -> Result<T> {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(nthreads)
@@ -58,10 +56,10 @@ pub struct ScoringMatrix {
 /// Prepare the PWM a motif is scored with, as `motif_pvalue()` does.
 ///
 /// A finite PWM is used as it is when the background is its own, because
-/// converting back and forth can move entries across integer score
-/// boundaries. Otherwise the motif is converted to a PPM and then to a PWM
-/// against `bkg` (its own background by default). If that PWM would have
-/// infinite values the pseudocount is reapplied first (see [`normalize`]).
+/// converting back and forth can move entries across integer score boundaries.
+/// Otherwise the motif is converted to a PPM and then to a PWM against `bkg`,
+/// which defaults to its own background. If that PWM would have infinite values
+/// the pseudocount is first reapplied with [`normalize`].
 pub fn scoring_matrix(motif: &Motif, bkg: Option<&[f64]>) -> Result<ScoringMatrix> {
     let bkg = match bkg {
         Some(b) => {
@@ -221,9 +219,9 @@ pub fn motif_score(
     per_motif(motifs, queries, opts, |d, p| d.score(p))
 }
 
-/// The natural logarithm of a P-value written as text (such as `"1e-400"`),
-/// as universalmotif's `log_string_pval()`. Values too small for a double
-/// are handled through their mantissa and exponent.
+/// The natural logarithm of a P-value written as text, such as `"1e-400"`.
+/// Values too small for a double are handled through their mantissa and
+/// exponent.
 pub fn log_pvalue_text(pvalue: &str) -> Result<f64> {
     let s = pvalue.trim();
     let bad = || Error::Argument(format!("'{pvalue}' is not a P-value"));

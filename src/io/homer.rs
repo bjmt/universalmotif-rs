@@ -1,4 +1,4 @@
-//! HOMER motif files (`read_homer()` / `write_homer()`).
+//! HOMER motif files.
 
 use super::{content_lines, fmt_err, format_fixed, format_r_number, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;
@@ -18,11 +18,12 @@ fn fields(line: &str) -> Vec<&str> {
 
 /// Read HOMER motifs.
 ///
-/// The header line gives the consensus, the name, the log-odds detection
-/// threshold (kept in `extrainfo` as `logodds.threshold`) and, in files written by
-/// HOMER itself, the target and background site counts and the P-value. A
-/// name such as `RUNX(Runt)/HPC7-Runx1-ChIP-Seq/Homer` is split into the name
-/// `RUNX` and the family `Runt`. Rows are DNA probabilities.
+/// The header line gives the consensus, the name and the log-odds detection
+/// threshold, and in files written by HOMER itself also the target and
+/// background site counts and the P-value. The threshold is kept in `extrainfo`
+/// as `logodds.threshold`. A name such as
+/// `RUNX(Runt)/HPC7-Runx1-ChIP-Seq/Homer` is split into the name `RUNX` and the
+/// family `Runt`. Rows are DNA probabilities.
 pub fn read(text: &str) -> Result<Vec<Motif>> {
     let lines = content_lines(text);
     let headers: Vec<usize> = (0..lines.len())
@@ -100,9 +101,9 @@ pub fn read(text: &str) -> Result<Vec<Motif>> {
 
 /// How the log-odds detection threshold written into HOMER headers is set.
 ///
-/// Thresholds are on HOMER's own score scale. HOMER scores a site as the sum
-/// of `ln(p / 0.25)` over its positions, using the probabilities as written
-/// in the file (three decimals) with a floor of 0.001.
+/// Thresholds are on HOMER's own score scale. HOMER scores a site as the sum of
+/// `ln(p / 0.25)` over its positions, using the probabilities as written in the
+/// file, to three decimals, with a floor of 0.001.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Threshold {
     /// A fraction of each motif's maximum possible HOMER score, either one
@@ -110,9 +111,9 @@ pub enum Threshold {
     Logodds(Vec<f64>),
     /// HOMER scores, either one value or one per motif.
     LogoddsAbs(Vec<f64>),
-    /// A HOMER score that random sites (from a uniform background) reach
-    /// with at most this probability, either one value or one per motif. It
-    /// is conservative by at most 0.001 per motif position.
+    /// A HOMER score that random sites from a uniform background reach with at
+    /// most this probability, either one value or one per motif. It is
+    /// conservative by at most 0.001 per motif position.
     Pvalue(Vec<f64>),
 }
 

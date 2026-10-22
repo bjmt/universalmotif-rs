@@ -1,16 +1,15 @@
 //! Sequences encoded for scanning.
 //!
-//! DNA and RNA are packed at two bits per position, following tangermeme's
-//! `PackedSequence`: four positions per byte, the first in the two most
-//! significant bits, with letters coded in alphabet order (A, C, G, T or U).
-//! Other alphabets take a byte per position, holding the letter's index in
-//! the alphabet. Anything outside the alphabet (such as `N`) is coded as the
-//! first letter and recorded in runs of one repeated byte, so decoding gives
-//! it back exactly; only the case of the alphabet's own letters is lost when
-//! they are matched in either case.
+//! DNA and RNA are packed at two bits per position, four positions per byte,
+//! the first in the two most significant bits, with letters coded 0 to 3 in the
+//! order A, C, G, T or U. Other alphabets take a byte per position, holding the
+//! letter's index in the alphabet. Anything outside the alphabet, such as `N`,
+//! is coded as the first letter and recorded in runs of one repeated byte, so
+//! decoding gives it back exactly; only the case of the alphabet's own letters
+//! is lost when they are matched in either case.
 //!
-//! Sequences can be encoded whole or fed in pieces (a line of a FASTA file at
-//! a time, say) with [`EncodedSequences::record`], so they never need to be
+//! Sequences can be encoded whole or fed in pieces, such as a line of a FASTA
+//! file at a time, with [`EncodedSequences::record`], so they never need to be
 //! held as text.
 
 use rayon::prelude::*;
@@ -33,8 +32,8 @@ fn add_unknown(unknown: &mut Vec<UnknownRun>, i: usize, b: u8) {
     }
 }
 
-/// Overwrite the unknown positions of `out` (which holds positions
-/// `start..end`) with their original bytes.
+/// Overwrite the unknown positions of `out`, which holds positions
+/// `start..end`, with their original bytes.
 fn patch_unknown(unknown: &[UnknownRun], start: usize, end: usize, out: &mut [u8]) {
     let k = unknown.partition_point(|r| r.1 <= start);
     for &(a, b, letter) in &unknown[k..] {
@@ -84,8 +83,7 @@ pub struct PackedSeq {
 }
 
 impl PackedSeq {
-    /// Pack a sequence of the four letters `letters` (matched in either
-    /// case).
+    /// Pack a sequence of the four letters `letters`, matched in either case.
     pub fn new(seq: &[u8], letters: [u8; 4]) -> PackedSeq {
         let mut b = PackedSeqBuilder::with_capacity(letters, seq.len());
         b.push(seq);
@@ -105,7 +103,7 @@ impl PackedSeq {
         &self.unknown
     }
 
-    /// The letter code (0 to 3) at `i`; unknown letters read as 0.
+    /// The letter code at `i`, from 0 to 3; unknown letters read as 0.
     pub fn get(&self, i: usize) -> u8 {
         (self.bytes[i >> 2] >> (6 - 2 * (i & 3))) & 3
     }
@@ -148,8 +146,8 @@ pub struct PackedSeqBuilder {
 }
 
 impl PackedSeqBuilder {
-    /// A builder for sequences of the four letters `letters` (matched in
-    /// either case).
+    /// A builder for sequences of the four letters `letters`, matched in either
+    /// case.
     pub fn new(letters: [u8; 4]) -> PackedSeqBuilder {
         PackedSeqBuilder::with_capacity(letters, 0)
     }
@@ -234,7 +232,7 @@ pub struct CodedSeq {
 }
 
 impl CodedSeq {
-    /// Code a sequence over `letters` (at most 255). With
+    /// Code a sequence over `letters`, of which there can be at most 255. With
     /// `case_insensitive`, letters match in either case.
     pub fn new(seq: &[u8], letters: &[u8], case_insensitive: bool) -> CodedSeq {
         let mut b = CodedSeqBuilder::with_capacity(letters, case_insensitive, seq.len());
@@ -250,8 +248,8 @@ impl CodedSeq {
         self.len() == 0
     }
 
-    /// The letter code at `i` (unknown letters read as 0, as does the
-    /// position just past the end).
+    /// The letter code at `i`. Unknown letters read as 0, as does the position
+    /// just past the end.
     #[inline(always)]
     pub fn get(&self, i: usize) -> u8 {
         self.codes[i]
@@ -290,8 +288,8 @@ pub struct CodedSeqBuilder {
 }
 
 impl CodedSeqBuilder {
-    /// A builder for sequences over `letters` (at most 255). With
-    /// `case_insensitive`, letters match in either case.
+    /// A builder for sequences over `letters`, of which there can be at most
+    /// 255. With `case_insensitive`, letters match in either case.
     pub fn new(letters: &[u8], case_insensitive: bool) -> CodedSeqBuilder {
         CodedSeqBuilder::with_capacity(letters, case_insensitive, 0)
     }
@@ -353,8 +351,8 @@ pub struct EncodedSequences {
     seqs: Seqs,
 }
 
-/// One sequence being encoded, a piece at a time (see
-/// [`EncodedSequences::record`]).
+/// One sequence being encoded a piece at a time, started by
+/// [`EncodedSequences::record`].
 #[derive(Debug, Clone)]
 pub struct RecordEncoder(RecordKind);
 
@@ -429,8 +427,9 @@ impl EncodedSequences {
         })
     }
 
-    /// Encode `sequences` for `alphabet` (see [`EncodedSequences::empty`]),
-    /// using `nthreads` threads (0 for all).
+    /// Encode `sequences` for `alphabet` with `nthreads` threads, or all
+    /// available for 0. [`EncodedSequences::empty`] describes how letters are
+    /// matched.
     pub fn new<S: AsRef<str> + Sync>(
         sequences: &[S],
         alphabet: &Alphabet,
@@ -457,8 +456,8 @@ impl EncodedSequences {
         self.record_reusing(Vec::new())
     }
 
-    /// [`EncodedSequences::record`], storing the letters in `buf` (cleared
-    /// first) so its memory is used again.
+    /// Like [`EncodedSequences::record`], but storing the letters in `buf`
+    /// after clearing it, so its memory is used again.
     pub(crate) fn record_reusing(&self, mut buf: Vec<u8>) -> RecordEncoder {
         buf.clear();
         RecordEncoder(match &self.seqs {
@@ -493,8 +492,8 @@ impl EncodedSequences {
         }
     }
 
-    /// Add a sequence made with [`EncodedSequences::record`] (on this set or
-    /// one for the same alphabet).
+    /// Add a sequence made with [`EncodedSequences::record`] on this set or on
+    /// one for the same alphabet.
     pub fn push(&mut self, record: RecordEncoder) {
         match (&mut self.seqs, record.0) {
             (Seqs::Packed(v), RecordKind::Packed(b)) => v.push(b.finish()),
@@ -532,9 +531,9 @@ impl EncodedSequences {
         (0..self.len()).map(|i| self.seq_len(i)).sum()
     }
 
-    /// Append positions `start..end` (0-based, half-open) of sequence `i`
-    /// to `out`, with the alphabet's letters in upper case (custom
-    /// alphabets as they are) and other letters as they were.
+    /// Append the 0-based, half-open positions `start..end` of sequence `i` to
+    /// `out`. Letters of the alphabet are written in upper case unless it is
+    /// custom, and other letters as they were.
     pub fn decode_into(&self, i: usize, start: usize, end: usize, out: &mut Vec<u8>) {
         match &self.seqs {
             Seqs::Packed(v) => {
@@ -544,7 +543,7 @@ impl EncodedSequences {
         }
     }
 
-    /// Sequence `i` as text (see [`EncodedSequences::decode_into`]).
+    /// Sequence `i` as text, decoded as by [`EncodedSequences::decode_into`].
     pub fn decode(&self, i: usize) -> String {
         let mut out = Vec::with_capacity(self.seq_len(i));
         self.decode_into(i, 0, self.seq_len(i), &mut out);

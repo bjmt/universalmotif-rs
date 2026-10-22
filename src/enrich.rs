@@ -1,4 +1,4 @@
-//! Motif enrichment (`enrich_motifs_lite()`).
+//! Motif enrichment with [`enrich_motifs`].
 //!
 //! Target and background sequences are scanned for hits, and each motif's
 //! hits are compared between the two sets with a one-sided Fisher's exact
@@ -110,10 +110,10 @@ fn count_hits<S: AsRef<str> + Sync>(
     Ok(Counts { seqs: nseqs, sites })
 }
 
-/// Test motifs for enrichment in `sequences` relative to
-/// `background` (by default the targets shuffled with the Euler method,
-/// keeping `shuffle_k`-lets), as universalmotif's `enrich_motifs_lite()`.
-/// Returns one result per motif, in input order and unfiltered.
+/// Test motifs for enrichment in `sequences` relative to `background`, which by
+/// default is the targets shuffled with the Euler method keeping
+/// `shuffle_k`-lets. Returns one result per motif, in input order and
+/// unfiltered.
 pub fn enrich_motifs<S: AsRef<str> + Sync>(
     motifs: &[Motif],
     sequences: &[S],

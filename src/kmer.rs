@@ -1,4 +1,4 @@
-//! k-lets, k-let counts and background frequencies (`get_bkg()`).
+//! k-lets, k-let counts and background frequencies of sequences.
 
 use rayon::prelude::*;
 
@@ -6,8 +6,8 @@ use crate::error::{Result, arg_err};
 use crate::pvalue::with_threads;
 use crate::scan::reverse_complement_seq;
 
-/// All k-lets of `letters`, in lexicographic order of the letters given
-/// (the first position varies slowest).
+/// All k-lets of `letters`, in lexicographic order of the letters given, so the
+/// first position varies slowest.
 pub fn klets(letters: &[char], k: usize) -> Vec<String> {
     let mut out = vec![String::new()];
     for _ in 0..k {
@@ -44,8 +44,8 @@ pub fn sequence_letters<S: AsRef<str>>(seqs: &[S]) -> Vec<char> {
         .collect()
 }
 
-/// Counts of each k-let of `alphabet` (in [`klets`] order) in a sequence.
-/// k-lets containing letters outside the alphabet are not counted.
+/// Counts in a sequence of each k-let of `alphabet`, in [`klets`] order. k-lets
+/// containing letters outside the alphabet are not counted.
 pub fn count_klets(seq: &str, k: usize, alphabet: &[char]) -> Vec<u64> {
     let n = alphabet.len();
     let mut counts = vec![0u64; n.pow(k as u32)];
@@ -83,9 +83,9 @@ pub fn count_klets(seq: &str, k: usize, alphabet: &[char]) -> Vec<u64> {
     counts
 }
 
-/// The part of `s` from 1-based letter `start` to `stop`, inclusive.
-/// `bounds` holds the byte offset of every letter (and the end) for
-/// non-ASCII strings.
+/// The part of `s` from 1-based letter `start` to `stop`, inclusive. For
+/// non-ASCII strings, `bounds` holds the byte offset of every letter and of the
+/// end.
 fn letters<'a>(s: &'a str, bounds: Option<&[usize]>, start: usize, stop: usize) -> &'a str {
     match bounds {
         None => &s[start - 1..stop],
@@ -94,8 +94,8 @@ fn letters<'a>(s: &'a str, bounds: Option<&[usize]>, start: usize, stop: usize) 
 }
 
 /// 1-based start and stop coordinates of sliding windows over a sequence of
-/// length `len`, as universalmotif's `calc_windows()`. The last window may
-/// be shorter than `window`, unless `incomplete` is false. Returns no windows
+/// length `len`. The last window may be shorter than `window`, unless
+/// `incomplete` is false. Returns no windows
 /// if `window` exceeds `len` or `overlap` is not below `window`.
 pub fn windows(len: usize, window: usize, overlap: usize, incomplete: bool) -> Vec<(usize, usize)> {
     if window > len || overlap >= window || window == 0 {
@@ -119,8 +119,8 @@ pub fn windows(len: usize, window: usize, overlap: usize, incomplete: bool) -> V
         out.push((next_start, next_stop));
     }
     if !incomplete {
-        // The R package compares stop - start with the window size, so it
-        // also drops a last window that is complete.
+        // Only a last window shorter than `window` is dropped (see
+        // DIVERGENCES.md).
         let (start, stop) = *out.last().unwrap();
         if stop - start + 1 < window {
             out.pop();
@@ -148,7 +148,7 @@ pub struct BkgOptions {
     pub pseudocount: u64,
     /// Letters to count; by default the letters found in the sequences.
     pub alphabet: Option<Vec<char>>,
-    /// Also count the reverse complements (DNA and RNA only).
+    /// Also count the reverse complements, for DNA and RNA only.
     pub rc: bool,
     /// Combine all sequences into one set of counts.
     pub merge: bool,
@@ -172,8 +172,8 @@ impl Default for BkgOptions {
     }
 }
 
-/// One row of [`get_bkg`] output. `sequence`, `start` and `stop` are set
-/// only when relevant (per-sequence or windowed counts).
+/// One row of [`get_bkg`] output. `sequence`, `start` and `stop` are set only
+/// for per-sequence or windowed counts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BkgRow {
     pub sequence: Option<usize>,
@@ -198,13 +198,12 @@ fn probabilities(counts: &[u64]) -> Vec<f64> {
         .collect()
 }
 
-/// k-let counts and frequencies of sequences, as universalmotif's
-/// `get_bkg()`.
+/// k-let counts and frequencies of sequences.
 ///
-/// Rows come in the R package's order: by k, k-let and sequence for
-/// per-sequence counts; by k-let and window start for merged windows; and by
-/// sequence name, k-let and window start for per-sequence windows (pass
-/// `names` so sequences can be ordered by name, as R does).
+/// Rows are ordered by k, k-let and sequence for per-sequence counts; by k-let
+/// across all k and then window start for merged windows; and by sequence name,
+/// k-let and window start for per-sequence windows. Names and k-lets are
+/// compared bytewise, and `names` gives the sequence names to order by.
 pub fn get_bkg<S: AsRef<str> + Sync>(
     seqs: &[S],
     names: &[String],
@@ -418,7 +417,7 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
         }
     }
     if opts.merge {
-        // R orders merged windows by k-let only, across all k.
+        // Merged windows are ordered by k-let only, across all k.
         rows.sort_by(|a, b| a.klet.as_bytes().cmp(b.klet.as_bytes()));
     } else {
         rows.sort_by(|a, b| {

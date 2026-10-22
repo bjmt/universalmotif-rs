@@ -1,9 +1,8 @@
-//! Column similarity metrics and averages (universalmotif's
-//! `compare_columns()` and `average_ic()`).
+//! Column similarity metrics with [`compare_columns`], and averages with
+//! [`average`] and [`average_ic`].
 //!
-//! [`crate::compare`] uses Pearson correlation only, as `compare_motifs()`
-//! lite does; the other metrics are here for comparing single columns. The
-//! arithmetic follows `src/compare_motifs.cpp`.
+//! [`crate::compare`] uses Pearson correlation only; the other metrics are
+//! here for comparing single columns.
 
 use crate::convert::convert_type;
 use crate::error::{Result, arg_err};
@@ -18,7 +17,7 @@ pub enum ColumnMetric {
     Eucl,
     /// Sandelin-Wasserman similarity.
     Sw,
-    /// Kullback-Leibler divergence (symmetrised).
+    /// Symmetrised Kullback-Leibler divergence.
     Kl,
     /// Background-weighted Euclidean distance.
     Weucl,
@@ -74,10 +73,9 @@ fn total(v: impl Iterator<Item = f64>) -> f64 {
     v.fold(0.0, |a, b| a + b)
 }
 
-/// Compare two columns (probabilities over the same letters) with `metric`.
-/// The backgrounds are used by the weighted metrics and ALLR, which also
-/// uses the site counts. As in the R package, a column whose first value is
-/// negative scores 0.
+/// Compare two columns of probabilities over the same letters with `metric`.
+/// The backgrounds are used by the weighted metrics and ALLR, which also uses
+/// the site counts. A column whose first value is negative scores 0.
 pub fn compare_columns(
     x: &[f64],
     y: &[f64],
@@ -120,7 +118,8 @@ pub fn compare_columns(
             total(pairs().map(|(a, b)| (a.sqrt() - b.sqrt()) * (a.sqrt() - b.sqrt()))).sqrt()
                 / 2f64.sqrt()
         }
-        // The two terms are added one at a time, as the C++ does.
+        // Each pair's two terms are added to the running sum one after the
+        // other rather than summed first.
         ColumnMetric::Kl => {
             0.5 * pairs().fold(0.0, |s, (a, b)| s + a * (a / b).ln() + b * (b / a).ln())
         }
@@ -179,7 +178,8 @@ pub enum Average {
     /// Arithmetic mean.
     #[default]
     ArithmeticMean,
-    /// Geometric mean of the positive values (over all of them).
+    /// Geometric mean of the positive values, with the sum of their logarithms
+    /// divided by the number of all values.
     GeometricMean,
     Median,
     /// Fisher z-transform: the inverse hyperbolic tangent of the mean of
@@ -199,7 +199,8 @@ impl Average {
     }
 }
 
-/// Average `values` as universalmotif's `average_cpp()` does.
+/// Average `values` as chosen by `how`. The geometric mean is 0 when no value
+/// is positive or the logarithms of the positive ones sum to 0.
 pub fn average(values: &[f64], how: Average) -> f64 {
     let n = values.len() as f64;
     match how {
@@ -225,8 +226,7 @@ pub fn average(values: &[f64], how: Average) -> f64 {
     }
 }
 
-/// The average information content of each motif's positions, as
-/// universalmotif's `average_ic()`.
+/// The average information content of each motif's positions.
 pub fn average_ic(motifs: &[Motif], how: Average) -> Result<Vec<f64>> {
     motifs
         .iter()

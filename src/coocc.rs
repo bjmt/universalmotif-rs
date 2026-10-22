@@ -1,4 +1,4 @@
-//! Co-occurring motif pairs (`motif_coocc()`).
+//! Co-occurring motif pairs, tested by [`motif_coocc`].
 //!
 //! Every pair of motifs is tested for sharing sequences more often than
 //! expected, with a one-sided Fisher's exact test on the 2x2 table of
@@ -26,9 +26,9 @@ pub struct CooccHit {
 /// Options for [`motif_coocc`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct CooccOptions {
-    /// Report how many shared sequences have the two motifs' hits within
-    /// this distance of each other (comparing start positions), and the
-    /// median of the nearest distances.
+    /// Report how many shared sequences have the two motifs' hits within this
+    /// distance of each other, comparing start positions, and the median of the
+    /// nearest distances.
     pub max_distance: Option<u64>,
     /// Pairs sharing fewer sequences than this are not tested.
     pub min_coocc: u64,
@@ -68,8 +68,8 @@ pub struct CooccPair {
     pub pvalue: Option<f64>,
     /// Benjamini-Hochberg q-value across the tested pairs.
     pub qvalue: Option<f64>,
-    /// Shared sequences whose nearest pair of hits is within
-    /// `max_distance` (only with `max_distance`).
+    /// Shared sequences whose nearest pair of hits is within `max_distance`,
+    /// when that is given.
     pub both_clustered: Option<u64>,
     /// Median of those nearest distances.
     pub median_distance: Option<f64>,
@@ -111,8 +111,9 @@ impl MotifHits {
     }
 }
 
-/// The smallest distance between start positions of the two motifs' hits
-/// (or between two hits of one motif) in each sequence they share.
+/// The smallest distance between start positions of the two motifs' hits in
+/// each sequence they share. For a motif paired with itself, it is the distance
+/// between two of its hits.
 fn nearest_distances(a: &MotifHits, b: &MotifHits, same: bool) -> Vec<f64> {
     let mut out = Vec::new();
     if same {
@@ -151,8 +152,8 @@ fn nearest_distances(a: &MotifHits, b: &MotifHits, same: bool) -> Vec<f64> {
     out
 }
 
-/// Test motif pairs for co-occurrence across `n_sequences` sequences, as
-/// universalmotif's `motif_coocc()` with a precomputed hit table. Pairs come
+/// Test motif pairs for co-occurrence across `n_sequences` sequences, from
+/// a precomputed hit table. Pairs come
 /// sorted by q-value then P-value, with untested pairs last.
 pub fn motif_coocc(
     hits: &[CooccHit],

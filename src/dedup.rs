@@ -1,10 +1,9 @@
-//! Removing overlapping hits (`dedup_hits()`).
+//! Removing overlapping hits with [`dedup`].
 //!
-//! Hits are grouped by sequence, motif and strand (motif and strand can be
-//! ignored). Within a group, overlapping hits form clusters; in each cluster
-//! hits are taken in order of priority (ties go to the earlier hit) and kept
-//! unless they overlap a hit already kept. This follows universalmotif's
-//! `src/dedup_hits.cpp`.
+//! Hits are grouped by sequence, motif and strand, though motif and strand can
+//! be ignored. Within a group, overlapping hits form clusters; in each cluster
+//! hits are taken in order of priority, with ties going to the earlier hit, and
+//! kept unless they overlap a hit already kept.
 
 /// A hit as seen by [`dedup`]. Coordinates are inclusive, and a higher
 /// priority is better.

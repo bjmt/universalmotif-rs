@@ -1,8 +1,8 @@
-//! Composition-matched background sequences (`match_bkg()`).
+//! Composition-matched background sequences, drawn by [`match_bkg`].
 //!
 //! HOMER-style matching: the universe of candidate sequences is binned by GC
-//! fraction (equal-width bins over [0, 1]), length (quantile bins) and any
-//! extra covariates, and each target draws background sequences from its
+//! fraction into equal-width bins over [0, 1], by length into quantile bins and
+//! by any extra covariates, and each target draws background sequences from its
 //! own bin, widening the search ring by ring when the bin runs short.
 
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use crate::error::{Result, arg_err};
 use crate::ranges::{GRange, overlaps_any, reduce};
 use crate::shuffle::rng_for;
 
-/// Fraction of G and C (either case) in a sequence.
+/// Fraction of G and C in a sequence, counting either case.
 pub fn gc_fraction(seq: &str) -> f64 {
     let gc = seq
         .bytes()
@@ -54,7 +54,7 @@ pub struct Covariate {
     pub bin_type: BinType,
 }
 
-/// Per-target and per-universe bins (0-based) on one axis.
+/// Per-target and per-universe 0-based bins on one axis.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Axis {
     pub bin_targets: Vec<usize>,
@@ -62,7 +62,8 @@ pub struct Axis {
     pub n_bins: usize,
 }
 
-/// R's `seq(from, to, length.out = n)`.
+/// `n` evenly spaced values from `from` to `to`, the last one set to `to`
+/// exactly.
 fn r_seq(from: f64, to: f64, n: usize) -> Vec<f64> {
     if n == 1 {
         return vec![from];
@@ -78,7 +79,9 @@ fn r_seq(from: f64, to: f64, n: usize) -> Vec<f64> {
     v
 }
 
-/// R's `quantile(x, probs, type = 7)`.
+/// Sample quantiles of `x` at `probs`, interpolating linearly between the
+/// sorted values so that the quantile at `p` sits at position `1 + (n - 1) p`,
+/// which is Hyndman and Fan's type 7.
 fn quantile7(x: &[f64], probs: &[f64]) -> Vec<f64> {
     let mut v = x.to_vec();
     v.sort_by(f64::total_cmp);
@@ -100,8 +103,10 @@ fn quantile7(x: &[f64], probs: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-/// R's `findInterval(x, breaks, rightmost.closed = TRUE)`, clamped to a
-/// valid bin and made 0-based.
+/// The 0-based bin of `x` among the increasing `breaks`: bin `k` runs from
+/// `breaks[k]` up to but not including `breaks[k + 1]`, except that the last
+/// bin also holds its upper break. Values outside the breaks go to the first
+/// or last bin.
 fn bin_of(x: f64, breaks: &[f64]) -> usize {
     let nb = breaks.len() - 1;
     let mut k = breaks.partition_point(|&b| b <= x);
@@ -111,10 +116,9 @@ fn bin_of(x: f64, breaks: &[f64]) -> usize {
     k.clamp(1, nb) - 1
 }
 
-/// Bin targets and universe on one axis, as universalmotif's
-/// `make_match_axis()`. Equal-width breaks span `range` (by default all the
-/// values); quantile breaks come from the universe. A constant axis
-/// collapses to one bin.
+/// Bin targets and universe on one axis. Equal-width breaks span `range`, which
+/// defaults to all the values, while quantile breaks come from the universe. A
+/// constant axis collapses to one bin.
 pub fn match_axis(
     targets: &[f64],
     universe: &[f64],
@@ -164,8 +168,8 @@ pub struct MatchOptions {
     pub n_per_target: usize,
     pub n_bins_gc: usize,
     pub n_bins_length: usize,
-    /// Draw each universe sequence at most once (falling back to drawing
-    /// with replacement from nearby bins when they run out).
+    /// Draw each universe sequence at most once, falling back to drawing with
+    /// replacement from nearby bins when they run out.
     pub unique: bool,
     pub seed: u64,
 }
@@ -194,7 +198,7 @@ pub struct Matched {
     pub gc_universe: Vec<f64>,
 }
 
-/// Offsets with absolute values summing to `ring` (a Manhattan ring).
+/// Offsets with absolute values summing to `ring`, forming a Manhattan ring.
 fn ring_offsets(ring: i64, n_axes: usize) -> Vec<Vec<i64>> {
     fn rec(axis: usize, n: usize, remaining: i64, acc: &mut Vec<i64>, out: &mut Vec<Vec<i64>>) {
         if axis + 1 == n {
@@ -245,8 +249,8 @@ fn locate(cells: &[usize], pools: &[Vec<usize>], mut pos: usize) -> (usize, usiz
 }
 
 /// Draw `opts.n_per_target` universe sequences for each target with the
-/// same GC fraction, length and covariate bins, as universalmotif's
-/// `match_bkg()`. When a target's bin runs short, up to `max(2, axes)`
+/// same GC fraction, length and covariate bins. When a target's bin runs
+/// short, up to `max(2, axes)`
 /// rings of neighbouring bins are searched; after that the rest are drawn
 /// with replacement from the bins already searched.
 pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
@@ -399,7 +403,7 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
 }
 
 /// Random genomic windows with widths drawn from `target_widths`, for a
-/// background universe (universalmotif's `match_bkg(genome = ...)`).
+/// background universe for [`match_bkg`].
 /// Chromosomes are chosen in proportion to their lengths; windows that do
 /// not fit are dropped, as are windows overlapping `exclude`. Returns the
 /// first `n_candidates` windows.

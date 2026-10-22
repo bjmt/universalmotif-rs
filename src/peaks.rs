@@ -1,11 +1,11 @@
-//! Positional enrichment of motif hits (`motif_peaks()`).
+//! Positional enrichment of motif hits, tested by [`motif_peaks`].
 //!
-//! A CentriMo-style test (Bailey and Machanick 2012): if hit centres were
-//! spread uniformly along sequences of equal length, the number falling in
+//! This is a CentriMo-style test (Bailey and Machanick 2012). If hit centres
+//! were spread uniformly along sequences of equal length, the number falling in
 //! a window would be binomial. Each motif's best hit per sequence is kept,
-//! windows of several widths are tested (centred on the middle of the
-//! sequences, or anywhere along them), and the best window's binomial
-//! P-value is Bonferroni-corrected for the number of windows tried.
+//! windows of several widths are tested, centred on the middle of the sequences
+//! or anywhere along them, and the best window's binomial P-value is
+//! Bonferroni-corrected for the number of windows tried.
 
 use rayon::prelude::*;
 
@@ -61,7 +61,7 @@ impl Default for PeaksOptions {
 /// A motif hit for [`motif_peaks`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PeakHit {
-    /// Motif (any identifier; results come in increasing order of it).
+    /// Motif identifier, of any value; results come in increasing order of it.
     pub motif: usize,
     pub sequence: usize,
     /// Centre of the hit, `(start + end) / 2` in 1-based coordinates.
@@ -73,7 +73,7 @@ pub struct PeakHit {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MotifPeak {
     pub motif: usize,
-    /// Sequences with a hit (only the best hit per sequence is used).
+    /// Sequences with a hit; only the best hit per sequence is used.
     pub nhits: usize,
     /// Width and centre of the best window; `None` if no window had a
     /// P-value below 1.
@@ -89,7 +89,7 @@ pub struct MotifPeak {
     pub pvalue: f64,
     /// Benjamini-Hochberg q-value across motifs.
     pub qvalue: f64,
-    /// Centres of the hits used, rounded (half to even), in input order.
+    /// Centres of the hits used, rounded half to even, in input order.
     pub centers: Vec<i64>,
 }
 
@@ -151,8 +151,7 @@ fn test_motif(
 }
 
 /// Test whether each motif's hits cluster along sequences of length
-/// `seq_length`, as universalmotif's `motif_peaks()`. Returns one result
-/// per motif with hits, in increasing order of motif, unfiltered.
+/// `seq_length`. Returns one result per motif with hits, in increasing order of motif, unfiltered.
 pub fn motif_peaks(
     hits: &[PeakHit],
     seq_length: usize,

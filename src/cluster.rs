@@ -1,12 +1,13 @@
 //! Hierarchical clustering.
 //!
-//! [`hclust`] is a port of R's `hclust()` (F. Murtagh's `HCLUST` and
-//! `HCASS2` Fortran routines in R's `stats` package), so merges, heights and
-//! leaf order match R exactly, ties included.
+//! [`hclust`] follows F. Murtagh's `HCLUST` and `HCASS2` routines, which merge
+//! nearest neighbours and update distances with the Lance-Williams formula.
+//! Ties between equal distances go to the lowest index, so merges, heights and
+//! leaf order are fully determined by the input.
 
 use crate::error::{Result, arg_err};
 
-/// Agglomeration method, named as in R's `hclust()`.
+/// Agglomeration method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Method {
     WardD,
@@ -54,20 +55,20 @@ impl Method {
     }
 }
 
-/// A clustering tree in R's `hclust` form.
+/// A clustering tree: its merges, their heights and the leaf order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tree {
-    /// Merge steps, as in R: a negative value `-i` is leaf `i` (1-based),
-    /// a positive value `j` is the cluster formed at step `j`.
+    /// Merge steps: a negative value `-i` is the 1-based leaf `i`, and a
+    /// positive value `j` is the cluster formed at step `j`.
     pub merge: Vec<[i64; 2]>,
     /// Height of each merge.
     pub height: Vec<f64>,
-    /// Leaves (0-based) in dendrogram order.
+    /// The 0-based leaves in dendrogram order.
     pub order: Vec<usize>,
 }
 
-/// Cluster `n` objects from a distance matrix. Only the lower triangle
-/// (`dist[i][j]` with `i > j`) is used, as R's `as.dist()` does.
+/// Cluster `n` objects from a distance matrix. Only the lower triangle is used,
+/// that is `dist[i][j]` with `i > j`.
 pub fn hclust(dist: &[Vec<f64>], method: Method) -> Result<Tree> {
     let n = dist.len();
     if n < 2 {
@@ -76,7 +77,8 @@ pub fn hclust(dist: &[Vec<f64>], method: Method) -> Result<Tree> {
     if dist.iter().any(|r| r.len() != n) {
         return arg_err("the distance matrix must be square");
     }
-    // R's dist vector: lower triangle, column by column, 1-based.
+    // The lower triangle packed column by column, 1-based (index 0 is
+    // unused).
     let mut diss = vec![0.0f64];
     for j in 0..n {
         for row in dist.iter().skip(j + 1) {
@@ -227,7 +229,7 @@ fn hclust_fortran(n: usize, diss: &mut [f64], iopt: u8) -> (Vec<usize>, Vec<usiz
     (ia, ib, crit)
 }
 
-// The loop bound changes only right before `break`, as in the Fortran.
+// The loop bound changes only right before `break`.
 #[allow(clippy::needless_range_loop, clippy::mut_range_bound)]
 fn hcass2(n: usize, ia: &[usize], ib: &[usize]) -> (Vec<[i64; 2]>, Vec<usize>) {
     let mut iia: Vec<i64> = ia.iter().map(|&x| x as i64).collect();
@@ -284,7 +286,7 @@ fn hcass2(n: usize, ia: &[usize], ib: &[usize]) -> (Vec<[i64; 2]>, Vec<usize>) {
     (merge, order)
 }
 
-/// C's `%.10g`, as used by ape's `write.tree()`.
+/// Format a number as C's `%.10g` does, for Newick branch lengths.
 fn format_g10(x: f64) -> String {
     if x == 0.0 {
         return "0".into();
@@ -312,7 +314,9 @@ fn format_g10(x: f64) -> String {
     }
 }
 
-/// Clean a tip label the way ape's `checkLabel()` does.
+/// Clean a tip label for Newick: leading whitespace and `(` and trailing
+/// whitespace and `)` are removed, other whitespace becomes `_`, and `,`,
+/// `:`, `;`, `(` and `)` become `-`.
 fn newick_label(s: &str) -> String {
     let s = s.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '(');
     let s = s.trim_end_matches(|c: char| c.is_ascii_whitespace() || c == ')');
@@ -326,8 +330,8 @@ fn newick_label(s: &str) -> String {
 }
 
 impl Tree {
-    /// The tree in Newick format, as `ape::write.tree(ape::as.phylo(tree))`
-    /// writes it: branch lengths are half the height differences, so leaves
+    /// The tree in Newick format. Branch lengths are half the height
+    /// differences, so leaves
     /// sit at half the merge height from each other.
     pub fn newick(&self, labels: &[String]) -> String {
         let mut strs: Vec<String> = Vec::with_capacity(self.merge.len());
@@ -353,7 +357,7 @@ impl Tree {
 
     /// The tree as a SciPy linkage matrix: one row per merge of
     /// `[a, b, height, size]`, where leaves are `0..n` and the cluster from
-    /// merge `i` (0-based) is `n + i`.
+    /// 0-based merge `i` is `n + i`.
     pub fn linkage(&self) -> Vec<[f64; 4]> {
         let n = self.merge.len() + 1;
         let mut sizes: Vec<f64> = Vec::with_capacity(self.merge.len());
@@ -374,8 +378,7 @@ impl Tree {
         out
     }
 
-    /// Cut the tree into `k` groups, as R's `cutree(tree, k)`. Groups are
-    /// numbered from 0 in the order their first leaf appears in the input.
+    /// Cut the tree into `k` groups. Groups are numbered from 0 in the order their first leaf appears in the input.
     pub fn cutree(&self, k: usize) -> Result<Vec<usize>> {
         let n = self.merge.len() + 1;
         if k < 1 || k > n {
@@ -414,8 +417,7 @@ impl Tree {
             .collect())
     }
 
-    /// Cut the tree at height `h`, as R's `cutree(tree, h = h)`: merges at
-    /// heights up to `h` are kept. The heights must be increasing, which is
+    /// Cut the tree at height `h`: merges at heights up to `h` are kept. The heights must be increasing, which is
     /// not guaranteed for the centroid and median methods.
     pub fn cutree_height(&self, h: f64) -> Result<Vec<usize>> {
         if self.height.windows(2).any(|w| w[1] < w[0]) {
@@ -469,8 +471,7 @@ impl Default for TreeOptions {
     }
 }
 
-/// Cluster motifs into a tree, as `motif_tree_lite()` does:
-/// motifs are compared with [`crate::compare::compare_matrix`], mean column
+/// Cluster motifs into a tree: motifs are compared with [`crate::compare::compare_matrix`], mean column
 /// correlations become distances as `(1 - score) / 2`, and the distances are
 /// clustered with [`hclust`].
 ///

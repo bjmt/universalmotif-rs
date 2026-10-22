@@ -7,9 +7,10 @@
 //!
 //! Each run does one task and prints the setup and task times; measure peak
 //! memory with `/usr/bin/time` around it. Motifs come from the MEME file in
-//! `UM_BENCH_MOTIFS` (the HOCOMOCO v11 human set is a good choice), or are 400
-//! random motifs of widths 8 to 25. With `UM_BENCH_ALPHABET=AA`, the random
-//! motifs and sequences are proteins instead.
+//! `UM_BENCH_MOTIFS`, for which the HOCOMOCO v11 human set is a good choice, or
+//! are otherwise 400 random motifs of widths 8 to 25. With
+//! `UM_BENCH_ALPHABET=AA`, the random motifs and sequences are proteins
+//! instead.
 
 use std::time::Instant;
 
@@ -137,7 +138,7 @@ fn main() {
         "scan_gapped" | "scan_gapped_expanded" => {
             // 20 motifs with a gap of 0 to 5 in the middle (six
             // combinations each), scanned with their gaps or as the 120
-            // ungapped motifs the R package would expand them into.
+            // ungapped motifs they expand into.
             let t = Instant::now();
             let s = seqs(10, 1_000_000);
             let gapped: Vec<Motif> = motifs[..20]

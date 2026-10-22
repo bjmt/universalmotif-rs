@@ -2,8 +2,6 @@
 //!
 //! Each format has its own module with `read` and `write` functions that work
 //! on text, so callers decide how files are opened, skipped or appended to.
-//! The readers follow universalmotif's `read_*()` functions and the writers
-//! produce the same text as its `write_*()` functions.
 
 pub mod cisbp;
 pub mod fasta;
@@ -16,15 +14,14 @@ pub mod uniprobe;
 
 use crate::error::{Error, Result};
 
-/// Lines with any content, as universalmotif reads files after dropping
-/// empty lines. Lines holding only whitespace count as empty.
+/// The lines with any content; lines holding only whitespace count as
+/// empty.
 pub(crate) fn content_lines(text: &str) -> Vec<&str> {
     text.lines().filter(|l| !l.trim().is_empty()).collect()
 }
 
-/// Parse a number the way R's `as.numeric()` does for the values found in
-/// motif files: surrounding whitespace is ignored, `Inf` and `-Inf` are
-/// accepted, and `NA` (or anything unparsable) gives `None`.
+/// Parse a number as found in motif files: surrounding whitespace is ignored,
+/// `Inf` and `-Inf` are accepted, and `NA` or anything unparsable gives `None`.
 pub(crate) fn parse_num(s: &str) -> Option<f64> {
     let s = s.trim();
     if s == "NA" {
@@ -41,8 +38,7 @@ pub(crate) fn fmt_err<T>(msg: impl Into<String>) -> Result<T> {
     Err(Error::Argument(msg.into()))
 }
 
-/// Format a number like R's `as.character()` (and therefore `paste()`):
-/// at most 15 significant digits, with scientific notation used when it is
+/// Format a number with at most 15 significant digits, with scientific notation used when it is
 /// shorter than fixed notation.
 pub fn format_r_number(x: f64) -> String {
     let target = format!("{x:.14e}").parse().unwrap_or(x);
@@ -50,14 +46,15 @@ pub fn format_r_number(x: f64) -> String {
 }
 
 /// Format a number with the fewest digits that read back as exactly the
-/// same value, choosing fixed or scientific notation the way R does.
+/// same value, in scientific notation only when it is shorter than fixed
+/// notation.
 pub fn format_shortest(x: f64) -> String {
     format_significant(x, 17, x)
 }
 
-/// Use the fewest significant digits (at most `max_digits`) that give
-/// `target` when parsed, then pick fixed or scientific notation like R's
-/// `formatReal()`.
+/// Use the fewest significant digits, at most `max_digits`, that give `target`
+/// when parsed, in scientific notation only when it is shorter than fixed
+/// notation.
 fn format_significant(x: f64, max_digits: usize, target: f64) -> String {
     if x.is_nan() {
         return "NaN".into();
@@ -106,7 +103,8 @@ fn format_significant(x: f64, max_digits: usize, target: f64) -> String {
     }
 }
 
-/// `formatC(x, format = "f", digits = d)`.
+/// Fixed notation with `digits` decimals, writing non-finite values as
+/// `NaN`, `Inf` and `-Inf`.
 pub(crate) fn format_fixed(x: f64, digits: usize) -> String {
     if x.is_nan() {
         "NaN".into()
@@ -117,8 +115,7 @@ pub(crate) fn format_fixed(x: f64, digits: usize) -> String {
     }
 }
 
-/// Join lines the way R's `writeLines()` writes them: each one followed by a
-/// newline.
+/// Join lines, each one followed by a newline.
 pub(crate) fn join_lines(lines: &[String]) -> String {
     let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
     for l in lines {

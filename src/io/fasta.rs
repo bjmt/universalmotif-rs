@@ -22,8 +22,8 @@ pub fn read(text: &str) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
-/// Read FASTA records from a reader line by line (see [`read`]), so the
-/// file's text is never held in memory as a whole. The first `skip` lines
+/// Read FASTA records from a reader line by line, as [`read`] does for text, so
+/// the file's text is never held in memory as a whole. The first `skip` lines
 /// are ignored.
 pub fn read_reader<R: BufRead>(reader: R, skip: usize) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
@@ -31,15 +31,14 @@ pub fn read_reader<R: BufRead>(reader: R, skip: usize) -> Result<Vec<(String, St
     Ok(out)
 }
 
-/// Read a FASTA file (see [`read_reader`]), which may be gzipped.
+/// Read a FASTA file, which may be gzipped, with [`read_reader`].
 pub fn read_path(path: impl AsRef<Path>, skip: usize) -> Result<Vec<(String, String)>> {
     read_reader(open(path)?, skip)
 }
 
-/// Read a FASTA file (which may be gzipped) straight into
-/// [`EncodedSequences`] for `alphabet` (see [`read_reader`]), without ever
-/// holding the sequences as text.
-/// Returns the names and the sequences.
+/// Read a FASTA file, which may be gzipped, straight into [`EncodedSequences`]
+/// for `alphabet` without ever holding the sequences as text. Returns the names
+/// and the sequences.
 pub fn read_encoded(
     path: impl AsRef<Path>,
     alphabet: &Alphabet,
@@ -54,10 +53,10 @@ pub fn read_encoded(
     Ok(out)
 }
 
-/// Read FASTA records from a reader into [`EncodedSequences`] for
-/// `alphabet`, handing them to `f` in batches of whole records holding at
-/// least `batch_size` letters (the last batch may hold fewer). Only the
-/// batch being filled is held in memory.
+/// Read FASTA records from a reader into [`EncodedSequences`] for `alphabet`,
+/// handing them to `f` in batches of whole records holding at least
+/// `batch_size` letters, though the last batch may hold fewer. Only the batch
+/// being filled is held in memory.
 pub fn read_encoded_batches<R: BufRead>(
     reader: R,
     alphabet: &Alphabet,
@@ -112,9 +111,8 @@ pub(crate) fn read_encoded_batches_reusing<R: BufRead>(
     Ok(())
 }
 
-/// Open a FASTA file for reading, decompressing it if it is gzipped
-/// (bgzip included), which is recognised from its first bytes rather than
-/// its name.
+/// Open a FASTA file for reading, decompressing it if it is gzipped or
+/// bgzipped, which is recognised from its first bytes rather than its name.
 pub(crate) fn open(path: impl AsRef<Path>) -> Result<Box<dyn BufRead + Send>> {
     let path = path.as_ref();
     let file = File::open(path)
@@ -150,8 +148,8 @@ fn collect(out: &mut Vec<(String, String)>, line: Line<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Feed the lines of FASTA text from `reader` (after the first `skip`) to
-/// `f` as headers and pieces of sequence.
+/// Feed the lines of FASTA text from `reader` to `f` as headers and pieces of
+/// sequence, after skipping the first `skip`.
 fn for_each_line<R: BufRead>(
     mut reader: R,
     skip: usize,
@@ -201,8 +199,8 @@ fn parse_line(line: &str, f: &mut impl FnMut(Line<'_>) -> Result<()>) -> Result<
     }
 }
 
-/// Write FASTA records, wrapping sequences at `width` characters (no
-/// wrapping if `width` is 0).
+/// Write FASTA records, wrapping sequences at `width` characters, or not at all
+/// if `width` is 0.
 pub fn write<S: AsRef<str>, T: AsRef<str>>(records: &[(S, T)], width: usize) -> String {
     let mut out = String::new();
     for (name, seq) in records {

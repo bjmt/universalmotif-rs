@@ -1,4 +1,4 @@
-//! Merging motifs (`merge_motifs_lite()` and `merge_similar_lite()`).
+//! Merging motifs with [`merge_motifs`] and [`merge_similar`].
 
 use crate::alphabet::Alphabet;
 use crate::compare::{CompareOptions, NullModel, align, compare_matrix};
@@ -50,11 +50,11 @@ fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
 /// Merge motifs into one.
 ///
 /// The motif with the highest total IC is the anchor. Every other motif is
-/// aligned to it (see [`crate::compare::align`]), reverse complemented if
-/// that fits better (DNA and RNA only), and the aligned probabilities are
-/// averaged position by position. Positions covered by no motif are uniform. The result is a PPM
-/// whose `nsites` is the sum of the motifs' (1 for motifs without one), with
-/// the average background and the anchor's pseudocount.
+/// aligned to it with [`crate::compare::align`] and, for DNA and RNA, reverse
+/// complemented if that fits better, and the aligned probabilities are averaged
+/// position by position. Positions covered by no motif are uniform. The result
+/// is a PPM whose `nsites` is the sum of the motifs', counting 1 for motifs
+/// without one, with the average background and the anchor's pseudocount.
 ///
 /// # Example
 ///
@@ -177,13 +177,14 @@ pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
 /// Options for [`merge_similar`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeSimilarOptions {
-    /// Motifs are linked when their comparison q-value (in either direction)
-    /// is at most this.
+    /// Motifs are linked when their comparison q-value in either direction is
+    /// at most this.
     pub qvalue: f64,
     pub null: NullModel,
     pub min_overlap: usize,
     pub rc: bool,
-    /// Background (A, C, G, T) for the parametric null (DNA and RNA only).
+    /// Background for the parametric null in A, C, G, T order, used for DNA and
+    /// RNA only.
     pub bkg: [f64; 4],
     pub weighted: bool,
     pub nthreads: usize,
@@ -205,11 +206,11 @@ impl Default for MergeSimilarOptions {
 
 /// Cluster similar motifs and merge each cluster.
 ///
-/// Motifs are linked when their comparison q-value is within
-/// `opts.qvalue` in either direction, and clusters are the connected groups.
-/// Returns the cluster of each input motif (numbered by first appearance)
-/// and one motif per cluster: single motifs as they were, larger clusters
-/// merged with [`merge_motifs`].
+/// Motifs are linked when their comparison q-value is within `opts.qvalue` in
+/// either direction, and clusters are the connected groups. Returns the cluster
+/// of each input motif, numbered by first appearance, and one motif per
+/// cluster: single motifs as they were, larger clusters merged with
+/// [`merge_motifs`].
 #[allow(clippy::needless_range_loop)]
 pub fn merge_similar(
     motifs: &[Motif],

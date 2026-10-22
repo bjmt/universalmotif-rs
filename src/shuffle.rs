@@ -1,10 +1,6 @@
-//! Shuffling sequences and motifs, and generating random sequences
-//! (`shuffle_sequences()`, `create_sequences()`, `shuffle_motifs()`).
-//!
-//! The algorithms follow universalmotif's `src/shuffle_sequences.cpp`, but
-//! random numbers come from this crate's own seeded generator, so results
-//! differ from the R package's (whose own results already differ between
-//! platforms).
+//! Shuffling sequences and motifs with [`shuffle_sequences`] and
+//! [`shuffle_motifs`], and generating random sequences with
+//! [`create_sequences`].
 
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
@@ -53,7 +49,7 @@ pub(crate) fn shuffle_in_place<T>(rng: &mut StdRng, v: &mut [T]) {
 /// How sequences are shuffled when `k > 1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShuffleMethod {
-    /// Keep the exact k-let counts (Altschul and Erickson's Eulerian walk).
+    /// Keep the exact k-let counts with Altschul and Erickson's Eulerian walk.
     #[default]
     Euler,
     /// Generate a new sequence from the sequence's own Markov model of order
@@ -187,7 +183,7 @@ fn shuffle_euler<T: Copy + Ord>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T>
         .fold(0, |acc, &i| acc * n + i as usize);
 
     // A random spanning tree of last exits, pointing towards the last vertex
-    // (Wilson's algorithm, as in the R package).
+    // (Wilson's algorithm).
     let empty: Vec<bool> = edges.iter().map(|e| e.iter().all(|&c| c == 0)).collect();
     let mut in_tree: Vec<bool> = empty.clone();
     in_tree[last] = true;
@@ -255,8 +251,8 @@ fn shuffle_one<T: Copy + Ord>(
     }
 }
 
-/// Shuffle sequences while preserving their k-let composition (exactly with
-/// the Euler and linear methods, on average with the Markov method). Each
+/// Shuffle sequences while preserving their k-let composition, exactly with the
+/// Euler and linear methods and on average with the Markov method. Each
 /// sequence is shuffled with its own alphabet.
 ///
 /// # Example
@@ -357,8 +353,8 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
 
 /// Random sequences of `alphabet` letters.
 ///
-/// `freqs` gives the probabilities of every k-let of the alphabet (in
-/// [`crate::kmer::klets`] order); its length decides k. Sequences are drawn
+/// `freqs` gives the probabilities of every k-let of the alphabet in
+/// [`crate::kmer::klets`] order, and its length decides k. Sequences are drawn
 /// from the Markov model of order `k - 1` they define. By default letters are
 /// uniform.
 pub fn create_sequences(
@@ -417,8 +413,7 @@ pub fn create_sequences(
     })
 }
 
-/// R's `shuffle_linear(mode = 2)`: shuffle blocks of `k` items, keeping any
-/// leftover items at the two ends.
+/// Shuffle blocks of `k` items, keeping any leftover items at the two ends.
 fn shuffle_blocks_keep_ends(n: usize, k: usize, rng: &mut StdRng) -> Vec<usize> {
     let idx: Vec<usize> = (0..n).collect();
     let rem = n % k;
@@ -441,9 +436,9 @@ fn shuffle_blocks_keep_ends(n: usize, k: usize, rng: &mut StdRng) -> Vec<usize> 
     out
 }
 
-/// Shuffle the columns of motifs among themselves (in blocks of `k`
-/// columns), producing new motifs of the same widths and types with
-/// `" [shuffled]"` added to their names.
+/// Shuffle the columns of motifs among themselves in blocks of `k` columns,
+/// producing new motifs of the same widths and types with `" [shuffled]"` added
+/// to their names.
 pub fn shuffle_motifs(motifs: &[Motif], k: usize, seed: u64) -> Result<Vec<Motif>> {
     let Some(first) = motifs.first() else {
         return arg_err("no motifs given");

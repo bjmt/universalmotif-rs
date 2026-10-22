@@ -4,13 +4,11 @@
 //! by 1000 and truncated toward zero, and a site's score is the sum of the
 //! entries along it. [`ScoreDistribution`] holds the exact distribution of
 //! that score for random sequences drawn from a background, computed by
-//! dynamic programming as in MEME's `get_pdf_table()`. This follows the
-//! `motif_*_dynamic` functions in universalmotif's `src/motif_pvalue.cpp`.
+//! dynamic programming over the motif's positions.
 
 use crate::matrix::{Matrix, sum};
 
-/// A PWM value on the integer score grid (`x * 1000`, truncated toward
-/// zero).
+/// A PWM value on the integer score grid: `x * 1000`, truncated toward zero.
 pub fn grid_value(x: f64) -> i32 {
     (x * 1000.0) as i32
 }
@@ -45,8 +43,8 @@ pub struct ScoreDistribution {
 }
 
 impl ScoreDistribution {
-    /// Build the distribution for a PWM and background frequencies (one per
-    /// row). The PWM must be finite.
+    /// Build the distribution for a PWM and background frequencies, one per
+    /// row. The PWM must be finite.
     pub fn new(pwm: &Matrix, bkg: &[f64]) -> ScoreDistribution {
         let width = pwm.ncol();
         let ints: Vec<Vec<i32>> = pwm
@@ -70,7 +68,7 @@ impl ScoreDistribution {
             .collect();
         let max_score = shifted.iter().flatten().copied().max().unwrap_or(0);
 
-        // Dynamic programming over positions, as in MEME's get_pdf_table().
+        // Dynamic programming over positions.
         // Only the reachable scores [lo, hi] are visited; the rest are zero.
         let len = width * max_score + 1;
         let mut pdf_new = vec![1.0; len];
@@ -158,8 +156,8 @@ impl ScoreDistribution {
     }
 }
 
-/// The upper tail of a [`ScoreDistribution`] (see
-/// [`ScoreDistribution::tail`]).
+/// The upper tail of a [`ScoreDistribution`], as returned by
+/// [`ScoreDistribution::tail`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoreTail {
     cdf: Vec<f64>,
