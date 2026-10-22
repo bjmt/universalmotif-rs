@@ -1338,3 +1338,228 @@ write_ref(list(
   custom_scan = list(list(threshold = 1e-2, table = alph_scan(cu_motifs, cu_seqs, 1e-2))),
   custom_compare = list(list(min_overlap = 3L, sums = alph_compare(cu_motifs, 3L)))),
   "alphabets.json")
+
+# ---------------------------------------------------------------------------
+# Utilities: scoring helpers, column comparison, gaps, alphabets, filtering,
+# masking and small helpers
+
+set.seed(37)
+data(examplemotif)
+ut_zero <- examplemotif
+ut_zero["pseudocount"] <- 0
+ut_motifs <- list(
+  example = examplemotif,
+  zero = ut_zero,
+  random = create_motif(6, nsites = 30, pseudocount = 1, name = "random"),
+  rna = create_motif("ACGUUA", alphabet = "RNA", nsites = 12, pseudocount = 1, name = "rna"),
+  aa = create_motif(c("MKV", "MRV", "MKL"), alphabet = "AA", pseudocount = 1, name = "aa"),
+  bkg = {
+    m <- create_motif("TTGACWC", nsites = 20, pseudocount = 1, name = "bkg")
+    m["bkg"] <- c(A = 0.3, C = 0.2, G = 0.2, T = 0.3)
+    m
+  }
+)
+letters_of <- function(m) rownames(m@motif)
+random_words <- function(m, n) {
+  vapply(seq_len(n), function(i) paste(sample(letters_of(m), ncol(m@motif), TRUE),
+                                        collapse = ""), character(1))
+}
+num_or_error <- function(expr) {
+  r <- attempt(expr)
+  if (r$ok) list(value = vec(r$value)) else list(error = r$error)
+}
+
+scoring <- list()
+add_scoring <- function(fn, motif, args, out) {
+  scoring[[length(scoring) + 1]] <<- c(list(fn = fn, motif = motif, args = args), out)
+}
+for (nm in names(ut_motifs)) {
+  m <- ut_motifs[[nm]]
+  nonfinite <- if (nm == "zero") c(FALSE, TRUE) else FALSE
+  for (af in nonfinite) {
+    if (!af) add_scoring("motif_range", nm, list(allow_nonfinite = af),
+                         num_or_error(motif_range(m, allow.nonfinite = af)))
+    for (tt in c("total", "fromzero"))
+      add_scoring("motif_score", nm,
+                  list(threshold = vec(c(0, 0.25, 0.5, 0.9, 1)), threshold_type = tt,
+                       allow_nonfinite = af),
+                  num_or_error(motif_score(m, c(0, 0.25, 0.5, 0.9, 1), allow.nonfinite = af,
+                                           threshold.type = tt)))
+    words <- c(random_words(m, 8), if (nm == "example") c("TATATAT", "TATATAG"))
+    add_scoring("score_match", nm, list(matches = I(words), allow_nonfinite = af),
+                num_or_error(score_match(m, words, allow.nonfinite = af)))
+    add_scoring("get_scores", nm, list(allow_nonfinite = af),
+                num_or_error(get_scores(m, allow.nonfinite = af)))
+    all <- suppressMessages(get_scores(m, allow.nonfinite = af))
+    for (s in unique(c(quantile(all[is.finite(all)], c(0.5, 0.99)), 5))) {
+      r <- attempt(get_matches(m, s, allow.nonfinite = af))
+      add_scoring("get_matches", nm, list(score = s, allow_nonfinite = af),
+                  if (r$ok) list(value = I(r$value)) else list(error = r$error))
+    }
+  }
+  words <- random_words(m, 5)
+  for (az in c(TRUE, FALSE))
+    add_scoring("prob_match", nm, list(matches = I(words), allow_zero = az),
+                num_or_error(prob_match(m, words, allow.zero = az)))
+}
+zero_bkg <- examplemotif
+zero_bkg["bkg"] <- c(A = 0.5, C = 0, G = 0, T = 0.5)
+add_scoring("prob_match", "zero_bkg", list(matches = I(c("TATATAT", "TCTATAG")), allow_zero = FALSE),
+            num_or_error(prob_match(zero_bkg, c("TATATAT", "TCTATAG"), allow.zero = FALSE)))
+ut_motifs$zero_bkg <- zero_bkg
+add_scoring("get_matches", "example", list(score = 20, allow_nonfinite = FALSE),
+            list(error = attempt(get_matches(examplemotif, 20))$error))
+pmb <- prob_match_bkg(c(A = 0.3, C = 0.2, G = 0.2, T = 0.3), c("TATATAT", "TATATAG", "GC"))
+
+metric_cases <- list()
+col_pairs <- list(
+  list(c(0.5, 0.1, 0.1, 0.3), c(0.7, 0.1, 0.1, 0.1)),
+  list(c(0.25, 0.25, 0.25, 0.25), c(0.25, 0.25, 0.25, 0.25)),
+  list(c(0.97, 0.01, 0.01, 0.01), c(0.01, 0.01, 0.01, 0.97)),
+  list(c(0.4, 0.3, 0.2, 0.1), c(0.1, 0.2, 0.3, 0.4)),
+  list(c(0.2, 0.2, 0.6), c(0.3, 0.3, 0.4))
+)
+for (p in col_pairs) for (method in COMPARE_METRICS) for (b in list(NULL, c(0.3, 0.2, 0.2, 0.3)))
+  for (ns in list(c(100, 100), c(10, 37))) {
+    if (!is.null(b) && length(b) != length(p[[1]])) next
+    b1 <- if (is.null(b)) rep(1 / length(p[[1]]), length(p[[1]])) else b
+    r <- attempt(compare_columns(p[[1]], p[[2]], method, b1, rev(b1), ns[1], ns[2]))
+    metric_cases[[length(metric_cases) + 1]] <- c(
+      list(x = vec(p[[1]]), y = vec(p[[2]]), method = method, bkg1 = vec(b1), bkg2 = vec(rev(b1)),
+           nsites1 = ns[1], nsites2 = ns[2]),
+      if (r$ok) list(value = r$value) else list(error = r$error))
+  }
+avg_motifs <- list(examplemotif, ut_motifs$random, ut_motifs$rna, ut_motifs$aa,
+                   create_motif("AAAAAAAA", nsites = 5, pseudocount = 0, name = "pure"))
+avg_cases <- lapply(c("a.mean", "g.mean", "median", "fzt"), function(a)
+  list(average = a, value = vec(average_ic(avg_motifs, a))))
+
+gap_cases <- list()
+add_gap_case <- function(args) {
+  r <- attempt(do.call(add_gap, c(list(motif = ut_motifs$random), args)))
+  gap_cases[[length(gap_cases) + 1]] <<- c(list(args = args), as_motif_result(r))
+}
+add_gap_case(list())
+add_gap_case(list(gaploc = 2L, mingap = 0L, maxgap = 3L))
+add_gap_case(list(gaploc = c(2L, 4L), mingap = 1L, maxgap = c(2L, 6L)))
+add_gap_case(list(gaploc = 3L, mingap = 4L, maxgap = 2L))
+add_gap_case(list(gaploc = 3L, mingap = 0L, maxgap = 0L))
+gapped <- add_gap(ut_motifs$random, 2, 1, 4)
+ungap_cases <- list(list(delete = FALSE, motif = motif_record(ungap(gapped))),
+                    list(delete = TRUE, motif = motif_record(ungap(gapped, delete = TRUE))))
+
+switch_cases <- list(
+  list(input = motif_record(ut_motifs$bkg), output = motif_record(switch_alph(ut_motifs$bkg))),
+  list(input = motif_record(ut_motifs$rna), output = motif_record(switch_alph(ut_motifs$rna))),
+  list(input = motif_record(ut_motifs$aa), error = attempt(switch_alph(ut_motifs$aa))$error)
+)
+
+flt <- list(
+  create_motif("TTGACT", name = "a", family = "bZIP", organism = "human", nsites = 10,
+               pseudocount = 1, altname = "a1"),
+  create_motif("CACGTG", name = "b", family = "bHLH", organism = "mouse", nsites = 40,
+               pseudocount = 1, extrainfo = c(source = "jaspar", class = "x")),
+  create_motif("GGGGCGGGG", name = "c", family = "C2H2", nsites = 25, pseudocount = 1,
+               type = "PCM", extrainfo = c(source = "hocomoco")),
+  create_motif("ACGUUA", name = "d", alphabet = "RNA", nsites = 5, pseudocount = 1),
+  create_motif("MKVLAW", name = "e", alphabet = "AA", pseudocount = 1)
+)
+flt[[1]]["pval"] <- 1e-5; flt[[2]]["pval"] <- 0.01; flt[[3]]["qval"] <- 0.2
+flt[[2]]["eval"] <- 3; flt[[4]]["strand"] <- "+"
+filter_cases <- list()
+add_filter <- function(args) {
+  r <- do.call(filter_motifs, c(list(motifs = flt), args))
+  if (!is.list(r)) r <- list(r)
+  filter_cases[[length(filter_cases) + 1]] <<- list(
+    args = lapply(args, function(v) if (!is.null(names(v))) as.list(v) else v), names = I(vapply(r, function(x) x@name, character(1))))
+}
+add_filter(list(name = c("a", "c", "z")))
+add_filter(list(altname = "a1"))
+add_filter(list(family = c("bHLH", "C2H2")))
+add_filter(list(organism = "human"))
+add_filter(list(width = 7))
+add_filter(list(alphabet = "DNA"))
+add_filter(list(type = "PCM"))
+add_filter(list(icscore = 10))
+add_filter(list(nsites = 20))
+add_filter(list(strand = "+"))
+add_filter(list(pval = 1e-3))
+add_filter(list(qval = 0.5))
+add_filter(list(eval = 5))
+add_filter(list(extrainfo = c(source = "jaspar")))
+add_filter(list(family = "bZIP", nsites = 5))
+
+mask_cases <- list()
+add_mask <- function(seqs, pattern, rc, letter) {
+  r <- attempt(as.character(mask_seqs(seqs, pattern, RC = rc, letter = letter)))
+  mask_cases[[length(mask_cases) + 1]] <<- c(
+    list(seqs = I(unname(as.character(seqs))), alphabet = Biostrings::seqtype(seqs),
+         pattern = pattern, rc = rc, letter = letter),
+    if (r$ok) list(value = I(unname(r$value))) else list(error = r$error))
+}
+dna <- Biostrings::DNAStringSet(c(a = "ACGTACGTTACG", b = "GGACGACG", c = "AAAAA", d = "TTTT"))
+add_mask(dna, "ACG", FALSE, "-")
+add_mask(dna, "CGT", TRUE, "N")
+add_mask(dna, "AA", FALSE, "-")
+add_mask(dna, "AAT", TRUE, "-")
+add_mask(Biostrings::RNAStringSet(c("ACGUACGU", "UUAC")), "GUA", TRUE, "N")
+add_mask(Biostrings::AAStringSet(c("MKVLAWMKV", "AAKV")), "KV", FALSE, "X")
+add_mask(Biostrings::AAStringSet("MKV"), "KV", TRUE, "X")
+
+range_seqs <- Biostrings::DNAStringSet(c(chr1 = "ACGTACGTACGTACGT", chr2 = "GGGGCCCCAAAATTTT"))
+range_cases <- list()
+add_ranges <- function(chrom, start, end, letter) {
+  gr <- GenomicRanges::GRanges(chrom, IRanges::IRanges(start, end))
+  r <- attempt(as.character(mask_ranges(range_seqs, gr, letter)))
+  range_cases[[length(range_cases) + 1]] <<- c(
+    list(chrom = I(chrom), start = I(start), end = I(end), letter = letter),
+    if (r$ok) list(value = I(unname(r$value))) else list(error = r$error))
+}
+add_ranges(c("chr1", "chr1", "chr2"), c(1L, 3L, 5L), c(4L, 6L, 8L), "-")
+add_ranges(c("chr1", "chr1", "chr2"), c(1L, 9L, 5L), c(2L, 12L, 8L), "-")
+add_ranges(c("chr1", "chr1", "chr1"), c(1L, 3L, 14L), c(2L, 5L, 16L), "N")
+add_ranges(c("chr2", "chr3"), c(16L, 1L), c(16L, 5L), "N")
+add_ranges("chr1", 10L, 20L, "-")
+
+alph_cases <- list()
+add_alph <- function(args) {
+  f <- tempfile()
+  r <- attempt(do.call(meme_alph, c(args, list(file = f))))
+  # Named vectors become JSON objects only as lists.
+  json_args <- lapply(args, function(v) if (!is.null(names(v))) as.list(v) else v)
+  alph_cases[[length(alph_cases) + 1]] <<- c(
+    list(args = json_args),
+    if (r$ok) list(value = paste(readLines(f), collapse = "\n")) else list(error = r$error))
+}
+add_alph(list(core = "QWER"))
+add_alph(list(core = "ACGT", complements = "TGCA", ambiguity = c(N = "ACGT", R = "AG"),
+              like = "DNA", alph.name = "MyDNA",
+              letter.names = c(A = "Adenine", C = "Cytosine", G = "Guanine", T = "Thymine"),
+              colours = c(A = "CC0000", C = "0000CC", G = "FFB300", T = "008000")))
+add_alph(list(core = "ACGT", complements = "TGC"))
+add_alph(list(core = "AB", like = "PROTEINS"))
+add_alph(list(core = "AB", letter.names = c(A = "a")))
+
+pval_cases <- lapply(c("1e-200", "0.05", "0", "1", "2.5e-12"), function(p)
+  list(pval = p, value = log_string_pval(p)))
+
+slide_cases <- lapply(list(c(5L, 0L, TRUE), c(4L, 2L, FALSE), c(30L, 0L, TRUE)), function(a) {
+  s <- "ACGTGGGCCATTAGCGCGTA"
+  list(string = s, window = a[1], overlap = a[2], return_incomp = as.logical(a[3]),
+       gc = vec(slide_fun(s, function(x) sum(strsplit(x, "")[[1]] %in% c("G", "C")),
+                          numeric(1), a[1], a[2], as.logical(a[3]))))
+})
+
+write_ref(list(
+  motifs = lapply(ut_motifs, motif_record),
+  scoring = scoring,
+  prob_match_bkg = list(bkg = vec(c(0.3, 0.2, 0.2, 0.3)), letters = I(c("A", "C", "G", "T")),
+                        matches = I(c("TATATAT", "TATATAG", "GC")), value = vec(pmb)),
+  compare_columns = metric_cases,
+  average_ic = list(motifs = lapply(avg_motifs, motif_record), cases = avg_cases),
+  add_gap = gap_cases, ungap = ungap_cases, switch_alph = switch_cases,
+  filter = list(motifs = lapply(flt, motif_record), cases = filter_cases),
+  mask_seqs = mask_cases, mask_ranges = list(seqs = I(as.character(range_seqs)),
+                                             names = I(names(range_seqs)), cases = range_cases),
+  meme_alph = alph_cases, log_string_pval = pval_cases, slide_fun = slide_cases),
+  "utils.json")

@@ -205,3 +205,27 @@ pub fn motif_score(
     check_queries(motifs.len(), queries)?;
     per_motif(motifs, queries, opts, |d, p| d.score(p))
 }
+
+/// The natural logarithm of a P-value written as text (such as `"1e-400"`),
+/// as universalmotif's `log_string_pval()`. Values too small for a double
+/// are handled through their mantissa and exponent.
+pub fn log_pvalue_text(pvalue: &str) -> Result<f64> {
+    let s = pvalue.trim();
+    let bad = || Error::Argument(format!("'{pvalue}' is not a P-value"));
+    let value: f64 = s.parse().map_err(|_| bad())?;
+    if value.is_nan() || value < 0.0 {
+        return Err(bad());
+    }
+    if value >= f64::MIN_POSITIVE {
+        return Ok(value.ln());
+    }
+    // Zero, or too small for a double.
+    match s.split_once(['e', 'E']) {
+        Some((m, e)) => {
+            let m: f64 = m.parse().map_err(|_| bad())?;
+            let e = e.parse::<i64>().map_err(|_| bad())? as f64;
+            Ok(m.ln() + e * std::f64::consts::LN_10)
+        }
+        None => Ok(value.ln()),
+    }
+}

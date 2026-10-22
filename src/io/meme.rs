@@ -590,3 +590,83 @@ pub fn write(motifs: &[Motif], opts: &WriteOptions) -> Result<String> {
     }
     Ok(join_lines(&lines))
 }
+
+/// A MEME alphabet definition (see [`write_alphabet`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AlphabetDefinition {
+    /// The core letters, in order.
+    pub core: String,
+    /// The complement of each core letter, for alphabets with one.
+    pub complements: Option<String>,
+    /// Ambiguous letters and the core letters each stands for.
+    pub ambiguity: Vec<(String, String)>,
+    /// `"DNA"`, `"RNA"` or `"PROTEIN"`, for alphabets that extend one.
+    pub like: Option<String>,
+    pub name: Option<String>,
+    /// A name for each letter (all core and complement letters need one if
+    /// any are given).
+    pub letter_names: Vec<(char, String)>,
+    /// A colour for each letter, as hexadecimal RGB (all letters need one if
+    /// any are given).
+    pub colours: Vec<(char, String)>,
+}
+
+/// Write a MEME custom alphabet definition, as universalmotif's
+/// `meme_alph()`.
+pub fn write_alphabet(def: &AlphabetDefinition) -> Result<String> {
+    let mut head = String::from("ALPHABET");
+    if let Some(name) = &def.name {
+        head.push_str(&format!(" \"{name}\""));
+    }
+    if let Some(like) = &def.like {
+        if !matches!(like.as_str(), "DNA" | "RNA" | "PROTEIN") {
+            return Err(Error::Argument(
+                "like must be one of DNA, RNA and PROTEIN".into(),
+            ));
+        }
+        head.push_str(&format!(" {like}-LIKE"));
+    }
+    let core: Vec<char> = def.core.chars().collect();
+    let compl: Option<Vec<char>> = def.complements.as_ref().map(|c| c.chars().collect());
+    if compl.as_ref().is_some_and(|c| c.len() != core.len()) {
+        return Err(Error::Argument(
+            "core and complements do not have the same number of letters".into(),
+        ));
+    }
+    let describe = |l: char| -> Result<String> {
+        let mut s = l.to_string();
+        if !def.letter_names.is_empty() {
+            match def.letter_names.iter().find(|(k, _)| *k == l) {
+                Some((_, n)) => s.push_str(&format!(" \"{n}\"")),
+                None => {
+                    return Err(Error::Argument(format!(
+                        "the letter '{l}' has no name in letter_names"
+                    )));
+                }
+            }
+        }
+        if !def.colours.is_empty() {
+            match def.colours.iter().find(|(k, _)| *k == l) {
+                Some((_, c)) => s.push_str(&format!(" {c}")),
+                None => {
+                    return Err(Error::Argument(format!("the letter '{l}' has no colour")));
+                }
+            }
+        }
+        Ok(s)
+    };
+    let mut lines = vec![head, String::new(), "# Core symbols".into()];
+    for (i, &l) in core.iter().enumerate() {
+        let mut line = describe(l)?;
+        if let Some(c) = &compl {
+            line.push_str(&format!(" ~ {}", describe(c[i])?));
+        }
+        lines.push(line);
+    }
+    if !def.ambiguity.is_empty() {
+        lines.push(String::new());
+        lines.push("# Ambiguous symbols".into());
+        lines.extend(def.ambiguity.iter().map(|(k, v)| format!("{k} = {v}")));
+    }
+    Ok(lines.join("\n") + "\n")
+}

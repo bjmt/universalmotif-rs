@@ -1,6 +1,7 @@
 //! Operations that transform a motif: reverse complement, trimming,
 //! rounding and renormalisation.
 
+use crate::alphabet::Alphabet;
 use crate::convert::{convert_type, position_icscore};
 use crate::error::{Error, Result, arg_err};
 use crate::matrix::Matrix;
@@ -233,4 +234,72 @@ pub fn normalize(motif: &Motif) -> Result<Motif> {
     };
     let pcm = convert_type(motif, MotifType::Pcm, None, false)?;
     convert_type(&pcm, motif.motif_type, Some(pseudo), false)
+}
+
+/// Add gaps to a motif, as universalmotif's `add_gap()`: gap `i` follows
+/// column `gaploc[i]` (counting from 1, by default the middle of the motif)
+/// and spans `mingap[i]` to `maxgap[i]` positions. Shorter lists are
+/// recycled to the length of the longest.
+pub fn add_gap(
+    motif: &Motif,
+    gaploc: Option<&[usize]>,
+    mingap: &[usize],
+    maxgap: &[usize],
+) -> Result<Motif> {
+    let middle = [motif.width() / 2];
+    let gaploc = gaploc.unwrap_or(&middle);
+    if gaploc.is_empty() || mingap.is_empty() || maxgap.is_empty() {
+        return arg_err("gaploc, mingap and maxgap must not be empty");
+    }
+    let n = gaploc.len().max(mingap.len()).max(maxgap.len());
+    let recycle = |v: &[usize]| (0..n).map(|i| v[i % v.len()]).collect::<Vec<usize>>();
+    let gap = GapInfo {
+        isgapped: true,
+        gaploc: recycle(gaploc),
+        mingap: recycle(mingap),
+        maxgap: recycle(maxgap),
+    };
+    if gap.mingap.iter().zip(&gap.maxgap).any(|(lo, hi)| lo > hi) {
+        return arg_err("mingap cannot be greater than the corresponding maxgap");
+    }
+    if gap.maxgap.contains(&0) {
+        return arg_err("maxgap must be greater than 0");
+    }
+    let mut p = motif.clone().into_parts();
+    p.gap = gap;
+    Motif::from_parts(p)
+}
+
+/// Turn a motif's gaps off, as universalmotif's `ungap()`. The gap
+/// positions and sizes are kept (so [`add_gap`] can restore them) unless
+/// `delete`.
+pub fn ungap(motif: &Motif, delete: bool) -> Motif {
+    let mut p = motif.clone().into_parts();
+    if delete {
+        p.gap = GapInfo::default();
+    } else {
+        p.gap.isgapped = false;
+    }
+    Motif::from_parts(p).expect("removing gaps keeps a motif valid")
+}
+
+/// Switch a motif between the DNA and RNA alphabets, as universalmotif's
+/// `switch_alph()`. The matrix and background stay as they are.
+pub fn switch_alph(motif: &Motif) -> Result<Motif> {
+    let (to, from_letter, to_letter) = match motif.alphabet {
+        Alphabet::Dna => (Alphabet::Rna, 'T', 'U'),
+        Alphabet::Rna => (Alphabet::Dna, 'U', 'T'),
+        _ => {
+            return arg_err(format!(
+                "motif '{}' has alphabet '{}'; will not convert",
+                motif.name, motif.alphabet
+            ));
+        }
+    };
+    let mut p = motif.clone().into_parts();
+    p.alphabet = to;
+    p.consensus = p
+        .consensus
+        .map(|c| c.replace(from_letter, &to_letter.to_string()));
+    Motif::from_parts(p)
 }

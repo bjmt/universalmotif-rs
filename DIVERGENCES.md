@@ -39,6 +39,15 @@ change is listed here so the R package can be fixed to match.
   AA regardless of its row names. The port requires the row names to be the
   twenty amino acids and otherwise makes a custom alphabet.
 
+- **`motif_range(allow.nonfinite = TRUE)` returns NA.** With `-Inf`
+  entries in the PWM, both ends of the range come back as NA. The port gives
+  `-Inf` for the lowest score and the true highest score.
+- **`log_string_pval()` fails for the values it exists for.** It parses the
+  string as a `long double`, which is no wider than a double on some
+  platforms (arm64 macOS among them), so P-values below about 1e-308, such
+  as `"1e-400"`, raise an error there. The port works from the mantissa and
+  exponent and handles any value.
+
 ### Motif files
 
 - **TRANSFAC files with a header block cannot be read.** `read_transfac()`
@@ -147,6 +156,12 @@ change is listed here so the R package can be fixed to match.
   library. The port ranks ties by k-mer. Results agree with the R package
   whenever the best seeds have distinct P-values.
 
+- **`mask_ranges()` fails for common inputs.** The replacement strings are
+  built with `sapply()`, which collapses them into a character vector when
+  every sequence has exactly one range, and `replaceAt()` then fails; a
+  sequence with no ranges at all also raises an error. The port masks the
+  ranges given and leaves other sequences unchanged.
+
 ### Enrichment and co-occurrence
 
 - **`motif_coocc()` odds ratios overflow.** The 2x2 cells are R integers,
@@ -205,6 +220,9 @@ change is listed here so the R package can be fixed to match.
   The parametric null for comparison P-values remains DNA and RNA only,
   since its Dirichlet grid assumes four letters; other alphabets use the
   empirical null.
+- **Lower case letters.** `score_match()`, `prob_match()` and `mask_seqs()`
+  accept lower case DNA, RNA and amino acid letters (Biostrings sequences
+  are always upper case); masking keeps the case of the letters it leaves.
 
 ## Not reproducible
 

@@ -30,12 +30,15 @@ pub mod enrich;
 pub mod finder;
 pub mod io;
 pub mod kmer;
+pub mod mask;
+pub mod metrics;
 pub mod peaks;
 pub mod proximity;
 pub mod pvalue;
 pub mod ranges;
 pub mod sample;
 pub mod scan;
+pub mod scoring;
 pub mod shuffle;
 pub mod stats;
 
