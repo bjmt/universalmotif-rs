@@ -71,20 +71,24 @@ impl ScoreDistribution {
         let max_score = shifted.iter().flatten().copied().max().unwrap_or(0);
 
         // Dynamic programming over positions, as in MEME's get_pdf_table().
+        // Only the reachable scores [lo, hi] are visited; the rest are zero.
         let len = width * max_score + 1;
         let mut pdf_new = vec![1.0; len];
         let mut pdf_old = vec![1.0; len];
+        let (mut lo, mut hi) = (0usize, 0usize);
         for (i, col) in shifted.iter().enumerate() {
             let max_step = i * max_score;
-            pdf_old.copy_from_slice(&pdf_new);
+            std::mem::swap(&mut pdf_old, &mut pdf_new);
             pdf_new[..=max_step + max_score].fill(0.0);
             for (&s, &b) in col.iter().zip(bkg) {
-                for k in 0..=max_step {
+                for k in lo..=hi.min(max_step) {
                     if pdf_old[k] != 0.0 {
                         pdf_new[k + s] += pdf_old[k] * b;
                     }
                 }
             }
+            lo += *col.iter().min().unwrap();
+            hi += *col.iter().max().unwrap();
         }
         let total = sum(&pdf_new);
         if total > 0.0 {
@@ -135,5 +139,40 @@ impl ScoreDistribution {
             self.score_min as f64 / 1000.0,
             self.score_max as f64 / 1000.0,
         )
+    }
+
+    /// The part of the distribution at or above `from`, which answers
+    /// [`ScoreDistribution::pvalue`] for those scores in a fraction of the
+    /// memory.
+    pub fn tail(&self, from: f64) -> ScoreTail {
+        // Nothing scores above score_max, so the table stops there.
+        let stop = ((self.score_max as f64 - self.offset) as usize + 1).min(self.cdf.len());
+        let start = ((score_grid_ceiling(from) - self.offset).max(0.0) as usize).min(stop);
+        ScoreTail {
+            cdf: self.cdf[start..stop].to_vec(),
+            offset: self.offset + start as f64,
+        }
+    }
+}
+
+/// The upper tail of a [`ScoreDistribution`] (see
+/// [`ScoreDistribution::tail`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoreTail {
+    cdf: Vec<f64>,
+    offset: f64,
+}
+
+impl ScoreTail {
+    /// The probability of a random site scoring at least `score`, which
+    /// must be at or above the tail's start.
+    pub fn pvalue(&self, score: f64) -> f64 {
+        let idx = score_grid_ceiling(score) - self.offset;
+        debug_assert!(idx >= 0.0, "score below the tail");
+        if idx < self.cdf.len() as f64 {
+            self.cdf[idx.max(0.0) as usize].min(1.0)
+        } else {
+            0.0
+        }
     }
 }

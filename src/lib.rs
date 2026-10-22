@@ -17,6 +17,7 @@ pub mod matrix;
 pub mod merge;
 pub mod motif;
 pub mod ops;
+pub mod packed;
 
 pub mod background;
 pub mod cdf;

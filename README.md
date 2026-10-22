@@ -48,6 +48,19 @@ This needs R with the `pkgload` and `jsonlite` packages, plus the
 dependencies of universalmotif. The places where this crate deliberately
 differs from the R package are listed in [DIVERGENCES.md](DIVERGENCES.md).
 
+## Benchmarks
+
+`examples/bench.rs` times the main functions at realistic sizes, one task
+per run, so peak memory can be measured around it:
+
+```sh
+cargo build --release --example bench
+UM_BENCH_MOTIFS=motifs.meme /usr/bin/time -l target/release/examples/bench scan_many 4
+```
+
+Without `UM_BENCH_MOTIFS` it uses 400 random motifs. The tasks are listed in
+the file.
+
 ## License
 
 MIT

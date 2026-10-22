@@ -258,6 +258,7 @@ fn coocc_opts(a: &serde_json::Map<String, Value>) -> CooccOptions {
             .get("self.pairs")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        nthreads: 2,
     }
 }
 

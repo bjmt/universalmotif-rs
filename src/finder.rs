@@ -9,7 +9,7 @@
 //! widths that cover the same sites are deduplicated, Benjamini-Hochberg
 //! q-values are computed, and low-information flanks are trimmed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rayon::prelude::*;
 
@@ -224,20 +224,30 @@ fn hamming(mut a: u64, mut b: u64, w: usize) -> u64 {
     mm
 }
 
-fn log_choose(n: f64, k: f64) -> f64 {
-    libm::lgamma(n + 1.0) - libm::lgamma(k + 1.0) - libm::lgamma(n - k + 1.0)
+/// `ln(n!)` for every `n` up to the number of sequences, so Fisher tests
+/// need no `lgamma` calls of their own (the values are the same).
+struct LogFact(Vec<f64>);
+
+impl LogFact {
+    fn new(n: usize) -> LogFact {
+        LogFact((0..=n).map(|i| libm::lgamma(i as f64 + 1.0)).collect())
+    }
+
+    fn choose(&self, n: u64, k: u64) -> f64 {
+        self.0[n as usize] - self.0[k as usize] - self.0[(n - k) as usize]
+    }
 }
 
 /// One-sided (greater) Fisher's exact test P-value for a 2x2 table.
-fn fisher_greater(a: u64, b: u64, c: u64, d: u64) -> f64 {
-    let (r1, r2) = ((a + b) as f64, (c + d) as f64);
-    let c1 = (a + c) as f64;
-    let n = (a + b + c + d) as f64;
-    let denom = log_choose(n, c1);
-    let x_max = r1.min(c1) as u64;
-    let mut log_sum = log_choose(r1, a as f64) + log_choose(r2, c1 - a as f64) - denom;
+fn fisher_greater(lf: &LogFact, a: u64, b: u64, c: u64, d: u64) -> f64 {
+    let (r1, r2) = (a + b, c + d);
+    let c1 = a + c;
+    let n = a + b + c + d;
+    let denom = lf.choose(n, c1);
+    let x_max = r1.min(c1);
+    let mut log_sum = lf.choose(r1, a) + lf.choose(r2, c1 - a) - denom;
     for x in a + 1..=x_max {
-        let term = log_choose(r1, x as f64) + log_choose(r2, c1 - x as f64) - denom;
+        let term = lf.choose(r1, x) + lf.choose(r2, c1 - x) - denom;
         if term > log_sum {
             log_sum = term + (log_sum - term).exp().ln_1p();
         } else {
@@ -271,42 +281,82 @@ fn score_at(m: &FMotif, seq: &[u8], off: usize) -> (i32, i32) {
     (s, src)
 }
 
-fn enumerate_seeds(pos: &[Vec<u8>], neg: &[Vec<u8>], w: usize, rc: bool) -> Vec<(u64, f64)> {
-    let count = |seqs: &[Vec<u8>]| -> HashMap<u64, u64> {
-        let mut h: HashMap<u64, u64> = HashMap::new();
-        for s in seqs {
-            if s.len() < w {
+/// For each k-mer (or the smaller of it and its reverse complement), the
+/// number of sequences containing it, sorted by k-mer.
+fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> Vec<(u64, u64)> {
+    let mask = if w == 32 {
+        u64::MAX
+    } else {
+        (1u64 << (2 * w)) - 1
+    };
+    let mut all: Vec<u64> = Vec::new();
+    let mut seen: Vec<u64> = Vec::new();
+    for s in seqs {
+        seen.clear();
+        // Rolling codes of the last w letters on each strand.
+        let (mut fwd, mut rev, mut run) = (0u64, 0u64, 0usize);
+        for &b in s {
+            let idx = CHAR2IDX[b as usize];
+            if idx >= 4 {
+                run = 0;
                 continue;
             }
-            let mut seen = HashSet::new();
-            for off in 0..=s.len() - w {
-                if let Some(k) = kmer_encode(s, w, off) {
-                    seen.insert(if rc { k.min(rc_kmer(k, w)) } else { k });
-                }
-            }
-            for k in seen {
-                *h.entry(k).or_default() += 1;
+            fwd = ((fwd << 2) | idx as u64) & mask;
+            rev = (rev >> 2) | ((COMP4[idx as usize] as u64) << (2 * (w - 1)));
+            run += 1;
+            if run >= w {
+                seen.push(if rc { fwd.min(rev) } else { fwd });
             }
         }
-        h
-    };
-    let (ph, nh) = (count(pos), count(neg));
+        seen.sort_unstable();
+        seen.dedup();
+        all.extend_from_slice(&seen);
+    }
+    all.sort_unstable();
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    for k in all {
+        match out.last_mut() {
+            Some(last) if last.0 == k => last.1 += 1,
+            _ => out.push((k, 1)),
+        }
+    }
+    out
+}
+
+fn enumerate_seeds(
+    pos: &[Vec<u8>],
+    neg: &[Vec<u8>],
+    w: usize,
+    rc: bool,
+    lf: &LogFact,
+) -> Vec<(u64, f64)> {
+    let (ph, nh) = (kmer_presence(pos, w, rc), kmer_presence(neg, w, rc));
     let (np, nn) = (pos.len() as u64, neg.len() as u64);
-    let mut cands: Vec<(u64, f64)> = ph
-        .iter()
-        .map(|(&k, &pc)| {
-            let nc = nh.get(&k).copied().unwrap_or(0);
-            (
-                k,
-                fisher_greater(pc, nc, np.saturating_sub(pc), nn.saturating_sub(nc)),
-            )
-        })
-        .collect();
-    // Ties are broken by k-mer code rather than hash order, so results are
-    // reproducible.
-    cands.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
-    cands.truncate(TOP_K_SEEDS);
-    cands
+    // Many k-mers share the same counts, so each table is tested once.
+    let mut memo: HashMap<(u64, u64), f64> = HashMap::new();
+    let mut best: Vec<(u64, f64)> = Vec::with_capacity(TOP_K_SEEDS + 1);
+    let mut j = 0;
+    for &(k, pc) in &ph {
+        while j < nh.len() && nh[j].0 < k {
+            j += 1;
+        }
+        let nc = if j < nh.len() && nh[j].0 == k {
+            nh[j].1
+        } else {
+            0
+        };
+        let p = *memo.entry((pc, nc)).or_insert_with(|| {
+            fisher_greater(lf, pc, nc, np.saturating_sub(pc), nn.saturating_sub(nc))
+        });
+        // Keep the best few by P-value, ties going to the lower k-mer code
+        // (k-mers arrive in increasing order, so a tie never displaces).
+        if best.len() < TOP_K_SEEDS || p < best[best.len() - 1].1 {
+            let at = best.partition_point(|&(_, q)| q <= p);
+            best.insert(at, (k, p));
+            best.truncate(TOP_K_SEEDS);
+        }
+    }
+    best
 }
 
 fn add_site(ppm: &mut [[u64; 4]], seq: &[u8], off: usize, w: usize, reverse: bool) {
@@ -396,7 +446,7 @@ struct Evaluation {
     covered: Vec<Vec<bool>>,
 }
 
-fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool) -> Evaluation {
+fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool, lf: &LogFact) -> Evaluation {
     let thr = m.threshold - 1;
     let w = m.size;
     let mut covered: Vec<Vec<bool>> = pos.iter().map(|s| vec![false; s.len()]).collect();
@@ -437,6 +487,7 @@ fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool) -> Evaluatio
     let (np, nn) = (pos.len() as u64, neg.len() as u64);
     Evaluation {
         pvalue: fisher_greater(
+            lf,
             seqs_pos,
             seqs_neg,
             np.saturating_sub(seqs_pos),
@@ -468,11 +519,12 @@ fn discover_for_width(
     pc: u32,
     hit_pval: f64,
     stop_pval: f64,
+    lf: &LogFact,
 ) -> Vec<Found> {
     let mut work = pos.to_vec();
     let mut out = Vec::new();
     for _ in 0..nmotifs {
-        let seeds = enumerate_seeds(&work, neg, w, rc);
+        let seeds = enumerate_seeds(&work, neg, w, rc, lf);
         if seeds.is_empty() {
             break;
         }
@@ -495,7 +547,7 @@ fn discover_for_width(
             if m.threshold == i32::MAX {
                 continue;
             }
-            let eval = evaluate(&work, neg, &m, rc);
+            let eval = evaluate(&work, neg, &m, rc, lf);
             if eval.pvalue > stop_pval {
                 continue;
             }
@@ -669,6 +721,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     let pos: Vec<Vec<u8>> = pos_strs.iter().map(|s| s.as_bytes().to_vec()).collect();
     let neg: Vec<Vec<u8>> = neg_strs.iter().map(|s| s.as_bytes().to_vec()).collect();
 
+    let lf = LogFact::new(pos.len() + neg.len());
     let widths: Vec<usize> = (opts.min_width..=opts.max_width).collect();
     let per_width: Vec<Vec<Found>> = with_threads(opts.nthreads, || {
         widths
@@ -684,6 +737,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
                     opts.pseudocount,
                     opts.hit_pvalue,
                     opts.stop_pvalue,
+                    &lf,
                 )
             })
             .collect()
@@ -695,7 +749,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     }
     // Re-evaluate on the unmasked sequences so coverage is comparable.
     for f in found.iter_mut() {
-        f.eval = evaluate(&pos, &neg, &f.motif, opts.rc);
+        f.eval = evaluate(&pos, &neg, &f.motif, opts.rc, &lf);
     }
     found.sort_by(|a, b| a.eval.pvalue.total_cmp(&b.eval.pvalue));
     let mut dropped = vec![false; found.len()];

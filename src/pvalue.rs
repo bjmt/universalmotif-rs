@@ -142,6 +142,48 @@ fn check_queries(n: usize, queries: &[(usize, f64)]) -> Result<()> {
     Ok(())
 }
 
+/// Answer `(motif index, value)` queries one motif at a time, so only the
+/// distributions in flight are held in memory.
+fn per_motif(
+    motifs: &[Motif],
+    queries: &[(usize, f64)],
+    opts: &PvalueOptions,
+    answer: impl Fn(&ScoreDistribution, f64) -> f64 + Sync,
+) -> Result<Vec<f64>> {
+    if opts.bkg.len() > 1 && opts.bkg.len() != motifs.len() {
+        return arg_err("give one background for all motifs or one per motif");
+    }
+    let mut by_motif: Vec<Vec<usize>> = vec![Vec::new(); motifs.len()];
+    for (q, &(i, _)) in queries.iter().enumerate() {
+        by_motif[i].push(q);
+    }
+    let answers: Vec<Vec<(usize, f64)>> = with_threads(opts.nthreads, || {
+        by_motif
+            .par_iter()
+            .enumerate()
+            .filter(|(_, qs)| !qs.is_empty())
+            .map(|(i, qs)| {
+                let bkg = match opts.bkg.len() {
+                    0 => None,
+                    1 => Some(opts.bkg[0].as_slice()),
+                    _ => Some(opts.bkg[i].as_slice()),
+                };
+                let m = scoring_matrix(&motifs[i], bkg)?;
+                let dist = ScoreDistribution::new(&m.pwm, &m.bkg);
+                Ok(qs
+                    .iter()
+                    .map(|&q| (q, answer(&dist, queries[q].1)))
+                    .collect())
+            })
+            .collect::<Result<Vec<_>>>()
+    })??;
+    let mut out = vec![0.0; queries.len()];
+    for (q, v) in answers.into_iter().flatten() {
+        out[q] = v;
+    }
+    Ok(out)
+}
+
 /// P-values for `(motif index, score)` pairs.
 pub fn motif_pvalue(
     motifs: &[Motif],
@@ -149,8 +191,7 @@ pub fn motif_pvalue(
     opts: &PvalueOptions,
 ) -> Result<Vec<f64>> {
     check_queries(motifs.len(), queries)?;
-    let dists = score_distributions(motifs, opts)?;
-    Ok(queries.iter().map(|&(i, s)| dists[i].pvalue(s)).collect())
+    per_motif(motifs, queries, opts, |d, s| d.pvalue(s))
 }
 
 /// Score thresholds for `(motif index, P-value)` pairs: the lowest score a
@@ -162,6 +203,5 @@ pub fn motif_score(
     opts: &PvalueOptions,
 ) -> Result<Vec<f64>> {
     check_queries(motifs.len(), queries)?;
-    let dists = score_distributions(motifs, opts)?;
-    Ok(queries.iter().map(|&(i, p)| dists[i].score(p)).collect())
+    per_motif(motifs, queries, opts, |d, p| d.score(p))
 }

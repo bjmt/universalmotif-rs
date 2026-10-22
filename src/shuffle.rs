@@ -102,29 +102,32 @@ impl Default for ShuffleOptions {
 }
 
 /// A sequence as indices into its own sorted alphabet.
-fn encode(seq: &[char]) -> (Vec<char>, Vec<usize>) {
+fn encode<T: Copy + Ord>(seq: &[T]) -> (Vec<T>, Vec<u32>) {
     let mut alph = seq.to_vec();
     alph.sort_unstable();
     alph.dedup();
-    let ints = seq.iter().map(|c| alph.binary_search(c).unwrap()).collect();
+    let ints = seq
+        .iter()
+        .map(|c| alph.binary_search(c).unwrap() as u32)
+        .collect();
     (alph, ints)
 }
 
-fn klet_counts(ints: &[usize], k: usize, n: usize) -> Vec<usize> {
+fn klet_counts(ints: &[u32], k: usize, n: usize) -> Vec<usize> {
     let mut counts = vec![0; n.pow(k as u32)];
     for w in ints.windows(k) {
-        counts[w.iter().fold(0, |acc, &i| acc * n + i)] += 1;
+        counts[w.iter().fold(0, |acc, &i| acc * n + i as usize)] += 1;
     }
     counts
 }
 
-fn shuffle_k1(seq: &[char], rng: &mut StdRng) -> Vec<char> {
+fn shuffle_k1<T: Copy>(seq: &[T], rng: &mut StdRng) -> Vec<T> {
     let mut out = seq.to_vec();
     shuffle_in_place(rng, &mut out);
     out
 }
 
-fn shuffle_linear(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
+fn shuffle_linear<T: Copy>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T> {
     let nblocks = seq.len() / k;
     let mut idx: Vec<usize> = (0..nblocks).map(|i| i * k).collect();
     shuffle_in_place(rng, &mut idx);
@@ -136,22 +139,22 @@ fn shuffle_linear(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
     out
 }
 
-fn shuffle_markov(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
+fn shuffle_markov<T: Copy + Ord>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T> {
     let (alph, ints) = encode(seq);
     let n = alph.len();
     let counts = klet_counts(&ints, k, n);
     let letters = klet_counts(&ints, 1, n);
     let weights: Vec<f64> = counts.iter().map(|&c| c as f64).collect();
     let first = weighted_index(rng, &weights).unwrap_or(0);
-    let mut out: Vec<usize> = (0..k)
-        .map(|p| (first / n.pow((k - 1 - p) as u32)) % n)
+    let mut out: Vec<u32> = (0..k)
+        .map(|p| ((first / n.pow((k - 1 - p) as u32)) % n) as u32)
         .collect();
     let mlets = n.pow(k as u32 - 1);
     let fallback: Vec<f64> = letters.iter().map(|&c| c as f64).collect();
     while out.len() < seq.len() {
         let ctx = out[out.len() - (k - 1)..]
             .iter()
-            .fold(0, |acc, &i| acc * n + i)
+            .fold(0, |acc, &i| acc * n + i as usize)
             % mlets;
         let row: Vec<f64> = counts[ctx * n..(ctx + 1) * n]
             .iter()
@@ -160,13 +163,13 @@ fn shuffle_markov(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
         let next = weighted_index(rng, &row)
             .or_else(|| weighted_index(rng, &fallback))
             .unwrap_or(0);
-        out.push(next);
+        out.push(next as u32);
     }
     out.truncate(seq.len());
-    out.into_iter().map(|i| alph[i]).collect()
+    out.into_iter().map(|i| alph[i as usize]).collect()
 }
 
-fn shuffle_euler(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
+fn shuffle_euler<T: Copy + Ord>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T> {
     let (alph, ints) = encode(seq);
     let n = alph.len();
     if n == 1 || seq.len() <= k {
@@ -181,7 +184,7 @@ fn shuffle_euler(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
     let next_vertex = |v: usize, letter: usize| (v % mmlets) * n + letter;
     let last = ints[ints.len() - (k - 1)..]
         .iter()
-        .fold(0, |acc, &i| acc * n + i);
+        .fold(0, |acc, &i| acc * n + i as usize);
 
     // A random spanning tree of last exits, pointing towards the last vertex
     // (Wilson's algorithm, as in the R package).
@@ -204,7 +207,7 @@ fn shuffle_euler(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
     }
 
     // Each vertex's remaining edges in random order, with its last exit last.
-    let mut lists: Vec<Vec<usize>> = vec![Vec::new(); mlets];
+    let mut lists: Vec<Vec<u32>> = vec![Vec::new(); mlets];
     for v in 0..mlets {
         if empty[v] {
             continue;
@@ -212,31 +215,36 @@ fn shuffle_euler(seq: &[char], k: usize, rng: &mut StdRng) -> Vec<char> {
         if v != last {
             edges[v][exit[v]] -= 1;
         }
-        let mut l: Vec<usize> = edges[v]
+        let mut l: Vec<u32> = edges[v]
             .iter()
             .enumerate()
-            .flat_map(|(letter, &c)| std::iter::repeat_n(letter, c))
+            .flat_map(|(letter, &c)| std::iter::repeat_n(letter as u32, c))
             .collect();
         shuffle_in_place(rng, &mut l);
         if v != last {
-            l.push(exit[v]);
+            l.push(exit[v] as u32);
         }
         lists[v] = l;
     }
 
-    let mut out: Vec<usize> = ints[..k - 1].to_vec();
+    let mut out: Vec<u32> = ints[..k - 1].to_vec();
     let mut used = vec![0usize; mlets];
     while out.len() < ints.len() {
         let v = out[out.len() - (k - 1)..]
             .iter()
-            .fold(0, |acc, &i| acc * n + i);
+            .fold(0, |acc, &i| acc * n + i as usize);
         out.push(lists[v][used[v]]);
         used[v] += 1;
     }
-    out.into_iter().map(|i| alph[i]).collect()
+    out.into_iter().map(|i| alph[i as usize]).collect()
 }
 
-fn shuffle_one(seq: &[char], k: usize, method: ShuffleMethod, rng: &mut StdRng) -> Vec<char> {
+fn shuffle_one<T: Copy + Ord>(
+    seq: &[T],
+    k: usize,
+    method: ShuffleMethod,
+    rng: &mut StdRng,
+) -> Vec<T> {
     if k == 1 || seq.len() < 2 {
         return shuffle_k1(seq, rng);
     }
@@ -257,10 +265,14 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
     if opts.k < 1 {
         return arg_err("k must be at least 1");
     }
-    let chars: Vec<Vec<char>> = seqs.iter().map(|s| s.as_ref().chars().collect()).collect();
-    let mut plans: Vec<Vec<(usize, usize)>> = Vec::with_capacity(chars.len());
-    for c in &chars {
-        let len = c.len();
+    let mut plans: Vec<Vec<(usize, usize)>> = Vec::with_capacity(seqs.len());
+    for s in seqs {
+        let s = s.as_ref();
+        let len = if s.is_ascii() {
+            s.len()
+        } else {
+            s.chars().count()
+        };
         match opts.window {
             None => {
                 if len < opts.k {
@@ -295,19 +307,36 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
             }
         }
     }
+    // ASCII sequences (the usual case) are shuffled as bytes; anything else
+    // letter by letter. The random draws are the same either way.
+    fn shuffle_windows<T: Copy + Ord>(
+        mut out: Vec<T>,
+        plan: &[(usize, usize)],
+        opts: &ShuffleOptions,
+        rng: &mut StdRng,
+    ) -> Vec<T> {
+        for &(start, stop) in plan {
+            let part = shuffle_one(&out[start - 1..stop], opts.k, opts.method, rng);
+            out[start - 1..stop].copy_from_slice(&part);
+        }
+        out
+    }
     with_threads(opts.nthreads, || {
-        chars
-            .par_iter()
+        seqs.par_iter()
             .zip(&plans)
             .enumerate()
-            .map(|(i, (c, plan))| {
+            .map(|(i, (s, plan))| {
+                let s = s.as_ref();
                 let mut rng = rng_for(opts.seed, i);
-                let mut out = c.clone();
-                for &(start, stop) in plan {
-                    let part = shuffle_one(&out[start - 1..stop], opts.k, opts.method, &mut rng);
-                    out.splice(start - 1..stop, part);
+                if s.is_ascii() {
+                    let out = shuffle_windows(s.as_bytes().to_vec(), plan, opts, &mut rng);
+                    String::from_utf8(out).expect("shuffled ASCII is valid UTF-8")
+                } else {
+                    let chars: Vec<char> = s.chars().collect();
+                    shuffle_windows(chars, plan, opts, &mut rng)
+                        .into_iter()
+                        .collect()
                 }
-                out.into_iter().collect()
             })
             .collect()
     })
@@ -348,26 +377,28 @@ pub fn create_sequences(
             .into_par_iter()
             .map(|i| {
                 let mut rng = rng_for(seed, i);
-                let mut out: Vec<usize> = Vec::with_capacity(len);
+                let mut out = String::with_capacity(len);
                 if k == 1 {
                     for _ in 0..len {
-                        out.push(weighted_index(&mut rng, freqs).unwrap_or(0));
+                        out.push(alphabet[weighted_index(&mut rng, freqs).unwrap_or(0)]);
                     }
                 } else {
+                    // The first k letters, then each letter given the last
+                    // k - 1, whose code is kept as it rolls along.
                     let first = weighted_index(&mut rng, freqs).unwrap_or(0);
-                    out.extend((0..k).map(|p| (first / a.pow((k - 1 - p) as u32)) % a));
-                    let mlets = a.pow(k as u32 - 1);
-                    while out.len() < len {
-                        let ctx = out[out.len() - (k - 1)..]
-                            .iter()
-                            .fold(0, |acc, &x| acc * a + x)
-                            % mlets;
-                        let row = &freqs[ctx * a..(ctx + 1) * a];
-                        out.push(weighted_index(&mut rng, row).unwrap_or(0));
+                    for p in 0..k.min(len) {
+                        out.push(alphabet[(first / a.pow((k - 1 - p) as u32)) % a]);
                     }
-                    out.truncate(len);
+                    let mlets = a.pow(k as u32 - 1);
+                    let mut ctx = first % mlets;
+                    for _ in k..len {
+                        let row = &freqs[ctx * a..(ctx + 1) * a];
+                        let x = weighted_index(&mut rng, row).unwrap_or(0);
+                        out.push(alphabet[x]);
+                        ctx = (ctx * a + x) % mlets;
+                    }
                 }
-                out.into_iter().map(|x| alphabet[x]).collect()
+                out
             })
             .collect()
     })

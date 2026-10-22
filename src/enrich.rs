@@ -5,11 +5,9 @@
 //! test, either on the number of sequences with a hit or on the number of
 //! hits per scannable position.
 
-use std::collections::HashSet;
-
 use crate::error::{Error, Result, arg_err};
 use crate::motif::Motif;
-use crate::scan::{ScanOptions, scan_sequences};
+use crate::scan::{ScanOptions, scan_table};
 use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffle_sequences};
 use crate::stats::{fisher_greater, p_adjust_bh};
 
@@ -96,14 +94,17 @@ fn count_hits<S: AsRef<str> + Sync>(
     seqs: &[S],
     opts: &ScanOptions,
 ) -> Result<Counts> {
-    let hits = scan_sequences(motifs, seqs, opts)?;
+    let hits = scan_table(motifs, seqs, opts)?;
     let mut sites = vec![0; motifs.len()];
-    let mut seen: HashSet<(usize, usize)> = HashSet::new();
     let mut nseqs = vec![0; motifs.len()];
-    for h in &hits {
-        sites[h.motif] += 1;
-        if seen.insert((h.motif, h.sequence)) {
-            nseqs[h.motif] += 1;
+    // Hits come ordered by motif and sequence, so a new sequence for a motif
+    // shows up as a change from the previous row.
+    let mut last: Option<(i64, i64)> = None;
+    for (&m, &s) in hits.motif.iter().zip(&hits.sequence) {
+        sites[m as usize] += 1;
+        if last != Some((m, s)) {
+            nseqs[m as usize] += 1;
+            last = Some((m, s));
         }
     }
     Ok(Counts { seqs: nseqs, sites })

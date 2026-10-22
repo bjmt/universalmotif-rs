@@ -21,10 +21,27 @@ pub fn klets(letters: &[char], k: usize) -> Vec<String> {
 
 /// Sorted, unique letters of some sequences.
 pub fn sequence_letters<S: AsRef<str>>(seqs: &[S]) -> Vec<char> {
-    let mut l: Vec<char> = seqs.iter().flat_map(|s| s.as_ref().chars()).collect();
-    l.sort_unstable();
-    l.dedup();
-    l
+    let mut ascii = [false; 128];
+    let mut other = std::collections::BTreeSet::new();
+    for s in seqs {
+        let s = s.as_ref();
+        if s.is_ascii() {
+            s.bytes().for_each(|b| ascii[b as usize] = true);
+        } else {
+            for c in s.chars() {
+                if c.is_ascii() {
+                    ascii[c as usize] = true;
+                } else {
+                    other.insert(c);
+                }
+            }
+        }
+    }
+    (0u8..128)
+        .filter(|&b| ascii[b as usize])
+        .map(char::from)
+        .chain(other)
+        .collect()
 }
 
 /// Counts of each k-let of `alphabet` (in [`klets`] order) in a sequence.
@@ -32,24 +49,48 @@ pub fn sequence_letters<S: AsRef<str>>(seqs: &[S]) -> Vec<char> {
 pub fn count_klets(seq: &str, k: usize, alphabet: &[char]) -> Vec<u64> {
     let n = alphabet.len();
     let mut counts = vec![0u64; n.pow(k as u32)];
-    let idx: Vec<Option<usize>> = seq
-        .chars()
-        .map(|c| alphabet.iter().position(|&a| a == c))
-        .collect();
-    if k == 0 || idx.len() < k {
+    if k == 0 {
         return counts;
     }
-    'outer: for w in idx.windows(k) {
-        let mut l = 0;
-        for i in w {
-            match i {
-                Some(i) => l = l * n + i,
-                None => continue 'outer,
+    // A rolling code of the last k letters; `run` counts the letters since
+    // the last one outside the alphabet.
+    let keep = n.pow(k as u32 - 1);
+    let (mut code, mut run) = (0usize, 0usize);
+    let mut feed = |idx: Option<usize>| match idx {
+        None => run = 0,
+        Some(i) => {
+            code = (code % keep) * n + i;
+            run += 1;
+            if run >= k {
+                counts[code] += 1;
             }
         }
-        counts[l] += 1;
+    };
+    if seq.is_ascii() && alphabet.iter().all(char::is_ascii) {
+        let mut table = [usize::MAX; 128];
+        for (i, &a) in alphabet.iter().enumerate() {
+            table[a as usize] = i;
+        }
+        for b in seq.bytes() {
+            let i = table[b as usize];
+            feed((i != usize::MAX).then_some(i));
+        }
+    } else {
+        for c in seq.chars() {
+            feed(alphabet.iter().position(|&a| a == c));
+        }
     }
     counts
+}
+
+/// The part of `s` from 1-based letter `start` to `stop`, inclusive.
+/// `bounds` holds the byte offset of every letter (and the end) for
+/// non-ASCII strings.
+fn letters<'a>(s: &'a str, bounds: Option<&[usize]>, start: usize, stop: usize) -> &'a str {
+    match bounds {
+        None => &s[start - 1..stop],
+        Some(b) => &s[b[start - 1]..b[stop]],
+    }
 }
 
 /// 1-based start and stop coordinates of sliding windows over a sequence of
@@ -178,7 +219,8 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
     let mut ks = opts.k.clone();
     ks.sort_unstable();
     ks.dedup();
-    let mut seqs: Vec<String> = seqs.iter().map(|s| s.as_ref().to_string()).collect();
+    // Borrowed unless reverse complements are added below.
+    let mut seqs: Vec<std::borrow::Cow<str>> = seqs.iter().map(|s| s.as_ref().into()).collect();
     let alphabet = match &opts.alphabet {
         Some(a) => {
             let mut a = a.clone();
@@ -194,7 +236,7 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
             .iter()
             .map(|s| reverse_complement_seq(s, rna))
             .collect();
-        seqs.extend(rcs);
+        seqs.extend(rcs.into_iter().map(std::borrow::Cow::Owned));
     }
     let names: Vec<String> = if names.len() == seqs.len() {
         names.to_vec()
@@ -293,7 +335,17 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
     if opts.merge && seqs.iter().any(|s| s.chars().count() != min_len) {
         return arg_err("merged windowed counts need all sequences to be of equal length");
     }
-    let chars: Vec<Vec<char>> = seqs.iter().map(|s| s.chars().collect()).collect();
+    let bounds: Vec<Option<Vec<usize>>> = seqs
+        .iter()
+        .map(|s| {
+            (!s.is_ascii()).then(|| {
+                s.char_indices()
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(s.len()))
+                    .collect()
+            })
+        })
+        .collect();
     if wins
         .iter()
         .flatten()
@@ -307,14 +359,13 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
         let kl = klets(&alphabet, k);
         // counts[seq][window][klet]
         let counts: Vec<Vec<Vec<u64>>> = with_threads(opts.nthreads, || {
-            chars
-                .par_iter()
+            seqs.par_iter()
+                .zip(&bounds)
                 .zip(&wins)
-                .map(|(c, ws)| {
+                .map(|((s, b), ws)| {
                     ws.iter()
                         .map(|&(start, stop)| {
-                            let sub: String = c[start - 1..stop].iter().collect();
-                            count_klets(&sub, k, &alphabet)
+                            count_klets(letters(s, b.as_deref(), start, stop), k, &alphabet)
                         })
                         .collect()
                 })
@@ -378,4 +429,20 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
         });
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn klets_counted_for_any_letters() {
+        let ascii = count_klets("AACGNAAC", 2, &['A', 'C', 'G']);
+        // AA, AC, CG, then N breaks the run, then AA, AC.
+        assert_eq!(ascii, [2, 2, 0, 0, 0, 1, 0, 0, 0]);
+        let greek = count_klets("αβαNββ", 2, &['α', 'β']);
+        assert_eq!(greek, [0, 1, 1, 1]);
+        let bounds: Vec<usize> = "αβγ".char_indices().map(|(i, _)| i).chain([6]).collect();
+        assert_eq!(letters("αβγ", Some(&bounds), 2, 3), "βγ");
+    }
 }
