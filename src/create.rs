@@ -224,6 +224,19 @@ fn check_string_letters(letters: &[char], alphabet: &Alphabet) -> Result<()> {
 /// strings. The alphabet is guessed from the letters when `None`: DNA (with
 /// IUPAC codes), then RNA, then amino acids, and otherwise a custom alphabet
 /// of the letters present.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::MotifType;
+/// use universalmotif::create::{CreateOptions, from_strings};
+///
+/// let opts = CreateOptions { motif_type: MotifType::Pcm, ..Default::default() };
+/// let m = from_strings(&["TGACTCA", "TGAGTCA"], None, &opts)?;
+/// assert_eq!(m.width(), 7);
+/// assert_eq!(m.matrix.get(3, 0), 2.0); // both sites start with T
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn from_strings(
     seqs: &[&str],
     alphabet: Option<Alphabet>,

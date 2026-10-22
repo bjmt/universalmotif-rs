@@ -207,6 +207,19 @@ pub fn get_scores(motif: &Motif, allow_nonfinite: bool) -> Result<Vec<f64>> {
 /// Every word scoring at least `score`, as universalmotif's
 /// `get_matches()` (found by branch and bound, in the same order). A score
 /// of `+Inf` has no matches; a score outside the motif's range is an error.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::create::{CreateOptions, from_strings};
+/// use universalmotif::scoring::{get_matches, motif_range};
+///
+/// let opts = CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() };
+/// let m = from_strings(&["TATAAA"], None, &opts)?;
+/// let (_, best) = motif_range(&m, false)?;
+/// assert_eq!(get_matches(&m, best, false)?, ["TATAAA"]);
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn get_matches(motif: &Motif, score: f64, allow_nonfinite: bool) -> Result<Vec<String>> {
     let pwm = scoring_pwm(motif, allow_nonfinite)?;
     if score == f64::INFINITY {

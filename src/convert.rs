@@ -334,6 +334,21 @@ pub fn consensus_to_ppm_aa(letter: char) -> Result<[f64; 20]> {
 /// own type returns it unchanged.
 ///
 /// As in universalmotif, the consensus and total IC are left as they were.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::MotifType;
+/// use universalmotif::convert::convert_type;
+/// use universalmotif::create::{CreateOptions, from_strings};
+///
+/// let opts = CreateOptions { nsites: Some(10.0), ..Default::default() };
+/// let ppm = from_strings(&["TATAAA"], None, &opts)?;
+/// let pwm = convert_type(&ppm, MotifType::Pwm, Some(1.0), false)?;
+/// assert_eq!(pwm.motif_type, MotifType::Pwm);
+/// assert!(pwm.matrix.get(3, 0) > 0.0); // T is favoured at the first position
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn convert_type(
     motif: &Motif,
     to: MotifType,

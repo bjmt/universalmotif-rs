@@ -258,6 +258,19 @@ fn shuffle_one<T: Copy + Ord>(
 /// Shuffle sequences while preserving their k-let composition (exactly with
 /// the Euler and linear methods, on average with the Markov method). Each
 /// sequence is shuffled with its own alphabet.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::shuffle::{ShuffleOptions, shuffle_sequences};
+///
+/// let opts = ShuffleOptions { k: 2, seed: 1, ..Default::default() };
+/// let shuffled = shuffle_sequences(&["ACGTTGCAAGGCTTAC"], &opts)?;
+/// let mut letters: Vec<char> = shuffled[0].chars().collect();
+/// letters.sort();
+/// assert_eq!(letters.iter().collect::<String>(), "AAAACCCCGGGGTTTT");
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn shuffle_sequences<S: AsRef<str> + Sync>(
     seqs: &[S],
     opts: &ShuffleOptions,

@@ -473,6 +473,22 @@ impl Default for TreeOptions {
 /// motifs are compared with [`crate::compare::compare_matrix`], mean column
 /// correlations become distances as `(1 - score) / 2`, and the distances are
 /// clustered with [`hclust`].
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::cluster::{TreeOptions, motif_tree};
+/// use universalmotif::create::{CreateOptions, from_strings};
+///
+/// let opts = CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() };
+/// let motifs = ["TGACTCA", "TGAGTCA", "CACGTG", "CACATG"]
+///     .iter()
+///     .map(|s| from_strings(&[s], None, &opts))
+///     .collect::<Result<Vec<_>, _>>()?;
+/// let tree = motif_tree(&motifs, &TreeOptions::default())?;
+/// assert_eq!(tree.merge.len(), 3);
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn motif_tree(motifs: &[crate::motif::Motif], opts: &TreeOptions) -> Result<Tree> {
     let copts = crate::compare::CompareOptions {
         min_overlap: opts.min_overlap,

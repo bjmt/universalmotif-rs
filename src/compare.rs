@@ -615,6 +615,25 @@ fn consensus_range<C: Col>(cols: &[C], start: i64, len: usize, alphabet: &Alphab
 ///
 /// Returns one [`Comparison`] per (query, target) pair, ordered by query and
 /// then target, without any filtering.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::compare::{CompareOptions, compare_motifs};
+/// use universalmotif::create::{CreateOptions, from_strings};
+///
+/// let opts = CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() };
+/// let motifs = [
+///     from_strings(&["TGACTCA", "TGAGTCA"], None, &opts)?,
+///     from_strings(&["TGACGTCA"], None, &opts)?,
+///     from_strings(&["CACGTG"], None, &opts)?,
+/// ];
+/// // The first motif against all three, best matches first.
+/// for c in compare_motifs(&motifs, &[0], &CompareOptions::default())? {
+///     println!("{} vs {}: {:.3} (P = {:.2e})", c.query, c.target, c.score, c.pvalue);
+/// }
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn compare_motifs(
     motifs: &[Motif],
     queries: &[usize],

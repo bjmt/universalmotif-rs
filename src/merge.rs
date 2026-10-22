@@ -55,6 +55,20 @@ fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
 /// averaged position by position. Positions covered by no motif are uniform. The result is a PPM
 /// whose `nsites` is the sum of the motifs' (1 for motifs without one), with
 /// the average background and the anchor's pseudocount.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::create::{CreateOptions, from_strings};
+/// use universalmotif::merge::{MergeOptions, merge_motifs};
+///
+/// let opts = CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() };
+/// let a = from_strings(&["TGACTCA"], None, &opts)?;
+/// let b = from_strings(&["ATGAGTCAT"], None, &opts)?;
+/// let merged = merge_motifs(&[a, b], &MergeOptions::default())?;
+/// assert_eq!(merged.width(), 9);
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
     let alphabet = shared_alphabet(motifs)?;
     let nl = alphabet.len();

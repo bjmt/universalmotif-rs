@@ -185,6 +185,21 @@ fn per_motif(
 }
 
 /// P-values for `(motif index, score)` pairs.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::create::{CreateOptions, from_strings};
+/// use universalmotif::pvalue::{PvalueOptions, motif_pvalue, motif_score};
+///
+/// let opts = CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() };
+/// let m = from_strings(&["TGACTCA"], None, &opts)?;
+/// // The score a random site reaches with probability 1e-4, and back again.
+/// let score = motif_score(std::slice::from_ref(&m), &[(0, 1e-4)], &PvalueOptions::default())?[0];
+/// let p = motif_pvalue(&[m], &[(0, score)], &PvalueOptions::default())?[0];
+/// assert!(p <= 1e-4);
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn motif_pvalue(
     motifs: &[Motif],
     queries: &[(usize, f64)],

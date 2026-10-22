@@ -853,6 +853,27 @@ pub fn scan_table<S: AsRef<str> + Sync>(
 /// [`scan_table`] for sequences already encoded, which must be for the
 /// motifs' alphabet. [`HitTable::matched_encoded`] gives the matched
 /// letters.
+///
+/// # Example
+///
+/// Pack a genome once and scan it repeatedly, at a quarter of its size as
+/// text:
+///
+/// ```no_run
+/// use universalmotif::Alphabet;
+/// use universalmotif::io::{fasta, meme};
+/// use universalmotif::scan::{ScanOptions, scan_encoded};
+///
+/// let motifs = meme::read(&std::fs::read_to_string("motifs.meme")?, &Default::default())?;
+/// let (names, genome) = fasta::read_encoded("genome.fa.gz", &Alphabet::Dna, 0)?;
+/// let opts = ScanOptions { pvalue: 1e-5, nthreads: 8, ..Default::default() };
+/// let hits = scan_encoded(&motifs, &genome, &opts)?;
+/// for i in 0..hits.len() {
+///     let chrom = &names[hits.sequence[i] as usize];
+///     println!("{chrom}\t{}\t{}\t{}", hits.start[i], hits.end[i], hits.matched_encoded(i, &genome));
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn scan_encoded(
     motifs: &[Motif],
     seqs: &EncodedSequences,
@@ -941,9 +962,25 @@ impl FastaHits {
 }
 
 /// [`scan_table`] for the sequences of a FASTA file (which may be gzipped,
-/// bgzip included), read a batch at a time
-/// on a thread of its own while the last batch is scanned, so the file is
-/// never held in memory whole. Sequence indices follow the file's records.
+/// bgzip included), read a batch at a time on a thread of its own while the
+/// last batch is scanned, so the file is never held in memory whole.
+/// Sequence indices follow the file's records.
+///
+/// # Example
+///
+/// ```no_run
+/// use universalmotif::io::meme;
+/// use universalmotif::scan::{ScanOptions, scan_fasta};
+///
+/// let motifs = meme::read(&std::fs::read_to_string("motifs.meme")?, &Default::default())?;
+/// let opts = ScanOptions { pvalue: 1e-5, nthreads: 8, ..Default::default() };
+/// let hits = scan_fasta(&motifs, "genome.fa.gz", &opts)?;
+/// for i in 0..hits.len() {
+///     let t = &hits.table;
+///     println!("{}\t{}\t{}", hits.names[t.sequence[i] as usize], t.start[i], hits.matched(i));
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn scan_fasta(
     motifs: &[Motif],
     path: impl AsRef<std::path::Path>,

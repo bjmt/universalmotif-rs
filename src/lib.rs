@@ -1,13 +1,70 @@
-//! universalmotif: sequence motif types, conversions and analysis.
+//! Sequence motifs: creating, converting, reading and writing them, and
+//! using them to scan, compare, cluster and test sequences.
 //!
-//! The central type is [`Motif`], a position matrix over an [`Alphabet`]
-//! together with its metadata. Motifs are created with the functions in
-//! [`create`] or with [`MotifBuilder`], converted between count, probability,
-//! weight, information content and contribution matrices with
-//! [`convert::convert_type`], and transformed with the functions in [`ops`].
+//! This crate is a port of the [universalmotif] R/Bioconductor package, and
+//! the engine behind its Python version. Its results are checked against the
+//! R package; where the two differ on purpose (mostly bugs fixed in the
+//! port), [DIVERGENCES.md] explains why.
 //!
-//! The behaviour follows the universalmotif R/Bioconductor package; see
-//! `DIVERGENCES.md` for the places where it intentionally differs.
+//! [universalmotif]: https://bioconductor.org/packages/universalmotif
+//! [DIVERGENCES.md]: https://github.com/bjmt/universalmotif-rs/blob/main/DIVERGENCES.md
+//!
+//! # The motif type
+//!
+//! A [`Motif`] is a position matrix over an [`Alphabet`] (DNA, RNA, amino
+//! acids or a custom set of letters) together with its metadata: name,
+//! background frequencies, pseudocount, site count, gaps and so on. The
+//! matrix is a count, probability, weight, information content or
+//! contribution matrix ([`MotifType`]). Motifs are immutable once built and
+//! always valid; [`MotifBuilder`] and [`MotifParts`] build them.
+//!
+//! # A first example
+//!
+//! ```
+//! use universalmotif::create::{CreateOptions, from_strings};
+//! use universalmotif::compare::{CompareOptions, compare_motifs};
+//! use universalmotif::io::meme;
+//! use universalmotif::scan::{ScanOptions, scan_table};
+//!
+//! // Two motifs from aligned sites.
+//! let opts = CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() };
+//! let ap1 = from_strings(&["TGACTCA", "TGAGTCA", "TGACTAA"], None, &opts)?;
+//! let creb = from_strings(&["TGACGTCA", "TGACGTCA", "TTACGTAA"], None, &opts)?;
+//!
+//! // Write them as MEME text and read them back.
+//! let text = meme::write(&[ap1, creb], &meme::WriteOptions::default())?;
+//! let motifs = meme::read(&text, &meme::ReadOptions::default())?;
+//!
+//! // Scan both strands of a sequence at a P-value cutoff of 1e-3.
+//! let seqs = ["CCCCTGACTCACCCCCATGACGTCATCCC"];
+//! let hits = scan_table(&motifs, &seqs, &ScanOptions { pvalue: 1e-3, ..Default::default() })?;
+//! assert!(hits.len() >= 2);
+//! println!("{} at {}..{}", hits.matched(0, &seqs), hits.start[0], hits.end[0]);
+//!
+//! // Compare the first motif with both.
+//! let comparisons = compare_motifs(&motifs, &[0], &CompareOptions::default())?;
+//! assert_eq!(comparisons.len(), 2);
+//! # Ok::<(), universalmotif::Error>(())
+//! ```
+//!
+//! # Where things are
+//!
+//! | Task | Modules |
+//! |---|---|
+//! | Build and convert motifs | [`create`], [`convert`], [`ops`], [`merge`] |
+//! | Read and write motif and FASTA files | [`io`] |
+//! | P-values and match scores | [`pvalue`], [`scoring`], [`cdf`] |
+//! | Scan sequences, including gapped motifs and whole genomes | [`scan`], [`packed`] |
+//! | Compare and cluster motifs | [`compare`], [`cluster`], [`metrics`] |
+//! | Enrichment, co-occurrence and positional enrichment | [`enrich`], [`coocc`], [`peaks`] |
+//! | Genomic anchors and matched backgrounds | [`proximity`], [`background`], [`ranges`] |
+//! | Sequences: k-lets, complexity, shuffling, sampling, masking | [`kmer`], [`complexity`], [`shuffle`], [`sample`], [`mask`] |
+//! | De novo motif discovery | [`finder`] |
+//!
+//! Functions are named after their counterparts in the R package. Where the
+//! R package has both a full and a `_lite` version, the crate follows the
+//! lite one. Functions that do a lot of work take a thread count
+//! (`nthreads`, 0 for all cores) in their options.
 
 pub mod alphabet;
 pub mod convert;

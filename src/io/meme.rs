@@ -214,6 +214,32 @@ pub struct ReadOptions {
 }
 
 /// Read MEME-formatted motifs.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::io::meme;
+///
+/// let text = "MEME version 4
+///
+/// ALPHABET= ACGT
+///
+/// strands: + -
+///
+/// Background letter frequencies
+/// A 0.25 C 0.25 G 0.25 T 0.25
+///
+/// MOTIF m1
+/// letter-probability matrix: alength= 4 w= 2 nsites= 10
+///  0.9 0.0 0.1 0.0
+///  0.0 0.0 0.0 1.0
+/// ";
+/// let motifs = meme::read(text, &meme::ReadOptions::default())?;
+/// assert_eq!((motifs[0].name.as_str(), motifs[0].width()), ("m1", 2));
+/// let again = meme::write(&motifs, &meme::WriteOptions::default())?;
+/// assert!(again.contains("MOTIF m1"));
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
 pub fn read(text: &str, opts: &ReadOptions) -> Result<Vec<Motif>> {
     let lines = meme_lines(text);
     let h = parse_header(&lines)?;
