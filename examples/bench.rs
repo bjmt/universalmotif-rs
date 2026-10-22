@@ -19,6 +19,7 @@ use universalmotif::background::{MatchOptions, match_bkg};
 use universalmotif::cluster::{Method, TreeOptions, hclust, motif_tree};
 use universalmotif::compare::{CompareOptions, compare_matrix};
 use universalmotif::complexity::{ComplexityOptions, Method as Cx, sequence_complexity};
+use universalmotif::convert::convert_type;
 use universalmotif::coocc::{CooccHit, CooccOptions, motif_coocc};
 use universalmotif::create::{CreateOptions, random};
 use universalmotif::enrich::{EnrichOptions, enrich_motifs};
@@ -26,10 +27,11 @@ use universalmotif::finder::{FinderOptions, motif_finder};
 use universalmotif::io::meme;
 use universalmotif::kmer::{BkgOptions, WindowOptions, get_bkg};
 use universalmotif::merge::{MergeSimilarOptions, merge_similar};
+use universalmotif::ops::add_gap;
 use universalmotif::pvalue::{PvalueOptions, motif_pvalue};
 use universalmotif::scan::{ScanOptions, scan_sequences, scan_table};
 use universalmotif::shuffle::{ShuffleMethod, ShuffleOptions, create_sequences, shuffle_sequences};
-use universalmotif::{Alphabet, Motif};
+use universalmotif::{Alphabet, Matrix, Motif, MotifType};
 
 fn bench_alphabet() -> Alphabet {
     match std::env::var("UM_BENCH_ALPHABET").as_deref() {
@@ -130,6 +132,47 @@ fn main() {
                     ..Default::default()
                 };
                 format!("{} hits", scan_table(&ms, &s, &opts).unwrap().len())
+            })
+        }
+        "scan_gapped" | "scan_gapped_expanded" => {
+            // 20 motifs with a gap of 0 to 5 in the middle (six
+            // combinations each), scanned with their gaps or as the 120
+            // ungapped motifs the R package would expand them into.
+            let t = Instant::now();
+            let s = seqs(10, 1_000_000);
+            let gapped: Vec<Motif> = motifs[..20]
+                .iter()
+                .map(|m| add_gap(m, None, &[0], &[5]).unwrap())
+                .collect();
+            let expanded: Vec<Motif> = gapped
+                .iter()
+                .flat_map(|m| {
+                    let pwm = convert_type(m, MotifType::Pwm, None, false).unwrap();
+                    let cols: Vec<Vec<f64>> = pwm.matrix.columns().map(<[f64]>::to_vec).collect();
+                    let at = m.gap.gaploc[0];
+                    (0..=5).map(move |g| {
+                        let mut c = cols[..at].to_vec();
+                        c.extend(std::iter::repeat_n(vec![0.0; 4], g));
+                        c.extend_from_slice(&cols[at..]);
+                        Motif::builder(Matrix::from_columns(&c).unwrap(), Alphabet::Dna)
+                            .motif_type(Some(MotifType::Pwm))
+                            .build()
+                            .unwrap()
+                    })
+                })
+                .collect();
+            setup += t.elapsed().as_secs_f64();
+            let (label, ms) = if task == "scan_gapped" {
+                ("scan 20 gapped motifs (6 gap sizes) x 10 Mb", &gapped)
+            } else {
+                ("scan their 120 expansions x 10 Mb", &expanded)
+            };
+            timed(label, setup, &mut || {
+                let opts = ScanOptions {
+                    nthreads: threads,
+                    ..Default::default()
+                };
+                format!("{} hits", scan_table(ms, &s, &opts).unwrap().len())
             })
         }
         "compare_scores" | "compare_pvalues" => timed(

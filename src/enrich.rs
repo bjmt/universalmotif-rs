@@ -157,6 +157,7 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
         rc: opts.rc,
         no_overlaps: None,
         nthreads: opts.nthreads,
+        ..Default::default()
     };
     let tgt = count_hits(motifs, sequences, &scan)?;
     let neg = count_hits(motifs, &bkg, &scan)?;

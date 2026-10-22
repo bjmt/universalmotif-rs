@@ -66,6 +66,7 @@ fn scans_match_r() {
                 ignore_motif: b("no.overlaps.by.motif"),
             }),
             nthreads: 1,
+            ..Default::default()
         };
         let hits = scan_sequences(&motifs, &seqs, &opts).unwrap();
         let w = &case["hits"];

@@ -282,6 +282,7 @@ fn coocc_matches_r() {
                 },
             ),
             nthreads: 1,
+            ..Default::default()
         };
         let hits: Vec<CooccHit> = scan_sequences(&ms, &tgt, &scan)
             .unwrap()

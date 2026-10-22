@@ -27,6 +27,10 @@ use crate::ops::normalize;
 use crate::packed::{CodedSeq, EncodedSequences, PackedSeq, Seqs};
 use crate::pvalue::{scoring_matrix, with_threads};
 
+mod gapped;
+
+use gapped::{GapShape, GappedScorer, PieceScorer};
+
 /// Which value decides between overlapping hits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OverlapPriority {
@@ -58,6 +62,14 @@ pub struct ScanOptions {
     pub no_overlaps: Option<NoOverlaps>,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
+    /// Scan gapped motifs with their gaps (otherwise their gaps are
+    /// ignored).
+    pub use_gaps: bool,
+    /// Bonferroni-correct gapped motifs' P-values for the number of
+    /// combinations of gap sizes tried: the score threshold comes from the
+    /// cutoff divided by that number, and P-values are multiplied by it (up
+    /// to 1). Off by default, as in the R package.
+    pub correct_gaps: bool,
 }
 
 impl Default for ScanOptions {
@@ -67,6 +79,8 @@ impl Default for ScanOptions {
             rc: true,
             no_overlaps: None,
             nthreads: 1,
+            use_gaps: true,
+            correct_gaps: false,
         }
     }
 }
@@ -116,6 +130,10 @@ pub struct HitTable {
     /// Whether matched letters are reported in upper case (all but custom
     /// alphabets).
     upper: bool,
+    /// Each hit's combination of gap sizes (0 for motifs without gaps).
+    combo: Vec<u16>,
+    /// The gaps of each motif scanned with them.
+    gaps: Vec<Option<GapShape>>,
 }
 
 impl HitTable {
@@ -127,8 +145,23 @@ impl HitTable {
         self.motif.is_empty()
     }
 
+    /// The size of each gap in hit `i`, if its motif was scanned with gaps.
+    pub fn gap_sizes(&self, i: usize) -> Option<Vec<usize>> {
+        self.gaps[self.motif[i] as usize]
+            .as_ref()
+            .map(|g| g.gap_sizes(self.combo[i]))
+    }
+
+    /// Show the gaps of hit `i` in its matched letters as dots.
+    fn mark_gaps(&self, i: usize, out: &mut [u8]) {
+        if let Some(g) = &self.gaps[self.motif[i] as usize] {
+            g.mark_gaps(self.combo[i], out);
+        }
+    }
+
     /// Write the letters matched by hit `i` (upper case, reverse
-    /// complemented for `-` strand hits) into `out`, replacing its contents.
+    /// complemented for `-` strand hits, and with dots in the gaps of
+    /// gapped motifs) into `out`, replacing its contents.
     pub fn matched_into<S: AsRef<str>>(&self, i: usize, sequences: &[S], out: &mut Vec<u8>) {
         let seq = sequences[self.sequence[i] as usize].as_ref().as_bytes();
         let bytes = &seq[self.start[i] as usize - 1..self.end[i] as usize];
@@ -145,6 +178,7 @@ impl HitTable {
         } else {
             out.extend_from_slice(bytes);
         }
+        self.mark_gaps(i, out);
     }
 
     /// [`HitTable::matched_into`] for hits found by [`scan_encoded`],
@@ -157,6 +191,7 @@ impl HitTable {
             out.reverse();
             out.iter_mut().for_each(|c| *c = complement(*c, self.rna));
         }
+        self.mark_gaps(i, out);
     }
 
     /// The letters matched by hit `i` (see
@@ -300,10 +335,12 @@ impl CodedScorer {
 }
 
 /// How each motif is scored: DNA and RNA on packed sequences, one scorer
-/// per strand; other alphabets letter by letter, forward strand only.
+/// per strand; other alphabets letter by letter, forward strand only;
+/// gapped motifs piece by piece (see [`gapped`]).
 enum Scorers {
     Packed(Vec<(Strand, Scorer)>),
     Coded(CodedScorer),
+    Gapped(GappedScorer),
 }
 
 /// Window starts per unit of work; the decoded letters stay in cache.
@@ -325,12 +362,41 @@ const SPARE_BUFFERS: usize = 4;
 /// What scanning needs to know about one motif.
 struct Prepared {
     width: usize,
+    /// The widest window the motif covers (its width unless it is gapped).
+    span: usize,
+    /// What P-values are multiplied by (see [`ScanOptions::correct_gaps`]).
+    pvalue_scale: f64,
     min_score: i32,
     max_score: f64,
     scorers: Scorers,
     /// P-values of the scores at or above the threshold, unless they were
     /// left out to save memory.
     tail: Option<ScoreTail>,
+}
+
+/// What the hit table needs to know about a motif.
+struct Shape {
+    width: usize,
+    max_score: f64,
+    gaps: Option<GapShape>,
+}
+
+impl Shape {
+    fn of(p: &Prepared) -> Shape {
+        Shape {
+            width: p.width,
+            max_score: p.max_score,
+            gaps: match &p.scorers {
+                Scorers::Gapped(g) => Some(g.shape.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    /// The window a hit covers, with its combination of gap sizes.
+    fn span(&self, combo: u16) -> usize {
+        self.gaps.as_ref().map_or(self.width, |g| g.width(combo))
+    }
 }
 
 /// A hit before it is turned into a [`Hit`].
@@ -342,6 +408,8 @@ struct RawHit {
     /// Position in the order the hits were found, for [`scan_fasta`].
     id: u32,
     minus: bool,
+    /// The combination of gap sizes, for gapped motifs.
+    combo: u16,
     /// Filled in once the motif's tail is at hand.
     pvalue: f64,
 }
@@ -350,6 +418,10 @@ struct RawHit {
 /// of unknown letters (ending at `seg_end`) with every motif. The packed
 /// letters are decoded once into one byte per position, holding the four
 /// letters that start there.
+#[allow(clippy::too_many_arguments)]
+// Kept out of line: inlined into the work loop, it compiles to a slower
+// scanning loop.
+#[inline(never)]
 fn scan_chunk(
     prepared: &[Option<Prepared>],
     seq: &PackedSeq,
@@ -357,15 +429,11 @@ fn scan_chunk(
     starts: (usize, usize),
     seg_end: usize,
     quads: &mut Vec<u8>,
+    pieces: &mut Vec<Vec<i32>>,
     out: &mut Vec<RawHit>,
 ) {
     let (c, end) = starts;
-    let max_w = prepared
-        .iter()
-        .flatten()
-        .map(|p| p.width)
-        .max()
-        .unwrap_or(0);
+    let max_w = prepared.iter().flatten().map(|p| p.span).max().unwrap_or(0);
     quads.clear();
     quads.extend((c..(end + max_w).min(seg_end + 4)).map(|i| seq.quad(i)));
     for (mi, p) in prepared.iter().enumerate() {
@@ -392,17 +460,29 @@ fn scan_chunk(
                         minus: *strand == Strand::Minus,
                         score: s,
                         id: 0,
+                        combo: 0,
                         pvalue: f64::NAN,
                     });
                 }
             }
         }
     }
+    if prepared
+        .iter()
+        .flatten()
+        .any(|p| matches!(p.scorers, Scorers::Gapped(_)))
+    {
+        let stop = (end + max_w).min(seg_end);
+        scan_chunk_gapped(prepared, quads, si, starts, stop, seg_end, pieces, out);
+    }
 }
 
 /// [`scan_chunk`] for alphabets other than DNA and RNA: the letter codes of
 /// each group of `span` positions are combined once per position.
 #[allow(clippy::too_many_arguments)]
+// Kept out of line: inlined into the work loop, it compiles to a slower
+// scanning loop.
+#[inline(never)]
 fn scan_chunk_coded(
     prepared: &[Option<Prepared>],
     seq: &CodedSeq,
@@ -412,15 +492,11 @@ fn scan_chunk_coded(
     n: usize,
     span: usize,
     keys: &mut Vec<u16>,
+    pieces: &mut Vec<Vec<i32>>,
     out: &mut Vec<RawHit>,
 ) {
     let (c, end) = starts;
-    let max_w = prepared
-        .iter()
-        .flatten()
-        .map(|p| p.width)
-        .max()
-        .unwrap_or(0);
+    let max_w = prepared.iter().flatten().map(|p| p.span).max().unwrap_or(0);
     keys.clear();
     // The last letter any window here can use is at seg_end - 1.
     let stop = (end + max_w).min(seg_end);
@@ -452,9 +528,98 @@ fn scan_chunk_coded(
                     minus: false,
                     score: s,
                     id: 0,
+                    combo: 0,
                     pvalue: f64::NAN,
                 });
             }
+        }
+    }
+    if prepared
+        .iter()
+        .flatten()
+        .any(|p| matches!(p.scorers, Scorers::Gapped(_)))
+    {
+        scan_chunk_coded_gapped(prepared, keys, si, starts, stop, seg_end, span, pieces, out);
+    }
+}
+
+/// The gapped motifs' part of [`scan_chunk`], kept apart so the loop over
+/// other motifs compiles as it would without them.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn scan_chunk_gapped(
+    prepared: &[Option<Prepared>],
+    quads: &[u8],
+    si: usize,
+    starts: (usize, usize),
+    stop: usize,
+    seg_end: usize,
+    pieces: &mut Vec<Vec<i32>>,
+    out: &mut Vec<RawHit>,
+) {
+    let c = starts.0;
+    let score = |piece: &PieceScorer, at: usize| match piece {
+        PieceScorer::Packed(s) => {
+            let q = &quads[at - c..];
+            s.groups
+                .iter()
+                .enumerate()
+                .map(|(g, t)| t[q[4 * g] as usize])
+                .sum()
+        }
+        PieceScorer::Coded(_) => unreachable!("DNA and RNA pieces are packed"),
+    };
+    for (mi, p) in prepared.iter().enumerate() {
+        if let Some(Prepared {
+            scorers: Scorers::Gapped(g),
+            min_score,
+            ..
+        }) = p
+        {
+            g.scan(
+                mi, si, starts, stop, seg_end, *min_score, pieces, score, out,
+            );
+        }
+    }
+}
+
+/// The gapped motifs' part of [`scan_chunk_coded`] (see
+/// [`scan_chunk_gapped`]).
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn scan_chunk_coded_gapped(
+    prepared: &[Option<Prepared>],
+    keys: &[u16],
+    si: usize,
+    starts: (usize, usize),
+    stop: usize,
+    seg_end: usize,
+    span: usize,
+    pieces: &mut Vec<Vec<i32>>,
+    out: &mut Vec<RawHit>,
+) {
+    let c = starts.0;
+    let score = |piece: &PieceScorer, at: usize| match piece {
+        PieceScorer::Coded(s) => {
+            let k = &keys[at - c..];
+            s.groups
+                .iter()
+                .enumerate()
+                .map(|(g, t)| t[k[span * g] as usize])
+                .sum()
+        }
+        PieceScorer::Packed(_) => unreachable!("other alphabets are coded"),
+    };
+    for (mi, p) in prepared.iter().enumerate() {
+        if let Some(Prepared {
+            scorers: Scorers::Gapped(g),
+            min_score,
+            ..
+        }) = p
+        {
+            g.scan(
+                mi, si, starts, stop, seg_end, *min_score, pieces, score, out,
+            );
         }
     }
 }
@@ -481,13 +646,25 @@ fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Optio
         pwm = convert_type(&normalize(m)?, MotifType::Pwm, None, false)?;
     }
     let sm = scoring_matrix(&pwm, None)?;
+    let gaps = if opts.use_gaps && m.gap.isgapped && !m.gap.gaploc.is_empty() {
+        Some(GapShape::from_motif(m)?)
+    } else {
+        None
+    };
+    let pvalue_scale = match &gaps {
+        Some(g) if opts.correct_gaps => g.combos() as f64,
+        _ => 1.0,
+    };
     let dist = ScoreDistribution::new(&sm.pwm, &sm.bkg);
-    let threshold = dist.score(opts.pvalue);
+    let threshold = dist.score(opts.pvalue / pvalue_scale);
     let min = score_grid_ceiling(threshold);
     if min >= i32::MAX as f64 {
         return Ok(None);
     }
-    let scorers = if m.alphabet.is_nucleotide() {
+    let nucleotide = m.alphabet.is_nucleotide();
+    let scorers = if let Some(shape) = gaps {
+        Scorers::Gapped(GappedScorer::new(&sm.pwm, shape, nucleotide, opts.rc))
+    } else if nucleotide {
         let mut s = vec![(Strand::Plus, Scorer::new(&sm.pwm))];
         if opts.rc {
             s.push((Strand::Minus, Scorer::new(&sm.pwm.reversed())));
@@ -496,8 +673,14 @@ fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Optio
     } else {
         Scorers::Coded(CodedScorer::new(&sm.pwm))
     };
+    let span = match &scorers {
+        Scorers::Gapped(g) => g.shape.max_width(),
+        _ => sm.pwm.ncol(),
+    };
     Ok(Some(Prepared {
         width: sm.pwm.ncol(),
+        span,
+        pvalue_scale,
         min_score: min as i32,
         max_score: sm
             .pwm
@@ -541,20 +724,36 @@ fn scan_raw(
     let span = if n_letters <= 64 { 2 } else { 1 };
     work.par_iter()
         .fold(
-            || (Vec::new(), Vec::new(), Vec::new()),
-            |(mut quads, mut keys, mut out), &(si, starts, seg_end)| {
+            || (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            |(mut quads, mut keys, mut pieces, mut out), &(si, starts, seg_end)| {
                 match seqs.seqs() {
-                    Seqs::Packed(v) => {
-                        scan_chunk(prepared, &v[si], si, starts, seg_end, &mut quads, &mut out)
-                    }
+                    Seqs::Packed(v) => scan_chunk(
+                        prepared,
+                        &v[si],
+                        si,
+                        starts,
+                        seg_end,
+                        &mut quads,
+                        &mut pieces,
+                        &mut out,
+                    ),
                     Seqs::Coded(v) => scan_chunk_coded(
-                        prepared, &v[si], si, starts, seg_end, n_letters, span, &mut keys, &mut out,
+                        prepared,
+                        &v[si],
+                        si,
+                        starts,
+                        seg_end,
+                        n_letters,
+                        span,
+                        &mut keys,
+                        &mut pieces,
+                        &mut out,
                     ),
                 }
-                (quads, keys, out)
+                (quads, keys, pieces, out)
             },
         )
-        .map(|(_, _, out)| out)
+        .map(|(_, _, _, out)| out)
         .reduce(Vec::new, |mut a, mut b| {
             a.append(&mut b);
             a
@@ -566,16 +765,16 @@ fn scan_raw(
 /// width and best possible score.
 fn finish(
     mut raw: Vec<RawHit>,
-    shapes: &[Option<(usize, f64)>],
+    shapes: &[Option<Shape>],
     opts: &ScanOptions,
     alphabet: &Alphabet,
 ) -> (HitTable, Vec<u32>) {
-    raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus));
+    raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
     if let Some(no) = opts.no_overlaps {
         let intervals: Vec<Interval> = raw
             .iter()
             .map(|r| {
-                let w = shapes[r.motif as usize].unwrap().0 as i64;
+                let w = shapes[r.motif as usize].as_ref().unwrap().span(r.combo) as i64;
                 Interval {
                     sequence: r.sequence as usize,
                     motif: r.motif as usize,
@@ -606,14 +805,21 @@ fn finish(
         pvalue: Vec::with_capacity(n),
         rna: *alphabet == Alphabet::Rna,
         upper: !matches!(alphabet, Alphabet::Custom(_)),
+        combo: Vec::with_capacity(n),
+        gaps: shapes
+            .iter()
+            .map(|s| s.as_ref().and_then(|s| s.gaps.clone()))
+            .collect(),
     };
     for r in &raw {
-        let (width, max_score) = shapes[r.motif as usize].unwrap();
+        let shape = shapes[r.motif as usize].as_ref().unwrap();
+        let (width, max_score) = (shape.span(r.combo), shape.max_score);
         let score = r.score as f64 / 1000.0;
         t.motif.push(r.motif as i64);
         t.sequence.push(r.sequence as i64);
         t.start.push(r.start as i64 + 1);
         t.end.push((r.start as usize + width) as i64);
+        t.combo.push(r.combo);
         t.minus.push(r.minus);
         t.score.push(score);
         t.score_pct.push(100.0 * score / max_score);
@@ -661,7 +867,7 @@ pub fn scan_encoded(
     }
     let mut raw: Vec<RawHit> = Vec::new();
     // Each motif's width and best possible score, or None if it cannot hit.
-    let mut shapes: Vec<Option<(usize, f64)>> = Vec::with_capacity(motifs.len());
+    let mut shapes: Vec<Option<Shape>> = Vec::with_capacity(motifs.len());
     with_threads(opts.nthreads, || -> Result<()> {
         let work = work_items(seqs);
         // Motifs are scanned in batches whose P-value tails fit in
@@ -689,15 +895,12 @@ pub fn scan_encoded(
             let mut hits = scan_raw(&batch, seqs, &work);
             hits.par_iter_mut().for_each(|r| {
                 let p = batch[r.motif as usize].as_ref().unwrap();
-                r.pvalue = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
+                let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
+                r.pvalue = (raw * p.pvalue_scale).min(1.0);
                 r.motif += base as u32;
             });
             raw.append(&mut hits);
-            shapes.extend(
-                batch
-                    .iter()
-                    .map(|p| p.as_ref().map(|p| (p.width, p.max_score))),
-            );
+            shapes.extend(batch.iter().map(|p| p.as_ref().map(Shape::of)));
             base += batch.len();
         }
         Ok(())
@@ -788,6 +991,8 @@ fn scan_fasta_with(
         Ok::<_, Error>(all)
     })??;
 
+    let shapes: Vec<Option<Shape>> = prepared.iter().map(|p| p.as_ref().map(Shape::of)).collect();
+
     let (tx, rx) = std::sync::mpsc::sync_channel::<(Vec<String>, EncodedSequences)>(1);
     // Scanned batches hand their buffers back to the reader. Allocating
     // fresh ones instead leaves freed chromosome-sized blocks to the
@@ -825,9 +1030,9 @@ fn scan_fasta_with(
                 let work = work_items(&batch);
                 let mut hits = scan_raw(&prepared, &batch, &work);
                 for h in &mut hits {
-                    let p = prepared[h.motif as usize].as_ref().unwrap();
+                    let shape = shapes[h.motif as usize].as_ref().unwrap();
                     let start = letters.len();
-                    let (a, b) = (h.start as usize, h.start as usize + p.width);
+                    let (a, b) = (h.start as usize, h.start as usize + shape.span(h.combo));
                     batch.decode_into(h.sequence as usize, a, b, &mut letters);
                     if h.minus {
                         let rna = alphabet == Alphabet::Rna;
@@ -835,6 +1040,9 @@ fn scan_fasta_with(
                         letters[start..]
                             .iter_mut()
                             .for_each(|c| *c = complement(*c, rna));
+                    }
+                    if let Some(g) = &shape.gaps {
+                        g.mark_gaps(h.combo, &mut letters[start..]);
                     }
                     h.id = letter_starts.len() as u32;
                     letter_starts.push(start);
@@ -863,6 +1071,7 @@ fn scan_fasta_with(
     with_threads(opts.nthreads, || {
         groups.into_par_iter().try_for_each(|g| -> Result<()> {
             let m = g[0].motif as usize;
+            let scale = prepared[m].as_ref().unwrap().pvalue_scale;
             let rebuilt;
             let tail = match &prepared[m].as_ref().unwrap().tail {
                 Some(t) => t,
@@ -875,16 +1084,12 @@ fn scan_fasta_with(
                 }
             };
             for r in g {
-                r.pvalue = tail.pvalue(r.score as f64 / 1000.0);
+                r.pvalue = (tail.pvalue(r.score as f64 / 1000.0) * scale).min(1.0);
             }
             Ok(())
         })
     })??;
 
-    let shapes: Vec<Option<(usize, f64)>> = prepared
-        .iter()
-        .map(|p| p.as_ref().map(|p| (p.width, p.max_score)))
-        .collect();
     let (table, ids) = finish(raw, &shapes, opts, &alphabet);
     let mut kept = Vec::new();
     let mut offsets = Vec::with_capacity(ids.len());
@@ -1050,6 +1255,239 @@ mod tests {
         assert_eq!(hits.matched(planted, &[&cseq]), "abcDe");
     }
 
+    /// Every window and combination of gap sizes of a gapped motif scored
+    /// the plain way: `(start, minus, gap sizes, score, matched letters)`.
+    fn naive_gapped(
+        motif: &Motif,
+        seq: &str,
+        pvalue: f64,
+        rc: bool,
+    ) -> Vec<(usize, bool, Vec<usize>, i32, String)> {
+        let sm = scoring_matrix(
+            &convert_type(motif, MotifType::Pwm, None, false).unwrap(),
+            None,
+        )
+        .unwrap();
+        let min = score_grid_ceiling(ScoreDistribution::new(&sm.pwm, &sm.bkg).score(pvalue)) as i32;
+        let letters: Vec<u8> = motif.alphabet.letters().iter().map(|&c| c as u8).collect();
+        let shape = GapShape::from_motif(motif).unwrap();
+        let rna = motif.alphabet == crate::alphabet::Alphabet::Rna;
+        let bytes = seq.as_bytes();
+        let mut out = Vec::new();
+        for combo in 0..shape.combos() as u16 {
+            let gaps = shape.gap_sizes(combo);
+            let w = shape.width(combo);
+            // Motif columns at each window offset, None in the gaps.
+            let mut cols: Vec<Option<usize>> = Vec::new();
+            let mut col = 0;
+            for (piece, &width) in shape.piece_widths().iter().enumerate() {
+                for _ in 0..width {
+                    cols.push(Some(col));
+                    col += 1;
+                }
+                if piece < gaps.len() {
+                    cols.extend(std::iter::repeat_n(None, gaps[piece]));
+                }
+            }
+            if bytes.len() < w {
+                continue;
+            }
+            for i in 0..=bytes.len() - w {
+                let window = &bytes[i..i + w];
+                let index = |b: u8| letters.iter().position(|&l| l == b.to_ascii_uppercase());
+                if window.iter().any(|&b| index(b).is_none()) {
+                    continue;
+                }
+                for minus in [false, true] {
+                    if minus && !rc {
+                        continue;
+                    }
+                    let oriented: Vec<u8> = if minus {
+                        window
+                            .iter()
+                            .rev()
+                            .map(|&b| complement(b.to_ascii_uppercase(), rna))
+                            .collect()
+                    } else {
+                        window.iter().map(u8::to_ascii_uppercase).collect()
+                    };
+                    let s: i32 = cols
+                        .iter()
+                        .zip(&oriented)
+                        .filter_map(|(c, &b)| {
+                            c.map(|c| grid_value(sm.pwm.get(index(b).unwrap(), c)))
+                        })
+                        .sum();
+                    if s >= min {
+                        let mut m = oriented.clone();
+                        shape.mark_gaps(combo, &mut m);
+                        out.push((i + 1, minus, gaps.clone(), s, String::from_utf8(m).unwrap()));
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn gapped_scan_matches_plain_scoring() {
+        use crate::alphabet::Alphabet;
+        use crate::ops::add_gap;
+        let copts = CreateOptions {
+            nsites: Some(20.0),
+            pseudocount: 1.0,
+            ..Default::default()
+        };
+        let dna = [
+            add_gap(
+                &from_strings(&["TTGACTCA"], None, &copts).unwrap(),
+                Some(&[3]),
+                &[0],
+                &[4],
+            )
+            .unwrap(),
+            add_gap(
+                &from_strings(&["CACGTGAAATT"], None, &copts).unwrap(),
+                Some(&[2, 6]),
+                &[1, 0],
+                &[2, 5],
+            )
+            .unwrap(),
+            add_gap(
+                &from_strings(&["GGGCGGGA"], None, &copts).unwrap(),
+                Some(&[1]),
+                &[2],
+                &[2],
+            )
+            .unwrap(),
+        ];
+        let mut seq = create_sequences(&['A', 'C', 'G', 'T'], 1, CHUNK + 4_000, None, 11, 1)
+            .unwrap()
+            .remove(0)
+            .into_bytes();
+        // Sites with each gap size, unknown letters inside a gap and across a
+        // chunk boundary, and lower case.
+        for (at, site) in [
+            (100, &b"TTGACTCA"[..]),
+            (200, b"TTGAAAACTCA"),
+            (300, b"TTGNNACTCA"),
+            (400, b"CAGCGTGAAAGGTT"),
+            (CHUNK - 5, b"TTGACCCTCA"),
+            (CHUNK + 100, b"tgagtgtgcaa"),
+        ] {
+            seq[at..at + site.len()].copy_from_slice(site);
+        }
+        seq[1_000..1_050].fill(b'N');
+        let seq = String::from_utf8(seq).unwrap();
+        for rc in [true, false] {
+            let opts = ScanOptions {
+                pvalue: 0.005,
+                rc,
+                nthreads: 2,
+                ..Default::default()
+            };
+            let t = scan_table(&dna, &[&seq], &opts).unwrap();
+            for (mi, m) in dna.iter().enumerate() {
+                let mut got: Vec<_> = (0..t.len())
+                    .filter(|&i| t.motif[i] == mi as i64)
+                    .map(|i| {
+                        let w = (t.end[i] - t.start[i] + 1) as usize;
+                        assert_eq!(w, GapShape::from_motif(m).unwrap().width(t.combo[i]));
+                        (
+                            t.start[i] as usize,
+                            t.minus[i],
+                            t.gap_sizes(i).unwrap(),
+                            (t.score[i] * 1000.0).round() as i32,
+                            t.matched(i, &[&seq]),
+                        )
+                    })
+                    .collect();
+                got.sort();
+                let want = naive_gapped(m, &seq, 0.005, rc);
+                assert!(want.len() > 20, "motif {mi}: only {} hits", want.len());
+                assert_eq!(got, want, "motif {mi}, rc {rc}");
+            }
+        }
+        // Corrected for the number of gap sizes: the hits whose P-value is
+        // within the cutoff divided by that number, their P-values scaled.
+        let base = ScanOptions {
+            pvalue: 0.005,
+            nthreads: 2,
+            ..Default::default()
+        };
+        let raw = scan_table(&dna, &[&seq], &base).unwrap();
+        let corrected = ScanOptions {
+            correct_gaps: true,
+            ..base.clone()
+        };
+        let adj = scan_table(&dna, &[&seq], &corrected).unwrap();
+        assert!(!adj.is_empty() && adj.len() < raw.len());
+        let key = |t: &HitTable, i: usize| (t.motif[i], t.start[i], t.minus[i], t.combo[i]);
+        let mut expected = Vec::new();
+        for i in 0..raw.len() {
+            let n = GapShape::from_motif(&dna[raw.motif[i] as usize])
+                .unwrap()
+                .combos() as f64;
+            if raw.pvalue[i] <= 0.005 / n {
+                expected.push((key(&raw, i), (raw.pvalue[i] * n).min(1.0)));
+            }
+        }
+        let got: Vec<_> = (0..adj.len())
+            .map(|i| (key(&adj, i), adj.pvalue[i]))
+            .collect();
+        assert_eq!(got, expected);
+        assert!(adj.pvalue.iter().all(|&p| p <= 0.005));
+
+        // Without use_gaps the motifs are scanned whole.
+        let opts = ScanOptions {
+            pvalue: 0.005,
+            use_gaps: false,
+            ..Default::default()
+        };
+        let ungapped: Vec<Motif> = dna.iter().map(|m| crate::ops::ungap(m, true)).collect();
+        assert_eq!(
+            scan_table(&dna, &[&seq], &opts).unwrap().start,
+            scan_table(&ungapped, &[&seq], &opts).unwrap().start
+        );
+
+        // Other alphabets take the coded path, forward strand only.
+        let aa = add_gap(
+            &from_strings(&["MKVLAW"], Some(Alphabet::Aa), &copts).unwrap(),
+            Some(&[2, 4]),
+            &[0, 1],
+            &[3, 2],
+        )
+        .unwrap();
+        let aa_letters: Vec<char> = Alphabet::Aa.letters().to_vec();
+        let mut aseq = create_sequences(&aa_letters, 1, 20_000, None, 12, 1)
+            .unwrap()
+            .remove(0);
+        aseq.replace_range(500..509, "MKAAVLXAW");
+        aseq.replace_range(700..708, "mkvvlqaw");
+        let opts = ScanOptions {
+            pvalue: 0.001,
+            nthreads: 2,
+            ..Default::default()
+        };
+        let t = scan_table(std::slice::from_ref(&aa), &[&aseq], &opts).unwrap();
+        let mut got: Vec<_> = (0..t.len())
+            .map(|i| {
+                (
+                    t.start[i] as usize,
+                    t.minus[i],
+                    t.gap_sizes(i).unwrap(),
+                    (t.score[i] * 1000.0).round() as i32,
+                    t.matched(i, &[&aseq]),
+                )
+            })
+            .collect();
+        got.sort();
+        let want = naive_gapped(&aa, &aseq, 0.001, false);
+        assert!(want.len() > 5);
+        assert_eq!(got, want);
+    }
+
     #[test]
     fn fasta_and_encoded_scans_match_scan_table() {
         use crate::alphabet::Alphabet;
@@ -1062,6 +1500,13 @@ mod tests {
             from_strings(&["TTGACGTCAAGG"], None, &copts).unwrap(),
             from_strings(&["CACGTG"], None, &copts).unwrap(),
             from_strings(&["WGATAR"], None, &copts).unwrap(),
+            crate::ops::add_gap(
+                &from_strings(&["TTGACTCA"], None, &copts).unwrap(),
+                Some(&[3]),
+                &[0],
+                &[3],
+            )
+            .unwrap(),
         ];
         let aa = [
             from_strings(&["MKVLAW"], Some(Alphabet::Aa), &copts).unwrap(),

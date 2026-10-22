@@ -102,6 +102,11 @@ change is listed here so the R package can be fixed to match.
   and sequence and carries on.
 - **Lower-case sequences.** The port scans lower-case letters like
   upper-case ones (Biostrings sequences are always upper case).
+- **Gapped motifs mostly fail to scan.** The full `scan_sequences()` fails
+  for gapped motifs with `RC = TRUE` (its default), for a motif with a
+  single gap that can have size zero, and when an ungapped motif comes
+  before a gapped one in the list. The port scans both strands and any
+  gaps.
 
 ### Comparison
 
@@ -220,6 +225,15 @@ change is listed here so the R package can be fixed to match.
   The parametric null for comparison P-values remains DNA and RNA only,
   since its Dirichlet grid assumes four letters; other alphabets use the
   empirical null.
+- **Gapped scanning.** `scan_sequences_lite()` ignores gaps. The port scans
+  gapped motifs as the full `scan_sequences()` does: every combination of
+  gap sizes is tried, matched letters show the gaps as dots, and P-values
+  are those of the motif without its gaps, so they are not adjusted for the
+  number of combinations. The port can Bonferroni-correct them for it
+  (`correct_gaps`), which the R package cannot. Each piece between gaps is
+  scored once per
+  position and the combinations are built from those scores, which is
+  about twice as fast as scanning every combination separately.
 - **Lower case letters.** `score_match()`, `prob_match()` and `mask_seqs()`
   accept lower case DNA, RNA and amino acid letters (Biostrings sequences
   are always upper case); masking keeps the case of the letters it leaves.

@@ -1563,3 +1563,42 @@ write_ref(list(
                                              names = I(names(range_seqs)), cases = range_cases),
   meme_alph = alph_cases, log_string_pval = pval_cases, slide_fun = slide_cases),
   "utils.json")
+
+# ---------------------------------------------------------------------------
+# Gapped scanning. The R package fails for gapped motifs with RC = TRUE, for
+# a single gap that can have size zero, and for an ungapped motif listed
+# before a gapped one, so these cases avoid all three.
+
+set.seed(41)
+gap_motifs <- list(
+  add_gap(create_motif("TTGACTCA", nsites = 20, pseudocount = 1, name = "g1"), 3, 1, 4),
+  add_gap(create_motif("CACGTGAAATT", nsites = 20, pseudocount = 1, name = "g2"),
+          c(2, 6), c(1, 0), c(2, 5)),
+  create_motif("WGATAR", nsites = 20, pseudocount = 1, name = "plain")
+)
+gap_seqs <- vapply(1:20, function(i) paste(sample(DNA_BASES, 400, TRUE), collapse = ""),
+                   character(1))
+plant <- function(s, at, site) { substr(s, at, at + nchar(site) - 1) <- site; s }
+gap_seqs[1] <- plant(gap_seqs[1], 50, "TTGAAACTCA")
+gap_seqs[2] <- plant(gap_seqs[2], 80, "TTGACTCA")
+gap_seqs[3] <- plant(gap_seqs[3], 120, "TTGNNACTCA")
+gap_seqs[4] <- plant(gap_seqs[4], 10, "CAGCGTGAAAGGTT")
+gap_seqs[5] <- plant(gap_seqs[5], 300, "CACCGTGTTTTTAAATT")
+gap_seqs <- Biostrings::DNAStringSet(gap_seqs)
+# Overlapping hits are not removed: the full scan_sequences() does that
+# differently from the lite version the port follows.
+gap_scan <- function(motifs, threshold, no.overlaps = FALSE) {
+  r <- suppressMessages(suppressWarnings(scan_sequences(
+    motifs, gap_seqs, threshold = threshold, threshold.type = "pvalue", RC = FALSE,
+    no.overlaps = no.overlaps)))
+  r <- as.data.frame(r)
+  r <- r[order(r$motif.i, r$sequence.i, r$start, r$match), ]
+  df_cols(r[, c("motif.i", "sequence.i", "start", "stop", "score", "match", "pvalue")])
+}
+write_ref(list(
+  motifs = lapply(gap_motifs, motif_record),
+  sequences = I(as.character(gap_seqs)),
+  cases = list(
+    list(threshold = 1e-3, no_overlaps = FALSE, table = gap_scan(gap_motifs, 1e-3)),
+    list(threshold = 1e-4, no_overlaps = FALSE, table = gap_scan(gap_motifs, 1e-4)))),
+  "gapped.json")
