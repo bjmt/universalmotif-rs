@@ -24,7 +24,7 @@ use crate::dedup::{Interval, dedup};
 use crate::error::{Error, Result, arg_err};
 use crate::motif::{Motif, MotifType, Strand};
 use crate::ops::normalize;
-use crate::packed::{CodedSeq, PackedSeq};
+use crate::packed::{CodedSeq, EncodedSequences, PackedSeq, Seqs};
 use crate::pvalue::{scoring_matrix, with_threads};
 
 /// Which value decides between overlapping hits.
@@ -94,7 +94,8 @@ pub struct Hit {
 /// Hits as columns, one entry per hit, ordered by motif, sequence and start
 /// (with `+` strand hits first). Indices and positions are `i64` so the
 /// columns can be handed to Arrow as they are. The matched letters are not
-/// stored; [`HitTable::matched`] reads them from the sequences.
+/// stored; [`HitTable::matched`] reads them from the sequences (and
+/// [`HitTable::matched_encoded`] from encoded ones).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HitTable {
     /// Index of the motif.
@@ -144,6 +145,26 @@ impl HitTable {
         } else {
             out.extend_from_slice(bytes);
         }
+    }
+
+    /// [`HitTable::matched_into`] for hits found by [`scan_encoded`],
+    /// reading the letters from the encoded sequences.
+    pub fn matched_encoded_into(&self, i: usize, seqs: &EncodedSequences, out: &mut Vec<u8>) {
+        out.clear();
+        let (a, b) = (self.start[i] as usize - 1, self.end[i] as usize);
+        seqs.decode_into(self.sequence[i] as usize, a, b, out);
+        if self.minus[i] {
+            out.reverse();
+            out.iter_mut().for_each(|c| *c = complement(*c, self.rna));
+        }
+    }
+
+    /// The letters matched by hit `i` (see
+    /// [`HitTable::matched_encoded_into`]).
+    pub fn matched_encoded(&self, i: usize, seqs: &EncodedSequences) -> String {
+        let mut out = Vec::new();
+        self.matched_encoded_into(i, seqs, &mut out);
+        String::from_utf8_lossy(&out).into_owned()
     }
 
     /// The letters matched by hit `i` (see [`HitTable::matched_into`]).
@@ -285,12 +306,6 @@ enum Scorers {
     Coded(CodedScorer),
 }
 
-/// The sequences in the form their alphabet is scanned in.
-enum Encoded {
-    Packed(Vec<PackedSeq>),
-    Coded(Vec<CodedSeq>),
-}
-
 /// Window starts per unit of work; the decoded letters stay in cache.
 const CHUNK: usize = 1 << 16;
 
@@ -300,14 +315,22 @@ const TAIL_BUDGET: usize = 1 << 22;
 /// Motifs prepared in parallel at a time while filling a batch.
 const PREPARE_GROUP: usize = 32;
 
+/// Letters of sequence read at a time by [`scan_fasta`] (a 16 MB batch for
+/// DNA and RNA).
+const STREAM_BATCH: usize = 1 << 26;
+
+/// Buffers [`scan_fasta`] keeps for reuse.
+const SPARE_BUFFERS: usize = 4;
+
 /// What scanning needs to know about one motif.
 struct Prepared {
     width: usize,
     min_score: i32,
     max_score: f64,
     scorers: Scorers,
-    /// P-values of the scores at or above the threshold.
-    tail: ScoreTail,
+    /// P-values of the scores at or above the threshold, unless they were
+    /// left out to save memory.
+    tail: Option<ScoreTail>,
 }
 
 /// A hit before it is turned into a [`Hit`].
@@ -315,9 +338,11 @@ struct RawHit {
     motif: u32,
     sequence: u32,
     start: u32,
-    minus: bool,
     score: i32,
-    /// Filled in once the motif's batch has been scanned.
+    /// Position in the order the hits were found, for [`scan_fasta`].
+    id: u32,
+    minus: bool,
+    /// Filled in once the motif's tail is at hand.
     pvalue: f64,
 }
 
@@ -366,6 +391,7 @@ fn scan_chunk(
                         start: i as u32,
                         minus: *strand == Strand::Minus,
                         score: s,
+                        id: 0,
                         pvalue: f64::NAN,
                     });
                 }
@@ -425,6 +451,7 @@ fn scan_chunk_coded(
                     start: i as u32,
                     minus: false,
                     score: s,
+                    id: 0,
                     pvalue: f64::NAN,
                 });
             }
@@ -432,171 +459,117 @@ fn scan_chunk_coded(
     }
 }
 
-/// Scan sequences for hits of the motifs, returning them as columns.
-///
-/// Letters of DNA, RNA and amino acid sequences are matched
-/// case-insensitively, and letters of custom alphabets exactly; other
-/// letters (such as `N` or `X`) never contribute to a hit. Only DNA and RNA
-/// have a reverse strand. Sequences shorter than a motif simply have no hits
-/// for it. Hits are ordered by motif, sequence and start, with `+` strand
-/// hits first.
-pub fn scan_table<S: AsRef<str> + Sync>(
-    motifs: &[Motif],
-    sequences: &[S],
-    opts: &ScanOptions,
-) -> Result<HitTable> {
+/// The alphabet of the motifs, after checking the motifs and options.
+fn check_scan(motifs: &[Motif], opts: &ScanOptions) -> Result<Alphabet> {
     let Some(first) = motifs.first() else {
         return arg_err("no motifs to scan with");
     };
     if !(opts.pvalue > 0.0 && opts.pvalue < 1.0) {
         return arg_err("the P-value cutoff must be between 0 and 1");
     }
-    let alphabet = first.alphabet.clone();
-    if motifs.iter().any(|m| m.alphabet != alphabet) {
+    if motifs.iter().any(|m| m.alphabet != first.alphabet) {
         return arg_err("all motifs must share the same alphabet");
     }
-    let nucleotide = alphabet.is_nucleotide();
-    let rna = alphabet == Alphabet::Rna;
-    let n_letters = alphabet.len();
-    if n_letters > 255 {
-        return Err(Error::Unsupported(
-            "alphabets of more than 255 letters cannot be scanned".into(),
-        ));
+    Ok(first.alphabet.clone())
+}
+
+/// A motif's scoring tables and threshold, and its P-value tail if
+/// `keep_tail`; `None` if no window can reach the threshold.
+fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Option<Prepared>> {
+    let mut pwm = convert_type(m, MotifType::Pwm, None, false)?;
+    if pwm.matrix.as_slice().iter().any(|v| v.is_infinite()) {
+        pwm = convert_type(&normalize(m)?, MotifType::Pwm, None, false)?;
     }
-
-    // Each motif's score distribution is only needed for its threshold and
-    // for the P-values above it, so just that tail is kept.
-    let prepare = |m: &Motif| -> Result<Option<Prepared>> {
-        let mut pwm = convert_type(m, MotifType::Pwm, None, false)?;
-        if pwm.matrix.as_slice().iter().any(|v| v.is_infinite()) {
-            pwm = convert_type(&normalize(m)?, MotifType::Pwm, None, false)?;
+    let sm = scoring_matrix(&pwm, None)?;
+    let dist = ScoreDistribution::new(&sm.pwm, &sm.bkg);
+    let threshold = dist.score(opts.pvalue);
+    let min = score_grid_ceiling(threshold);
+    if min >= i32::MAX as f64 {
+        return Ok(None);
+    }
+    let scorers = if m.alphabet.is_nucleotide() {
+        let mut s = vec![(Strand::Plus, Scorer::new(&sm.pwm))];
+        if opts.rc {
+            s.push((Strand::Minus, Scorer::new(&sm.pwm.reversed())));
         }
-        let sm = scoring_matrix(&pwm, None)?;
-        let dist = ScoreDistribution::new(&sm.pwm, &sm.bkg);
-        let threshold = dist.score(opts.pvalue);
-        let min = score_grid_ceiling(threshold);
-        if min >= i32::MAX as f64 {
-            return Ok(None);
-        }
-        let scorers = if nucleotide {
-            let mut s = vec![(Strand::Plus, Scorer::new(&sm.pwm))];
-            if opts.rc {
-                s.push((Strand::Minus, Scorer::new(&sm.pwm.reversed())));
-            }
-            Scorers::Packed(s)
-        } else {
-            Scorers::Coded(CodedScorer::new(&sm.pwm))
-        };
-        Ok(Some(Prepared {
-            width: sm.pwm.ncol(),
-            min_score: min as i32,
-            max_score: sm
-                .pwm
-                .columns()
-                .map(|c| c.iter().copied().fold(f64::NEG_INFINITY, f64::max))
-                .sum(),
-            scorers,
-            tail: dist.tail(threshold),
-        }))
+        Scorers::Packed(s)
+    } else {
+        Scorers::Coded(CodedScorer::new(&sm.pwm))
     };
-    let letters: Vec<u8> = alphabet.letters().iter().map(|&c| c as u8).collect();
-    let custom = matches!(alphabet, Alphabet::Custom(_));
+    Ok(Some(Prepared {
+        width: sm.pwm.ncol(),
+        min_score: min as i32,
+        max_score: sm
+            .pwm
+            .columns()
+            .map(|c| c.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+            .sum(),
+        scorers,
+        tail: keep_tail.then(|| dist.tail(threshold)),
+    }))
+}
+
+/// Units of work: chunks of window starts within the stretches of each
+/// sequence free of unknown letters, as (sequence, starts, stretch end).
+fn work_items(seqs: &EncodedSequences) -> Vec<(usize, (usize, usize), usize)> {
+    let segments: Vec<Vec<(usize, usize)>> = match seqs.seqs() {
+        Seqs::Packed(v) => v.iter().map(|s| s.known_segments().collect()).collect(),
+        Seqs::Coded(v) => v.iter().map(|s| s.known_segments().collect()).collect(),
+    };
+    let mut work = Vec::new();
+    for (si, segs) in segments.iter().enumerate() {
+        for &(a, b) in segs {
+            let mut c = a;
+            while c < b {
+                let end = (c + CHUNK).min(b);
+                work.push((si, (c, end), b));
+                c = end;
+            }
+        }
+    }
+    work
+}
+
+/// Every hit of the prepared motifs in `seqs`, in no particular order and
+/// without P-values. Runs on the current thread pool.
+fn scan_raw(
+    prepared: &[Option<Prepared>],
+    seqs: &EncodedSequences,
+    work: &[(usize, (usize, usize), usize)],
+) -> Vec<RawHit> {
+    let n_letters = seqs.alphabet().len();
     let span = if n_letters <= 64 { 2 } else { 1 };
-    let mut raw: Vec<RawHit> = Vec::new();
-    // Each motif's width and best possible score, or None if it cannot hit.
-    let mut shapes: Vec<Option<(usize, f64)>> = Vec::with_capacity(motifs.len());
-    with_threads(opts.nthreads, || -> Result<()> {
-        let encoded = if nucleotide {
-            let four = if rna { *b"ACGU" } else { *b"ACGT" };
-            Encoded::Packed(
-                sequences
-                    .par_iter()
-                    .map(|s| PackedSeq::new(s.as_ref().as_bytes(), four))
-                    .collect(),
-            )
-        } else {
-            Encoded::Coded(
-                sequences
-                    .par_iter()
-                    .map(|s| CodedSeq::new(s.as_ref().as_bytes(), &letters, !custom))
-                    .collect(),
-            )
-        };
-
-        // Work comes in chunks of window starts, so long sequences are
-        // shared between threads too.
-        let segments: Vec<Vec<(usize, usize)>> = match &encoded {
-            Encoded::Packed(v) => v.iter().map(|s| s.known_segments().collect()).collect(),
-            Encoded::Coded(v) => v.iter().map(|s| s.known_segments().collect()).collect(),
-        };
-        let mut work: Vec<(usize, (usize, usize), usize)> = Vec::new();
-        for (si, segs) in segments.iter().enumerate() {
-            for &(a, b) in segs {
-                let mut c = a;
-                while c < b {
-                    let end = (c + CHUNK).min(b);
-                    work.push((si, (c, end), b));
-                    c = end;
+    work.par_iter()
+        .fold(
+            || (Vec::new(), Vec::new(), Vec::new()),
+            |(mut quads, mut keys, mut out), &(si, starts, seg_end)| {
+                match seqs.seqs() {
+                    Seqs::Packed(v) => {
+                        scan_chunk(prepared, &v[si], si, starts, seg_end, &mut quads, &mut out)
+                    }
+                    Seqs::Coded(v) => scan_chunk_coded(
+                        prepared, &v[si], si, starts, seg_end, n_letters, span, &mut keys, &mut out,
+                    ),
                 }
-            }
-        }
+                (quads, keys, out)
+            },
+        )
+        .map(|(_, _, out)| out)
+        .reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            a
+        })
+}
 
-        // Motifs are scanned in batches whose P-value tails fit in
-        // TAIL_BUDGET, since a wide score range (as amino acid PWMs have)
-        // makes for long tails. The hits of each batch get their P-values
-        // before its tails are dropped.
-        let mut base = 0;
-        while base < motifs.len() {
-            let mut batch: Vec<Option<Prepared>> = Vec::new();
-            let mut size = 0;
-            while base + batch.len() < motifs.len() && size < TAIL_BUDGET {
-                let lo = base + batch.len();
-                let hi = (lo + PREPARE_GROUP).min(motifs.len());
-                let group = motifs[lo..hi]
-                    .par_iter()
-                    .map(prepare)
-                    .collect::<Result<Vec<Option<Prepared>>>>()?;
-                size += group.iter().flatten().map(|p| p.tail.len()).sum::<usize>();
-                batch.extend(group);
-            }
-            let mut hits = work
-                .par_iter()
-                .fold(
-                    || (Vec::new(), Vec::new(), Vec::new()),
-                    |(mut quads, mut keys, mut out), &(si, starts, seg_end)| {
-                        match &encoded {
-                            Encoded::Packed(v) => scan_chunk(
-                                &batch, &v[si], si, starts, seg_end, &mut quads, &mut out,
-                            ),
-                            Encoded::Coded(v) => scan_chunk_coded(
-                                &batch, &v[si], si, starts, seg_end, n_letters, span, &mut keys,
-                                &mut out,
-                            ),
-                        }
-                        (quads, keys, out)
-                    },
-                )
-                .map(|(_, _, out)| out)
-                .reduce(Vec::new, |mut a, mut b| {
-                    a.append(&mut b);
-                    a
-                });
-            hits.par_iter_mut().for_each(|r| {
-                let p = batch[r.motif as usize].as_ref().unwrap();
-                r.pvalue = p.tail.pvalue(r.score as f64 / 1000.0);
-                r.motif += base as u32;
-            });
-            raw.append(&mut hits);
-            shapes.extend(
-                batch
-                    .iter()
-                    .map(|p| p.as_ref().map(|p| (p.width, p.max_score))),
-            );
-            base += batch.len();
-        }
-        Ok(())
-    })??;
-
+/// Order the hits, drop overlapping ones if asked and build the table,
+/// returning with it each row's [`RawHit::id`]. `shapes` holds each motif's
+/// width and best possible score.
+fn finish(
+    mut raw: Vec<RawHit>,
+    shapes: &[Option<(usize, f64)>],
+    opts: &ScanOptions,
+    alphabet: &Alphabet,
+) -> (HitTable, Vec<u32>) {
     raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus));
     if let Some(no) = opts.no_overlaps {
         let intervals: Vec<Interval> = raw
@@ -631,8 +604,8 @@ pub fn scan_table<S: AsRef<str> + Sync>(
         score: Vec::with_capacity(n),
         score_pct: Vec::with_capacity(n),
         pvalue: Vec::with_capacity(n),
-        rna,
-        upper: !custom,
+        rna: *alphabet == Alphabet::Rna,
+        upper: !matches!(alphabet, Alphabet::Custom(_)),
     };
     for r in &raw {
         let (width, max_score) = shapes[r.motif as usize].unwrap();
@@ -646,7 +619,286 @@ pub fn scan_table<S: AsRef<str> + Sync>(
         t.score_pct.push(100.0 * score / max_score);
         t.pvalue.push(r.pvalue);
     }
-    Ok(t)
+    (t, raw.iter().map(|r| r.id).collect())
+}
+
+/// Scan sequences for hits of the motifs, returning them as columns.
+///
+/// Letters of DNA, RNA and amino acid sequences are matched
+/// case-insensitively, and letters of custom alphabets exactly; other
+/// letters (such as `N` or `X`) never contribute to a hit. Only DNA and RNA
+/// have a reverse strand. Sequences shorter than a motif simply have no hits
+/// for it. Hits are ordered by motif, sequence and start, with `+` strand
+/// hits first.
+///
+/// The sequences are encoded for scanning first (see [`crate::packed`]);
+/// to scan the same sequences more than once, or to scan a FASTA file
+/// without holding it as text, see [`scan_encoded`] and [`scan_fasta`].
+pub fn scan_table<S: AsRef<str> + Sync>(
+    motifs: &[Motif],
+    sequences: &[S],
+    opts: &ScanOptions,
+) -> Result<HitTable> {
+    let alphabet = check_scan(motifs, opts)?;
+    let seqs = EncodedSequences::new(sequences, &alphabet, opts.nthreads)?;
+    scan_encoded(motifs, &seqs, opts)
+}
+
+/// [`scan_table`] for sequences already encoded, which must be for the
+/// motifs' alphabet. [`HitTable::matched_encoded`] gives the matched
+/// letters.
+pub fn scan_encoded(
+    motifs: &[Motif],
+    seqs: &EncodedSequences,
+    opts: &ScanOptions,
+) -> Result<HitTable> {
+    let alphabet = check_scan(motifs, opts)?;
+    if *seqs.alphabet() != alphabet {
+        return arg_err(format!(
+            "the sequences were encoded as {} but the motifs are {alphabet}",
+            seqs.alphabet()
+        ));
+    }
+    let mut raw: Vec<RawHit> = Vec::new();
+    // Each motif's width and best possible score, or None if it cannot hit.
+    let mut shapes: Vec<Option<(usize, f64)>> = Vec::with_capacity(motifs.len());
+    with_threads(opts.nthreads, || -> Result<()> {
+        let work = work_items(seqs);
+        // Motifs are scanned in batches whose P-value tails fit in
+        // TAIL_BUDGET, since a wide score range (as amino acid PWMs have)
+        // makes for long tails. The hits of each batch get their P-values
+        // before its tails are dropped.
+        let mut base = 0;
+        while base < motifs.len() {
+            let mut batch: Vec<Option<Prepared>> = Vec::new();
+            let mut size = 0;
+            while base + batch.len() < motifs.len() && size < TAIL_BUDGET {
+                let lo = base + batch.len();
+                let hi = (lo + PREPARE_GROUP).min(motifs.len());
+                let group = motifs[lo..hi]
+                    .par_iter()
+                    .map(|m| prepare_motif(m, opts, true))
+                    .collect::<Result<Vec<Option<Prepared>>>>()?;
+                size += group
+                    .iter()
+                    .flatten()
+                    .map(|p| p.tail.as_ref().map_or(0, ScoreTail::len))
+                    .sum::<usize>();
+                batch.extend(group);
+            }
+            let mut hits = scan_raw(&batch, seqs, &work);
+            hits.par_iter_mut().for_each(|r| {
+                let p = batch[r.motif as usize].as_ref().unwrap();
+                r.pvalue = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
+                r.motif += base as u32;
+            });
+            raw.append(&mut hits);
+            shapes.extend(
+                batch
+                    .iter()
+                    .map(|p| p.as_ref().map(|p| (p.width, p.max_score))),
+            );
+            base += batch.len();
+        }
+        Ok(())
+    })??;
+    Ok(finish(raw, &shapes, opts, &alphabet).0)
+}
+
+/// Hits from [`scan_fasta`], with the letters each one matched (since the
+/// sequences themselves are not kept).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FastaHits {
+    /// The name of every sequence in the file, in order.
+    pub names: Vec<String>,
+    /// The length of every sequence in the file.
+    pub lengths: Vec<usize>,
+    pub table: HitTable,
+    letters: Vec<u8>,
+    /// Where each row's letters start in `letters`.
+    offsets: Vec<usize>,
+}
+
+impl FastaHits {
+    /// The number of hits.
+    pub fn len(&self) -> usize {
+        self.table.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.table.is_empty()
+    }
+
+    /// The letters matched by hit `i` (as [`HitTable::matched_into`]).
+    pub fn matched(&self, i: usize) -> &str {
+        let t = &self.table;
+        let w = (t.end[i] - t.start[i] + 1) as usize;
+        std::str::from_utf8(&self.letters[self.offsets[i]..self.offsets[i] + w]).unwrap()
+    }
+}
+
+/// [`scan_table`] for the sequences of a FASTA file, read a batch at a time
+/// on a thread of its own while the last batch is scanned, so the file is
+/// never held in memory whole. Sequence indices follow the file's records.
+pub fn scan_fasta(
+    motifs: &[Motif],
+    path: impl AsRef<std::path::Path>,
+    opts: &ScanOptions,
+) -> Result<FastaHits> {
+    scan_fasta_with(motifs, path.as_ref(), opts, STREAM_BATCH, TAIL_BUDGET)
+}
+
+/// [`scan_fasta`] with the batch size and tail budget given.
+fn scan_fasta_with(
+    motifs: &[Motif],
+    path: &std::path::Path,
+    opts: &ScanOptions,
+    batch_size: usize,
+    tail_budget: usize,
+) -> Result<FastaHits> {
+    let alphabet = check_scan(motifs, opts)?;
+    let file = std::fs::File::open(path)
+        .map_err(|e| Error::Argument(format!("could not open {}: {e}", path.display())))?;
+    let reader = std::io::BufReader::with_capacity(1 << 20, file);
+    let mut out = FastaHits::default();
+    let mut raw: Vec<RawHit> = Vec::new();
+    // Each found hit's letters start at letter_starts[id].
+    let mut letters: Vec<u8> = Vec::new();
+    let mut letter_starts: Vec<usize> = Vec::new();
+
+    // Unlike scan_encoded, every motif is needed for every batch, so tails
+    // beyond the budget are dropped and rebuilt at the end instead.
+    let prepared: Vec<Option<Prepared>> = with_threads(opts.nthreads, || {
+        let mut all: Vec<Option<Prepared>> = Vec::with_capacity(motifs.len());
+        let mut size = 0;
+        for group in motifs.chunks(PREPARE_GROUP) {
+            let group = group
+                .par_iter()
+                .map(|m| prepare_motif(m, opts, true))
+                .collect::<Result<Vec<Option<Prepared>>>>()?;
+            for mut p in group {
+                if let Some(p) = p.as_mut() {
+                    size += p.tail.as_ref().map_or(0, ScoreTail::len);
+                    if size > tail_budget {
+                        p.tail = None;
+                    }
+                }
+                all.push(p);
+            }
+        }
+        Ok::<_, Error>(all)
+    })??;
+
+    let (tx, rx) = std::sync::mpsc::sync_channel::<(Vec<String>, EncodedSequences)>(1);
+    // Scanned batches hand their buffers back to the reader. Allocating
+    // fresh ones instead leaves freed chromosome-sized blocks to the
+    // allocator, which may keep them (macOS does), so memory would grow
+    // with the file rather than with the batch.
+    let (spare_tx, spare_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (scanned, read) = std::thread::scope(|s| {
+        // The reader owns the sender, so the batches end when it does.
+        let alph = alphabet.clone();
+        let reader = s.spawn(move || {
+            let mut pool: Vec<Vec<u8>> = Vec::new();
+            let spare = || {
+                pool.extend(spare_rx.try_iter());
+                // Keep the largest few; any more would only hold memory.
+                pool.sort_unstable_by_key(Vec::capacity);
+                let excess = pool.len().saturating_sub(SPARE_BUFFERS);
+                pool.drain(..excess);
+                pool.pop()
+            };
+            crate::io::fasta::read_encoded_batches_reusing(
+                reader,
+                &alph,
+                0,
+                batch_size,
+                spare,
+                |n, b| {
+                    tx.send((n, b))
+                        .map_err(|_| Error::Argument("scanning stopped".into()))
+                },
+            )
+        });
+        let scanned = with_threads(opts.nthreads, || {
+            for (names, batch) in rx {
+                let base = out.names.len();
+                let work = work_items(&batch);
+                let mut hits = scan_raw(&prepared, &batch, &work);
+                for h in &mut hits {
+                    let p = prepared[h.motif as usize].as_ref().unwrap();
+                    let start = letters.len();
+                    let (a, b) = (h.start as usize, h.start as usize + p.width);
+                    batch.decode_into(h.sequence as usize, a, b, &mut letters);
+                    if h.minus {
+                        let rna = alphabet == Alphabet::Rna;
+                        letters[start..].reverse();
+                        letters[start..]
+                            .iter_mut()
+                            .for_each(|c| *c = complement(*c, rna));
+                    }
+                    h.id = letter_starts.len() as u32;
+                    letter_starts.push(start);
+                    h.sequence += base as u32;
+                }
+                raw.append(&mut hits);
+                out.lengths
+                    .extend((0..batch.len()).map(|i| batch.seq_len(i)));
+                out.names.extend(names);
+                for buf in batch.into_buffers() {
+                    if buf.capacity() >= 1 << 20 {
+                        // The reader is gone if this fails; nothing to do.
+                        let _ = spare_tx.send(buf);
+                    }
+                }
+            }
+        });
+        (scanned, reader.join().expect("the FASTA reader panicked"))
+    });
+    scanned?;
+    read?;
+
+    // P-values, motif by motif, rebuilding the tails that were dropped.
+    raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus));
+    let groups: Vec<&mut [RawHit]> = raw.chunk_by_mut(|a, b| a.motif == b.motif).collect();
+    with_threads(opts.nthreads, || {
+        groups.into_par_iter().try_for_each(|g| -> Result<()> {
+            let m = g[0].motif as usize;
+            let rebuilt;
+            let tail = match &prepared[m].as_ref().unwrap().tail {
+                Some(t) => t,
+                None => {
+                    rebuilt = prepare_motif(&motifs[m], opts, true)?
+                        .unwrap()
+                        .tail
+                        .unwrap();
+                    &rebuilt
+                }
+            };
+            for r in g {
+                r.pvalue = tail.pvalue(r.score as f64 / 1000.0);
+            }
+            Ok(())
+        })
+    })??;
+
+    let shapes: Vec<Option<(usize, f64)>> = prepared
+        .iter()
+        .map(|p| p.as_ref().map(|p| (p.width, p.max_score)))
+        .collect();
+    let (table, ids) = finish(raw, &shapes, opts, &alphabet);
+    let mut kept = Vec::new();
+    let mut offsets = Vec::with_capacity(ids.len());
+    for (i, &id) in ids.iter().enumerate() {
+        let w = (table.end[i] - table.start[i] + 1) as usize;
+        let a = letter_starts[id as usize];
+        offsets.push(kept.len());
+        kept.extend_from_slice(&letters[a..a + w]);
+    }
+    out.table = table;
+    out.letters = kept;
+    out.offsets = offsets;
+    Ok(out)
 }
 
 /// Scan sequences for hits of the motifs, one [`Hit`] per hit
@@ -797,6 +1049,81 @@ mod tests {
         assert_eq!(got, naive_any(&m, &cseq, 0.001, true));
         let planted = (0..hits.len()).find(|&i| hits.start[i] == 61).unwrap();
         assert_eq!(hits.matched(planted, &[&cseq]), "abcDe");
+    }
+
+    #[test]
+    fn fasta_and_encoded_scans_match_scan_table() {
+        use crate::alphabet::Alphabet;
+        let copts = CreateOptions {
+            nsites: Some(20.0),
+            pseudocount: 1.0,
+            ..Default::default()
+        };
+        let dna = [
+            from_strings(&["TTGACGTCAAGG"], None, &copts).unwrap(),
+            from_strings(&["CACGTG"], None, &copts).unwrap(),
+            from_strings(&["WGATAR"], None, &copts).unwrap(),
+        ];
+        let aa = [
+            from_strings(&["MKVLAW"], Some(Alphabet::Aa), &copts).unwrap(),
+            from_strings(&["CPYQ"], Some(Alphabet::Aa), &copts).unwrap(),
+        ];
+        let mut dna_seqs = create_sequences(&['A', 'C', 'G', 'T'], 6, 3_000, None, 5, 1).unwrap();
+        dna_seqs[1].replace_range(100..400, &"N".repeat(300));
+        dna_seqs[2] = dna_seqs[2].to_ascii_lowercase();
+        dna_seqs[4].truncate(3);
+        let aa_letters: Vec<char> = Alphabet::Aa.letters().to_vec();
+        let mut aa_seqs = create_sequences(&aa_letters, 4, 2_000, None, 6, 1).unwrap();
+        aa_seqs[0].replace_range(50..56, "MKVLAW");
+        aa_seqs[1] = aa_seqs[1].to_ascii_lowercase();
+        aa_seqs[3].replace_range(10..20, "XXXXX*XXXX");
+
+        let dir = std::env::temp_dir().join(format!("um-scan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (motifs, seqs, label) in [(&dna[..], &dna_seqs, "dna"), (&aa[..], &aa_seqs, "aa")] {
+            let path = dir.join(format!("{label}.fa"));
+            let records: Vec<(String, &String)> = seqs
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (format!("s{i} extra"), s))
+                .collect();
+            std::fs::write(&path, crate::io::fasta::write(&records, 61)).unwrap();
+            for no_overlaps in [None, Some(NoOverlaps::default())] {
+                let opts = ScanOptions {
+                    pvalue: 0.01,
+                    nthreads: 2,
+                    no_overlaps,
+                    ..Default::default()
+                };
+                let want = scan_table(motifs, seqs, &opts).unwrap();
+                let matched: Vec<String> = (0..want.len()).map(|i| want.matched(i, seqs)).collect();
+                assert!(want.len() > 20, "{label}: {} hits", want.len());
+
+                let enc = EncodedSequences::new(seqs, &motifs[0].alphabet, 1).unwrap();
+                let got = scan_encoded(motifs, &enc, &opts).unwrap();
+                assert_eq!(got, want, "{label}: encoded");
+                let got_matched: Vec<String> = (0..got.len())
+                    .map(|i| got.matched_encoded(i, &enc))
+                    .collect();
+                assert_eq!(got_matched, matched, "{label}: encoded letters");
+
+                // Small batches, and no room for any P-value tail.
+                for (batch, budget) in [(STREAM_BATCH, TAIL_BUDGET), (2_500, 0), (1, 0)] {
+                    let f = scan_fasta_with(motifs, &path, &opts, batch, budget).unwrap();
+                    assert_eq!(f.table, want, "{label}: fasta, batches of {batch}");
+                    let fm: Vec<&str> = (0..f.len()).map(|i| f.matched(i)).collect();
+                    assert_eq!(fm, matched, "{label}: fasta letters");
+                    assert_eq!(f.names[0], "s0 extra");
+                    let lengths: Vec<usize> = seqs.iter().map(String::len).collect();
+                    assert_eq!(f.lengths, lengths);
+                }
+            }
+        }
+        let rna = from_strings(&["ACGU"], Some(Alphabet::Rna), &copts).unwrap();
+        let enc = EncodedSequences::new(&dna_seqs, &Alphabet::Dna, 1).unwrap();
+        assert!(scan_encoded(&[rna], &enc, &ScanOptions::default()).is_err());
+        assert!(scan_fasta(&dna, dir.join("missing.fa"), &ScanOptions::default()).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -185,6 +185,11 @@ change is listed here so the R package can be fixed to match.
 
 - **FASTA files.** The port reads and writes FASTA files, since scanning
   needs sequences; the R package relies on Biostrings for this.
+- **Scanning without holding sequences as text.** Scanning can read a FASTA
+  file a batch at a time, or take sequences packed at two bits per base
+  (a byte per letter for other alphabets), which hold a human genome in
+  about 0.8 GB. Packed sequences keep every letter outside the alphabet but
+  not the case of the alphabet's own letters.
 - **CIS-BP and UniPROBE writers.** The R package can read these formats but
   not write them. The port writes both (UniPROBE in its minimal form), and its
   files read correctly with the R package's `read_cisbp()` and
