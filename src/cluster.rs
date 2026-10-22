@@ -373,6 +373,62 @@ impl Tree {
         }
         out
     }
+
+    /// Cut the tree into `k` groups, as R's `cutree(tree, k)`. Groups are
+    /// numbered from 0 in the order their first leaf appears in the input.
+    pub fn cutree(&self, k: usize) -> Result<Vec<usize>> {
+        let n = self.merge.len() + 1;
+        if k < 1 || k > n {
+            return arg_err(format!("k must be between 1 and {n}"));
+        }
+        // The step (1-based) whose cluster each leaf currently belongs to,
+        // or 0 while it is a singleton.
+        let mut step = vec![0usize; n];
+        for (s, m) in self.merge.iter().take(n - k).enumerate() {
+            let s = s + 1;
+            for &c in m {
+                if c < 0 {
+                    step[(-c - 1) as usize] = s;
+                } else {
+                    let old = c as usize;
+                    step.iter_mut().filter(|x| **x == old).for_each(|x| *x = s);
+                }
+            }
+        }
+        let mut ids = vec![usize::MAX; n];
+        let mut next = 0;
+        Ok(step
+            .iter()
+            .map(|&s| {
+                if s == 0 {
+                    next += 1;
+                    next - 1
+                } else {
+                    if ids[s - 1] == usize::MAX {
+                        ids[s - 1] = next;
+                        next += 1;
+                    }
+                    ids[s - 1]
+                }
+            })
+            .collect())
+    }
+
+    /// Cut the tree at height `h`, as R's `cutree(tree, h = h)`: merges at
+    /// heights up to `h` are kept. The heights must be increasing, which is
+    /// not guaranteed for the centroid and median methods.
+    pub fn cutree_height(&self, h: f64) -> Result<Vec<usize>> {
+        if self.height.windows(2).any(|w| w[1] < w[0]) {
+            return arg_err("the tree heights are not sorted increasingly");
+        }
+        let n = self.merge.len() + 1;
+        let first_above = self
+            .height
+            .iter()
+            .position(|&x| x > h)
+            .unwrap_or(self.height.len());
+        self.cutree(n - first_above)
+    }
 }
 
 #[cfg(test)]

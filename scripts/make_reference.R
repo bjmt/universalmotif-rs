@@ -953,3 +953,128 @@ write_ref(list(klets = klet_cases, count = count_cases, windows = window_cases,
                complexity_names = I(names(cx_seqs)), sequence_complexity = seqcx_cases,
                finder_positives = I(mf_pos), finder_negatives = I(mf_neg),
                finder = finder_cases), "sequences.json")
+
+# ---------------------------------------------------------------------------
+# Statistics, cutree, enrichment, co-occurrence and positional enrichment
+
+stat_cases <- list(
+  phyper = lapply(list(c(3, 10, 7, 8), c(0, 5, 5, 5), c(12, 30, 2000, 40),
+                       c(40, 50, 60, 70), c(900, 1000, 99000, 1200),
+                       c(-1, 4, 4, 4), c(5, 5, 5, 5), c(2, 400000, 3e6, 30),
+                       c(5, 20, 30, 25)), function(a) {
+    list(x = a[1], m = a[2], n = a[3], k = a[4],
+         lower = phyper(a[1], a[2], a[3], a[4]),
+         upper = phyper(a[1], a[2], a[3], a[4], lower.tail = FALSE),
+         density = if (a[1] >= 0) dhyper(a[1], a[2], a[3], a[4]) else 0)
+  }),
+  pbinom = lapply(list(c(0, 10, 0.3), c(5, 10, 0.3), c(60, 100, 0.2), c(1, 1000, 1e-5),
+                       c(400, 1000, 0.41), c(2, 2, 1), c(150, 150, 0.9),
+                       c(3000, 10000, 0.29), c(80, 500, 0.02), c(11, 10, 0.5)),
+                  function(a) list(k = a[1], n = a[2], p = a[3],
+                                   upper = pbinom(a[1] - 1, a[2], a[3], lower.tail = FALSE),
+                                   density = dbinom(a[1], a[2], a[3]))),
+  fisher = lapply(list(c(10, 3, 2, 15), c(1, 1, 1, 1), c(0, 5, 5, 0), c(30, 70, 50, 50),
+                       c(500, 120, 99500, 99880), c(81, 2, 1, 80), c(3, 0, 0, 3)),
+                  function(a) list(table = I(a), pvalue = fisher.test(
+                    matrix(a, 2, byrow = TRUE), alternative = "greater")$p.value)),
+  bonferroni = list(p = I(c(0.01, 0.2, 0.003, 0.5)),
+                    adjusted = I(p.adjust(c(0.01, 0.2, 0.003, 0.5), "bonferroni")))
+)
+
+set.seed(5)
+cut_cases <- list()
+for (meth in c("complete", "average", "single", "ward.D2")) {
+  pts <- matrix(round(runif(12 * 2) * 5), ncol = 2)
+  dmat <- as.matrix(dist(pts))
+  h <- hclust(as.dist(dmat), method = meth)
+  hs <- c(0, sort(unique(h$height))[c(1, 3, 5)], mean(range(h$height)), 100)
+  cut_cases[[length(cut_cases) + 1]] <- list(
+    method = meth, dist = rows(dmat),
+    k = lapply(1:12, function(k) I(unname(cutree(h, k)))),
+    h = I(hs), by_h = lapply(hs, function(x) I(unname(cutree(h, h = x)))))
+}
+
+# Motifs planted into random sequences, plus a background drawn in R so the
+# crate gets the exact same input.
+set.seed(21)
+en_motifs <- list(
+  create_motif("TTGACGTCAA", nsites = 20, pseudocount = 1, name = "creb"),
+  create_motif("GGGGCGGGG", nsites = 20, pseudocount = 1, name = "sp1"),
+  create_motif("CACGTG", nsites = 20, pseudocount = 1, name = "ebox"),
+  create_motif("TATAAAA", nsites = 20, pseudocount = 1, name = "tata"),
+  create_motif("TGASTCA", nsites = 30, pseudocount = 1, name = "ap1"),
+  create_motif("GATAAG", nsites = 20, pseudocount = 1, name = "creb")
+)
+rand_dna <- function(n, len) Biostrings::DNAStringSet(
+  vapply(seq_len(n), function(i) paste(sample(c("A", "C", "G", "T"), len, TRUE),
+                                       collapse = ""), character(1)))
+en_tgt <- rand_dna(60, 200)
+en_tgt <- implant_motifs(en_motifs[c(1, 3)], en_tgt, n.per.seq = 1)
+en_tgt[1:30] <- implant_motifs(en_motifs[2], en_tgt[1:30], n.per.seq = 2,
+                               min.spacing = 3)
+en_bkg <- rand_dna(70, 180)
+enrich_cases <- list()
+for (args in list(list(qvalue = 1), list(qvalue = 1, test = "sites"),
+                  list(qvalue = 1, RC = FALSE, pvalue = 1e-3),
+                  list(qvalue = 1, test = "sites", pseudocount = 0, pvalue = 1e-3),
+                  list(qvalue = 0.05, pseudocount = 3))) {
+  r <- do.call(enrich_motifs_lite, c(list(motifs = en_motifs, sequences = en_tgt,
+                                          bkg.sequences = en_bkg), args))
+  enrich_cases[[length(enrich_cases) + 1]] <- list(args = args, table = df_cols(r))
+}
+
+# Co-occurrence: through the internal scan, and from a hit table.
+co_cases <- list()
+add_coocc <- function(args) {
+  r <- do.call(motif_coocc, c(list(motifs = en_motifs, sequences = en_tgt), args))
+  co_cases[[length(co_cases) + 1]] <<- list(args = args, table = df_cols(r))
+}
+add_coocc(list(pvalue = 1e-3))
+add_coocc(list(pvalue = 1e-3, max.distance = 50L))
+add_coocc(list(pvalue = 1e-3, self.pairs = TRUE, max.distance = 100L, RC = FALSE))
+add_coocc(list(pvalue = 1e-2, min.coocc = 5L, pseudocount = 1L))
+add_coocc(list(pvalue = 1e-3, no.overlaps = TRUE, max.distance = 30L, self.pairs = TRUE))
+co_hits <- data.frame(
+  motif.i = c(1, 2, 1, 2, 3, 1, 3, 2, 2, 4, 1, 2, 3, 1, 1),
+  sequence.i = c(1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 7, 8, 8),
+  start = c(10, 25, 5, 400, 7, 100, 150, 30, 90, 12, 60, 61, 3, 15, 15))
+co_hit_cases <- lapply(list(list(), list(max.distance = 20L),
+                            list(self.pairs = TRUE, max.distance = 1000L),
+                            list(pseudocount = 2L, min.coocc = 0L)), function(args) {
+  r <- do.call(motif_coocc, c(list(motifs = en_motifs[1:4], hits = co_hits,
+                                   n.sequences = 10L), args))
+  list(args = args, table = df_cols(r))
+})
+
+# Positional enrichment: a motif planted near the middle of centred
+# sequences, another planted near one end, and the rest at random.
+set.seed(33)
+pk_seqs <- rand_dna(150, 300)
+pk_seqs <- implant_motifs(en_motifs[1], pk_seqs, positions = lapply(1:150, function(i)
+  if (i <= 100) 146L + sample.int(8, 1) else integer(0)))
+pk_seqs <- implant_motifs(en_motifs[3], pk_seqs, positions = lapply(1:150, function(i)
+  if (i %% 2 == 0) 40L + sample.int(20, 1) else integer(0)))
+names(pk_seqs) <- sprintf("s%03d", seq_along(pk_seqs))
+pk_hits <- scan_sequences_lite(en_motifs[c(1, 3, 4, 5)], pk_seqs, pvalue = 1e-3,
+                               return.granges = FALSE)
+pk_strand <- setNames(ifelse(seq_along(pk_seqs) %% 3 == 0, "-", "+"), names(pk_seqs))
+peak_cases <- list()
+for (args in list(list(qvalue = 1), list(qvalue = 1, mode = "local"),
+                  list(qvalue = 1, mode = "local", seq.strand = pk_strand,
+                       position.step = 3L, min.window = 6L, window.step = 4L),
+                  list(qvalue = 0.05, max.window = 300L, window.step = 25L),
+                  list(qvalue = 1, min.window = 1L, max.window = 40L, window.step = 1L))) {
+  r <- do.call(motif_peaks, c(list(hits = pk_hits, seq.length = 300L), args))
+  t <- df_cols(r[, setdiff(names(r), "centers")])
+  t$centers <- lapply(r$centers, function(x) I(x))
+  if (!is.null(args$seq.strand)) args$seq.strand <- as.list(args$seq.strand)
+  peak_cases[[length(peak_cases) + 1]] <- list(args = args, table = t)
+}
+
+write_ref(list(stats = stat_cases, cutree = cut_cases,
+               motifs = lapply(en_motifs, motif_record),
+               targets = I(as.character(en_tgt)), background = I(as.character(en_bkg)),
+               enrich = enrich_cases, coocc = co_cases,
+               coocc_hits = df_cols(co_hits), coocc_hit_cases = co_hit_cases,
+               peak_sequences = I(as.character(pk_seqs)),
+               peak_hits = df_cols(pk_hits), peaks = peak_cases), "enrich.json")

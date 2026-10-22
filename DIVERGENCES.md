@@ -124,6 +124,17 @@ change is listed here so the R package can be fixed to match.
   library. The port ranks ties by k-mer. Results agree with the R package
   whenever the best seeds have distinct P-values.
 
+### Enrichment and co-occurrence
+
+- **`motif_coocc()` odds ratios overflow.** The 2x2 cells are R integers,
+  so `both * neither` and `a_only * b_only` overflow once they pass 2^31,
+  and the odds ratio becomes NA with a warning (for example with 60,000
+  shared sequences out of 200,000). The port computes it in floating point.
+- **`motif_peaks()` orders motifs by locale.** Motifs are numbered (and
+  ties in P-value broken) by `sort()` on their names, which follows the
+  locale's collation rules, so `motif.i` can differ between machines. The
+  port sorts names by code point.
+
 ## Additions
 
 - **FASTA files.** The port reads and writes FASTA files, since scanning
@@ -161,10 +172,11 @@ change is listed here so the R package can be fixed to match.
 - Schneider's small-sample correction for information content.
 - The non-lite versions of functions that have a lite counterpart in
   the R package.
-- Drawing trees. `motif_tree()` builds the tree (with R's `hclust`
-  algorithm, so it matches exactly) and returns it as data, a Newick
-  string and a SciPy linkage matrix rather than a ggtree plot. Plotting is
-  planned for a later milestone.
+- Drawing trees and plotting motif peaks. `motif_tree()` builds the tree
+  (with R's `hclust` algorithm, so it matches exactly) and returns it as
+  data, a Newick string and a SciPy linkage matrix rather than a ggtree
+  plot, and `plot_motif_peaks()` is not ported yet. Plotting is planned for
+  a later milestone.
 - `motif_pvalue(method = "exhaustive")`: the branch-and-bound P-value
   search and the random score search. Only the exact dynamic method is
   ported.
