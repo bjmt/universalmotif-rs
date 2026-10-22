@@ -105,6 +105,9 @@ change is listed here so the R package can be fixed to match.
   the first alignment found (forward strand, leftmost offset) unless a
   later one is better by more than 1e-10. This also affects which motifs
   `view_motifs_lite()` shows as reverse complements.
+- **RNA consensus strings use U.** `compare_motifs()` writes T in the
+  consensus strings of aligned RNA motifs, unlike every other RNA consensus
+  in the package. The port writes U.
 
 ### Plotting
 
@@ -186,6 +189,16 @@ change is listed here so the R package can be fixed to match.
   not write them. The port writes both (UniPROBE in its minimal form), and its
   files read correctly with the R package's `read_cisbp()` and
   `read_uniprobe()`.
+- **Other alphabets.** The R package's lite functions for scanning,
+  comparison, merging, trees, enrichment and `view_motifs_lite()` only take
+  DNA and RNA motifs. The port also takes amino acid and custom-alphabet
+  motifs, with results that match the R package's full `scan_sequences()`
+  and `compare_motifs()` (PCC). Only DNA and RNA have a reverse strand, so
+  other alphabets are scanned and aligned on the forward strand alone.
+  Protein letters are matched in either case and custom letters exactly.
+  The parametric null for comparison P-values remains DNA and RNA only,
+  since its Dirichlet grid assumes four letters; other alphabets use the
+  empirical null.
 
 ## Not reproducible
 

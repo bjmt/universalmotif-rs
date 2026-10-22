@@ -5,7 +5,7 @@
 //! test, either on the number of sequences with a hit or on the number of
 //! hits per scannable position.
 
-use crate::error::{Error, Result, arg_err};
+use crate::error::{Result, arg_err};
 use crate::motif::Motif;
 use crate::scan::{ScanOptions, scan_table};
 use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffle_sequences};
@@ -110,7 +110,7 @@ fn count_hits<S: AsRef<str> + Sync>(
     Ok(Counts { seqs: nseqs, sites })
 }
 
-/// Test DNA or RNA motifs for enrichment in `sequences` relative to
+/// Test motifs for enrichment in `sequences` relative to
 /// `background` (by default the targets shuffled with the Euler method,
 /// keeping `shuffle_k`-lets), as universalmotif's `enrich_motifs_lite()`.
 /// Returns one result per motif, in input order and unfiltered.
@@ -125,11 +125,6 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
     };
     if motifs.iter().any(|m| m.alphabet != first.alphabet) {
         return arg_err("all motifs must share the same alphabet");
-    }
-    if !first.alphabet.is_nucleotide() {
-        return Err(Error::Unsupported(
-            "enrichment is only supported for DNA and RNA motifs".into(),
-        ));
     }
     if !(opts.pvalue > 0.0 && opts.pvalue < 1.0) {
         return arg_err("pvalue must be in (0, 1)");
@@ -168,7 +163,12 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
     let (n_tgt, n_bkg) = (sequences.len(), bkg.len());
     let tgt_lens: Vec<usize> = sequences.iter().map(|s| s.as_ref().len()).collect();
     let bkg_lens: Vec<usize> = bkg.iter().map(|s| s.len()).collect();
-    let strands = if opts.rc { 2 } else { 1 };
+    // Only DNA and RNA have a reverse strand to scan.
+    let strands = if opts.rc && first.alphabet.is_nucleotide() {
+        2
+    } else {
+        1
+    };
     let positions = |lens: &[usize], w: usize| -> usize {
         lens.iter()
             .map(|&l| (l + 1).saturating_sub(w))

@@ -1280,3 +1280,61 @@ write_ref(list(chromosomes = I(as.character(px_chrs)), chromosome_names = I(name
                match_targets = I(as.character(mb_t)), match_universe = I(as.character(mb_u)),
                gc_targets = vec(compute_gc(mb_t)), gc_universe = vec(compute_gc(mb_u)),
                axes = axis_cases), "proximity.json")
+
+# ---------------------------------------------------------------------------
+# Scanning and comparison for amino acids and custom alphabets
+#
+# The R package's lite functions are DNA/RNA only, so the reference values
+# come from its full scan_sequences() and from compare_motifs() with the
+# Pearson correlation summed over the best alignment and no IC filtering,
+# which picks the same alignment as the lite method.
+
+set.seed(31)
+aa_letters <- Biostrings::AA_STANDARD
+aa_motifs <- list(
+  create_motif(c("MKVLAWHE", "MKVLGWHE", "MRVLAWHD", "MKILAWHE"), alphabet = "AA", name = "kinase"),
+  create_motif(c("CPYQ", "CPWQ", "CAYQ"), alphabet = "AA", name = "cpyq"),
+  create_motif("GSTNDEKRHQ", alphabet = "AA", nsites = 30, pseudocount = 1, name = "loop"),
+  create_motif(alphabet = "AA", 9, nsites = 25, name = "random9"),
+  create_motif(c("MKVLAW", "MRVLAW"), alphabet = "AA", name = "kinase_short"))
+aa_motifs[[4]]["pseudocount"] <- 1
+aa_seqs <- vapply(1:12, function(i) paste(sample(aa_letters, 400, TRUE), collapse = ""),
+                  character(1))
+for (i in 1:6) substr(aa_seqs[i], 50 + i * 30, 57 + i * 30) <- c("MKVLAWHE", "MKILAWHD")[i %% 2 + 1]
+for (i in 4:9) substr(aa_seqs[i], 300, 303) <- "CPYQ"
+aa_seqs[2] <- paste0(substr(aa_seqs[2], 1, 20), "XXB*", substr(aa_seqs[2], 25, 400))
+aa_seqs <- Biostrings::AAStringSet(aa_seqs)
+
+cu_motifs <- list(
+  create_motif(c("QRSTU", "QRSTQ", "QRRTU"), alphabet = "QRSTU", name = "c1"),
+  create_motif(c("UUTSQR", "UUTSRR"), alphabet = "QRSTU", name = "c2"),
+  create_motif(c("QRST", "QRSU"), alphabet = "QRSTU", name = "c3"))
+cu_seqs <- vapply(1:5, function(i) paste(sample(c("Q", "R", "S", "T", "U"), 300, TRUE),
+                                         collapse = ""), character(1))
+substr(cu_seqs[1], 100, 104) <- "QRSTU"
+substr(cu_seqs[2], 10, 15) <- "UUTSQR"
+cu_seqs <- Biostrings::BStringSet(cu_seqs)
+
+alph_scan <- function(motifs, seqs, threshold) {
+  r <- suppressMessages(scan_sequences(motifs, seqs, threshold = threshold,
+                                       threshold.type = "pvalue", RC = FALSE))
+  r <- as.data.frame(r)
+  r <- r[order(r$motif.i, r$sequence.i, r$start), ]
+  df_cols(r[, c("motif.i", "sequence.i", "start", "stop", "score", "match", "pvalue")])
+}
+alph_compare <- function(motifs, min.overlap) {
+  s <- compare_motifs(motifs, method = "PCC", score.strat = "sum", min.overlap = min.overlap,
+                      min.mean.ic = 0, min.position.ic = 0, normalise.scores = FALSE,
+                      tryRC = FALSE)
+  rows(as.matrix(s))
+}
+write_ref(list(
+  aa_motifs = lapply(aa_motifs, motif_record), aa_sequences = I(as.character(aa_seqs)),
+  aa_scan = list(list(threshold = 1e-3, table = alph_scan(aa_motifs, aa_seqs, 1e-3)),
+                 list(threshold = 1e-2, table = alph_scan(aa_motifs[1:3], aa_seqs, 1e-2))),
+  aa_compare = list(list(min_overlap = 4L, sums = alph_compare(aa_motifs, 4L)),
+                    list(min_overlap = 6L, sums = alph_compare(aa_motifs[c(1, 3, 4, 5)], 6L))),
+  custom_motifs = lapply(cu_motifs, motif_record), custom_sequences = I(as.character(cu_seqs)),
+  custom_scan = list(list(threshold = 1e-2, table = alph_scan(cu_motifs, cu_seqs, 1e-2))),
+  custom_compare = list(list(min_overlap = 3L, sums = alph_compare(cu_motifs, 3L)))),
+  "alphabets.json")

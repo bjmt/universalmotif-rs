@@ -108,12 +108,17 @@ fn comparisons_match_r() {
             assert_eq!(strands, texts(&w["strand"]), "{ctx}: strand");
             let qc: Vec<String> = rows.iter().map(|c| c.query_consensus.clone()).collect();
             let tc: Vec<String> = rows.iter().map(|c| c.target_consensus.clone()).collect();
-            assert_eq!(
-                qc,
-                texts(&w["subject_consensus"]),
-                "{ctx}: subject consensus"
-            );
-            assert_eq!(tc, texts(&w["target_consensus"]), "{ctx}: target consensus");
+            // The R package writes T in RNA consensus strings; the port
+            // writes U (see DIVERGENCES.md).
+            let rna = case["set"] == "rna";
+            let want = |k: &str| -> Vec<String> {
+                texts(&w[k])
+                    .into_iter()
+                    .map(|s| if rna { s.replace('T', "U") } else { s })
+                    .collect()
+            };
+            assert_eq!(qc, want("subject_consensus"), "{ctx}: subject consensus");
+            assert_eq!(tc, want("target_consensus"), "{ctx}: target consensus");
             let f = |g: &dyn Fn(&universalmotif::compare::Comparison) -> f64| {
                 rows.iter().map(g).collect::<Vec<_>>()
             };

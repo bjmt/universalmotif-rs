@@ -8,7 +8,8 @@
 //! Each run does one task and prints the setup and task times; measure peak
 //! memory with `/usr/bin/time` around it. Motifs come from the MEME file in
 //! `UM_BENCH_MOTIFS` (the HOCOMOCO v11 human set is a good choice), or are 400
-//! random motifs of widths 8 to 25.
+//! random motifs of widths 8 to 25. With `UM_BENCH_ALPHABET=AA`, the random
+//! motifs and sequences are proteins instead.
 
 use std::time::Instant;
 
@@ -30,7 +31,12 @@ use universalmotif::scan::{ScanOptions, scan_sequences, scan_table};
 use universalmotif::shuffle::{ShuffleMethod, ShuffleOptions, create_sequences, shuffle_sequences};
 use universalmotif::{Alphabet, Motif};
 
-const DNA: [char; 4] = ['A', 'C', 'G', 'T'];
+fn bench_alphabet() -> Alphabet {
+    match std::env::var("UM_BENCH_ALPHABET").as_deref() {
+        Ok("AA") => Alphabet::Aa,
+        _ => Alphabet::Dna,
+    }
+}
 
 fn bench_motifs() -> (String, Vec<Motif>) {
     let motifs = match std::env::var("UM_BENCH_MOTIFS") {
@@ -46,7 +52,7 @@ fn bench_motifs() -> (String, Vec<Motif>) {
                 ..Default::default()
             };
             (0..400)
-                .map(|i| random(8 + i % 18, Alphabet::Dna, &opts, &mut rng).unwrap())
+                .map(|i| random(8 + i % 18, bench_alphabet(), &opts, &mut rng).unwrap())
                 .collect()
         }
     };
@@ -55,7 +61,7 @@ fn bench_motifs() -> (String, Vec<Motif>) {
 }
 
 fn seqs(n: usize, len: usize) -> Vec<String> {
-    create_sequences(&DNA, n, len, None, 1, 1).unwrap()
+    create_sequences(bench_alphabet().letters(), n, len, None, 1, 1).unwrap()
 }
 
 fn main() {
@@ -208,7 +214,7 @@ fn main() {
         "create" => timed("create_sequences 10 Mb", setup, &mut || {
             format!(
                 "{} seqs",
-                create_sequences(&DNA, 100, 100_000, None, 1, threads)
+                create_sequences(Alphabet::Dna.letters(), 100, 100_000, None, 1, threads)
                     .unwrap()
                     .len()
             )

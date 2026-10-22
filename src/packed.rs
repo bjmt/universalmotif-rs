@@ -74,16 +74,92 @@ impl PackedSeq {
 
     /// Half-open stretches of the sequence without unknown letters.
     pub fn known_segments(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        let mut start = 0;
-        self.unknown
-            .iter()
-            .copied()
-            .chain(std::iter::once((self.len, self.len)))
-            .filter_map(move |(a, b)| {
-                let seg = (start, a);
-                start = b;
-                (seg.1 > seg.0).then_some(seg)
-            })
+        segments(&self.unknown, self.len)
+    }
+}
+
+/// The stretches between runs of unknown letters.
+fn segments(unknown: &[(usize, usize)], len: usize) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut start = 0;
+    unknown
+        .iter()
+        .copied()
+        .chain(std::iter::once((len, len)))
+        .filter_map(move |(a, b)| {
+            let seg = (start, a);
+            start = b;
+            (seg.1 > seg.0).then_some(seg)
+        })
+}
+
+/// A sequence over any alphabet, one byte per letter: its index in the
+/// alphabet, with letters outside it stored as runs (and coded as 0), as
+/// for [`PackedSeq`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodedSeq {
+    /// Letter codes, followed by one zero so pairs can be read to the end.
+    codes: Vec<u8>,
+    len: usize,
+    unknown: Vec<(usize, usize)>,
+}
+
+impl CodedSeq {
+    /// Code a sequence over `letters` (at most 255). With
+    /// `case_insensitive`, letters match in either case.
+    pub fn new(seq: &[u8], letters: &[u8], case_insensitive: bool) -> CodedSeq {
+        let mut code = [u8::MAX; 256];
+        for (i, &l) in letters.iter().enumerate() {
+            code[l as usize] = i as u8;
+            if case_insensitive {
+                code[l.to_ascii_uppercase() as usize] = i as u8;
+                code[l.to_ascii_lowercase() as usize] = i as u8;
+            }
+        }
+        let mut codes = Vec::with_capacity(seq.len() + 1);
+        let mut unknown: Vec<(usize, usize)> = Vec::new();
+        for (i, &b) in seq.iter().enumerate() {
+            let c = code[b as usize];
+            if c == u8::MAX {
+                codes.push(0);
+                match unknown.last_mut() {
+                    Some(run) if run.1 == i => run.1 = i + 1,
+                    _ => unknown.push((i, i + 1)),
+                }
+            } else {
+                codes.push(c);
+            }
+        }
+        codes.push(0);
+        CodedSeq {
+            codes,
+            len: seq.len(),
+            unknown,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The letter code at `i` (unknown letters read as 0, as does the
+    /// position just past the end).
+    #[inline(always)]
+    pub fn get(&self, i: usize) -> u8 {
+        self.codes[i]
+    }
+
+    /// Runs of positions that are not letters of the alphabet.
+    pub fn unknown_runs(&self) -> &[(usize, usize)] {
+        &self.unknown
+    }
+
+    /// Half-open stretches of the sequence without unknown letters.
+    pub fn known_segments(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        segments(&self.unknown, self.len)
     }
 }
 
@@ -115,5 +191,20 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn codes_any_alphabet() {
+        let aa = CodedSeq::new(b"MKvXXlA*", b"ACDEFGHIKLMNPQRSTVWY", true);
+        assert_eq!(aa.len(), 8);
+        assert_eq!(aa.unknown_runs(), &[(3, 5), (7, 8)]);
+        assert_eq!(
+            (aa.get(0), aa.get(1), aa.get(2), aa.get(5), aa.get(6)),
+            (10, 8, 17, 9, 0)
+        );
+        assert_eq!(aa.known_segments().collect::<Vec<_>>(), [(0, 3), (5, 7)]);
+        // Custom letters match exactly.
+        let custom = CodedSeq::new(b"xyXy", b"xy", false);
+        assert_eq!(custom.unknown_runs(), &[(2, 3)]);
     }
 }

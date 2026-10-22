@@ -80,11 +80,14 @@ impl ScoreDistribution {
             let max_step = i * max_score;
             std::mem::swap(&mut pdf_old, &mut pdf_new);
             pdf_new[..=max_step + max_score].fill(0.0);
+            // MEME skips zero entries, but adding their zero products
+            // changes nothing and lets the loop vectorise.
+            let (lo_k, hi_k) = (lo, hi.min(max_step));
             for (&s, &b) in col.iter().zip(bkg) {
-                for k in lo..=hi.min(max_step) {
-                    if pdf_old[k] != 0.0 {
-                        pdf_new[k + s] += pdf_old[k] * b;
-                    }
+                let src = &pdf_old[lo_k..=hi_k];
+                let dst = &mut pdf_new[lo_k + s..=hi_k + s];
+                for (d, &o) in dst.iter_mut().zip(src) {
+                    *d += o * b;
                 }
             }
             lo += *col.iter().min().unwrap();
@@ -164,6 +167,15 @@ pub struct ScoreTail {
 }
 
 impl ScoreTail {
+    /// The number of grid points held.
+    pub fn len(&self) -> usize {
+        self.cdf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cdf.is_empty()
+    }
+
     /// The probability of a random site scoring at least `score`, which
     /// must be at or above the tail's start.
     pub fn pvalue(&self, score: f64) -> f64 {

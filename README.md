@@ -15,7 +15,9 @@ sequence scanning, motif comparison, merging and clustering, k-let
 backgrounds, sequence complexity, shuffling, random sequences, implanting
 sites, *de novo* motif discovery, enrichment testing, co-occurrence,
 positional enrichment, proximity to genomic anchors and
-composition-matched backgrounds are done.
+composition-matched backgrounds are done. Scanning, comparison, merging,
+clustering and enrichment work for amino acid and custom alphabets as well
+as DNA and RNA.
 
 ## Example
 

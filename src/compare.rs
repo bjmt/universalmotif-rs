@@ -1,18 +1,26 @@
 //! Motif comparison (`compare_motifs_lite()`).
 //!
-//! Two DNA or RNA motifs are compared by sliding one along the other (and
-//! its reverse complement) and summing, over the overlapping columns, the
+//! Two motifs are compared by sliding one along the other (and, for DNA and
+//! RNA, its reverse complement) and summing, over the overlapping columns, the
 //! Pearson correlation of each column pair centred on a uniform background.
 //! The best alignment is kept. Its significance comes from the distribution
 //! of that sum under a null model of target columns, computed exactly by
 //! convolution, Bonferroni-corrected for the number of alignments tried.
 //! This follows universalmotif's `src/compare_motifs_lite.cpp`, itself a port
 //! of `yamcmp` from yamtk.
+//!
+//! Unlike the R package's lite version, motifs of any alphabet can be
+//! compared: columns are centred on 1/n for an n-letter alphabet (which makes
+//! the score the Pearson correlation of probability columns), reverse
+//! complements are only tried for DNA and RNA, and the parametric null is
+//! only available for DNA and RNA.
 
 use rayon::prelude::*;
 
-use crate::convert::convert_type;
+use crate::alphabet::Alphabet;
+use crate::convert::{consensus_letter_aa, convert_type};
 use crate::error::{Error, Result, arg_err};
+use crate::matrix::which_max;
 use crate::motif::{Motif, MotifType, Strand};
 use crate::pvalue::with_threads;
 
@@ -22,13 +30,43 @@ const ENUM_DIRICHLET_N: f64 = 4.0;
 const CONSENSUS_THRESHOLD: f64 = 0.75;
 const TIE_TOLERANCE: f64 = 1e-10;
 
-type Column = [f64; 4];
+/// A motif column of probabilities. Fixed-size arrays are used for DNA and
+/// RNA (4 letters) and amino acids (20), so that code is compiled for those
+/// sizes; other alphabets use vectors.
+trait Col: Clone + Send + Sync {
+    fn from_slice(v: &[f64]) -> Self;
+    fn values(&self) -> &[f64];
+}
 
-/// Pearson correlation of two columns, centred on 0.25.
-fn pcc_column(q: &Column, t: &Column) -> f64 {
+impl<const N: usize> Col for [f64; N] {
+    fn from_slice(v: &[f64]) -> Self {
+        let mut a = [0.0; N];
+        a.copy_from_slice(v);
+        a
+    }
+    fn values(&self) -> &[f64] {
+        self
+    }
+}
+
+impl Col for Vec<f64> {
+    fn from_slice(v: &[f64]) -> Self {
+        v.to_vec()
+    }
+    fn values(&self) -> &[f64] {
+        self
+    }
+}
+
+/// Pearson correlation of two probability columns, which is centred on
+/// 1/n (0.25 for DNA and RNA).
+#[inline(always)]
+fn pcc_column<C: Col>(q: &C, t: &C) -> f64 {
+    let (q, t) = (q.values(), t.values());
+    let centre = 1.0 / q.len() as f64;
     let (mut sqq, mut stt, mut sqt) = (0.0, 0.0, 0.0);
-    for i in 0..4 {
-        let (a, b) = (q[i] - 0.25, t[i] - 0.25);
+    for i in 0..q.len() {
+        let (a, b) = (q[i] - centre, t[i] - centre);
         sqq += a * a;
         stt += b * b;
         sqt += a * b;
@@ -71,7 +109,7 @@ fn iupac(mask: u8) -> char {
 }
 
 /// IUPAC letter covering the most probable letters until 75% is reached.
-fn consensus_char(p: &Column) -> char {
+fn consensus_char(p: &[f64]) -> char {
     let mut order = [0usize, 1, 2, 3];
     for i in 1..4 {
         let mut j = i;
@@ -91,13 +129,22 @@ fn consensus_char(p: &Column) -> char {
     iupac(mask)
 }
 
-fn rc_columns(m: &[Column]) -> Vec<Column> {
-    m.iter().rev().map(|c| [c[3], c[2], c[1], c[0]]).collect()
+/// Reverse complement of DNA or RNA columns (in A, C, G, T order the
+/// complement reverses each column).
+fn rc_columns<C: Col>(m: &[C]) -> Vec<C> {
+    m.iter()
+        .rev()
+        .map(|c| {
+            let mut v = c.values().to_vec();
+            v.reverse();
+            C::from_slice(&v)
+        })
+        .collect()
 }
 
 /// The 56 columns of the K = 5 simplex grid with Dirichlet-multinomial
 /// weights, for the parametric null.
-fn enum_columns(bkg: &Column) -> Vec<(Column, f64)> {
+fn enum_columns(bkg: &[f64; 4]) -> Vec<([f64; 4], f64)> {
     let lgamma = libm::lgamma;
     let alpha: Vec<f64> = bkg
         .iter()
@@ -190,37 +237,46 @@ pub struct Alignment {
     pub n_tested: usize,
 }
 
-/// PPM columns of DNA/RNA motifs.
-fn columns(motifs: &[Motif]) -> Result<Vec<Vec<Column>>> {
+/// The alphabet shared by all the motifs.
+fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
     let Some(first) = motifs.first() else {
         return arg_err("no motifs to compare");
     };
     if motifs.iter().any(|m| m.alphabet != first.alphabet) {
         return arg_err("all motifs must share the same alphabet");
     }
-    if !first.alphabet.is_nucleotide() {
-        return Err(Error::Unsupported(format!(
-            "only DNA and RNA motifs can be compared; got {}",
-            first.alphabet
-        )));
+    if first.alphabet.len() < 2 {
+        return arg_err("motifs need at least two letters to be compared");
     }
+    Ok(first.alphabet.clone())
+}
+
+/// Run `$f::<C>` with the column type that suits the alphabet.
+macro_rules! by_alphabet {
+    ($alphabet:expr, $f:ident($($arg:expr),*)) => {
+        match $alphabet.len() {
+            4 => $f::<[f64; 4]>($($arg),*),
+            20 => $f::<[f64; 20]>($($arg),*),
+            _ => $f::<Vec<f64>>($($arg),*),
+        }
+    };
+}
+
+/// PPM columns of the motifs.
+fn columns<C: Col>(motifs: &[Motif]) -> Result<Vec<Vec<C>>> {
     motifs
         .iter()
         .map(|m| {
             let ppm = convert_type(m, MotifType::Ppm, None, false)?;
-            Ok(ppm
-                .matrix
-                .columns()
-                .map(|c| [c[0], c[1], c[2], c[3]])
-                .collect())
+            Ok(ppm.matrix.columns().map(C::from_slice).collect())
         })
         .collect()
 }
 
-fn best_alignment(
-    q: &[Column],
-    q_rc: Option<&[Column]>,
-    t: &[Column],
+fn best_alignment<C: Col>(
+    q: &[C],
+    q_rc: Option<&[C]>,
+    t: &[C],
     min_overlap: usize,
 ) -> (f64, usize, i64, Strand, usize, usize) {
     let (wq, wt) = (q.len() as i64, t.len() as i64);
@@ -233,7 +289,7 @@ fn best_alignment(
         0usize,
         0usize,
     );
-    let orientations: Vec<(&[Column], Strand)> = match q_rc {
+    let orientations: Vec<(&[C], Strand)> = match q_rc {
         Some(r) => vec![(q, Strand::Plus), (r, Strand::Minus)],
         None => vec![(q, Strand::Plus)],
     };
@@ -260,17 +316,36 @@ fn best_alignment(
     best
 }
 
-/// Best alignments for `(query, target)` pairs of motif indices.
+/// Best alignments for `(query, target)` pairs of motif indices. Reverse
+/// complements are only tried for DNA and RNA motifs.
 pub fn align(
     motifs: &[Motif],
     pairs: &[(usize, usize)],
     opts: &CompareOptions,
 ) -> Result<Vec<Alignment>> {
+    let alphabet = shared_alphabet(motifs)?;
+    by_alphabet!(
+        alphabet,
+        align_with(motifs, pairs, opts, alphabet.is_nucleotide())
+    )
+}
+
+fn align_with<C: Col>(
+    motifs: &[Motif],
+    pairs: &[(usize, usize)],
+    opts: &CompareOptions,
+    nucleotide: bool,
+) -> Result<Vec<Alignment>> {
     if opts.min_overlap < 1 {
         return arg_err("min_overlap must be at least 1");
     }
-    let cols = columns(motifs)?;
-    let rc: Vec<Vec<Column>> = cols.iter().map(|c| rc_columns(c)).collect();
+    let cols: Vec<Vec<C>> = columns(motifs)?;
+    let rc_ok = opts.rc && nucleotide;
+    let rc: Vec<Vec<C>> = if rc_ok {
+        cols.iter().map(|c| rc_columns(c)).collect()
+    } else {
+        Vec::new()
+    };
     if pairs
         .iter()
         .any(|&(q, t)| q >= cols.len() || t >= cols.len())
@@ -283,7 +358,7 @@ pub fn align(
             .map(|&(q, t)| {
                 let (score, overlap, offset, strand, query_start, n_tested) = best_alignment(
                     &cols[q],
-                    opts.rc.then_some(rc[q].as_slice()),
+                    rc_ok.then(|| rc[q].as_slice()),
                     &cols[t],
                     opts.min_overlap,
                 );
@@ -377,16 +452,36 @@ pub fn anchor_layout(
     Ok((placements, (hi - lo) as usize))
 }
 
-/// Bonferroni-corrected P-values of alignments.
+/// Bonferroni-corrected P-values of alignments. The parametric null is only
+/// available for DNA and RNA motifs.
 pub fn alignment_pvalues(
     motifs: &[Motif],
     alignments: &[Alignment],
     opts: &CompareOptions,
 ) -> Result<Vec<f64>> {
-    let cols = columns(motifs)?;
-    let flat: Vec<Column> = cols.iter().flatten().copied().collect();
-    let grid = (opts.null == NullModel::Parametric).then(|| enum_columns(&opts.bkg));
-    let col_pmf = |q: &Column| -> Vec<f64> {
+    let alphabet = shared_alphabet(motifs)?;
+    if opts.null == NullModel::Parametric && !alphabet.is_nucleotide() {
+        return Err(Error::Unsupported(format!(
+            "the parametric null is only available for DNA and RNA motifs; use the empirical null for {alphabet} motifs"
+        )));
+    }
+    by_alphabet!(alphabet, alignment_pvalues_with(motifs, alignments, opts))
+}
+
+fn alignment_pvalues_with<C: Col>(
+    motifs: &[Motif],
+    alignments: &[Alignment],
+    opts: &CompareOptions,
+) -> Result<Vec<f64>> {
+    let cols: Vec<Vec<C>> = columns(motifs)?;
+    let flat: Vec<C> = cols.iter().flatten().cloned().collect();
+    let grid: Option<Vec<(C, f64)>> = (opts.null == NullModel::Parametric).then(|| {
+        enum_columns(&opts.bkg)
+            .into_iter()
+            .map(|(c, w)| (C::from_slice(&c), w))
+            .collect()
+    });
+    let col_pmf = |q: &C| -> Vec<f64> {
         let mut pmf = vec![0.0; PCC_BINS];
         match &grid {
             None => {
@@ -408,7 +503,7 @@ pub fn alignment_pvalues(
         pmf
     };
     // Null distributions for every (start, length) of an oriented query.
-    let cache = |q: &[Column]| -> Vec<Vec<Vec<f64>>> {
+    let cache = |q: &[C]| -> Vec<Vec<Vec<f64>>> {
         let pmfs: Vec<Vec<f64>> = q.iter().map(col_pmf).collect();
         (0..q.len())
             .map(|start| {
@@ -492,12 +587,27 @@ pub struct Comparison {
     pub target_consensus: String,
 }
 
-fn consensus_range(cols: &[Column], start: i64, len: usize) -> String {
+/// Consensus letters of some columns: IUPAC codes for DNA and RNA, the
+/// amino acid consensus for proteins, and the most probable letter for other
+/// alphabets.
+fn consensus_range<C: Col>(cols: &[C], start: i64, len: usize, alphabet: &Alphabet) -> String {
     let start = start.max(0) as usize;
     let len = len.min(cols.len().saturating_sub(start));
+    let letters = alphabet.letters();
     cols[start..start + len]
         .iter()
-        .map(consensus_char)
+        .map(|c| {
+            let v = c.values();
+            match alphabet {
+                Alphabet::Dna => consensus_char(v),
+                Alphabet::Rna => match consensus_char(v) {
+                    'T' => 'U',
+                    x => x,
+                },
+                Alphabet::Aa => consensus_letter_aa(v, MotifType::Ppm, 0.0),
+                _ => letters[which_max(v)],
+            }
+        })
         .collect()
 }
 
@@ -517,7 +627,21 @@ pub fn compare_motifs(
         .collect();
     let al = align(motifs, &pairs, opts)?;
     let pvals = alignment_pvalues(motifs, &al, opts)?;
-    let cols = columns(motifs)?;
+    let alphabet = shared_alphabet(motifs)?;
+    by_alphabet!(
+        alphabet,
+        finish_comparisons(motifs, queries, &al, &pvals, &alphabet)
+    )
+}
+
+fn finish_comparisons<C: Col>(
+    motifs: &[Motif],
+    queries: &[usize],
+    al: &[Alignment],
+    pvals: &[f64],
+    alphabet: &Alphabet,
+) -> Result<Vec<Comparison>> {
+    let cols: Vec<Vec<C>> = columns(motifs)?;
 
     let mut qvals = vec![f64::NAN; al.len()];
     for &q in queries {
@@ -553,8 +677,8 @@ pub fn compare_motifs(
                 },
                 pvalue: pvals[k],
                 qvalue: qvals[k],
-                query_consensus: consensus_range(&cols[a.query], q_start, a.overlap),
-                target_consensus: consensus_range(&cols[a.target], t_start, a.overlap),
+                query_consensus: consensus_range(&cols[a.query], q_start, a.overlap, alphabet),
+                target_consensus: consensus_range(&cols[a.target], t_start, a.overlap, alphabet),
             }
         })
         .collect())

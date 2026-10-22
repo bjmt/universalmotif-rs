@@ -469,7 +469,7 @@ impl Default for TreeOptions {
     }
 }
 
-/// Cluster DNA or RNA motifs into a tree, as `motif_tree_lite()` does:
+/// Cluster motifs into a tree, as `motif_tree_lite()` does:
 /// motifs are compared with [`crate::compare::compare_matrix`], mean column
 /// correlations become distances as `(1 - score) / 2`, and the distances are
 /// clustered with [`hclust`].

@@ -4,7 +4,7 @@ use crate::alphabet::Alphabet;
 use crate::compare::{CompareOptions, NullModel, align, compare_matrix};
 use crate::convert::convert_type;
 use crate::create::{CreateOptions, from_matrix};
-use crate::error::{Error, Result, arg_err};
+use crate::error::{Result, arg_err};
 use crate::matrix::{Matrix, which_max};
 use crate::motif::{Motif, MotifType, Strand};
 
@@ -37,32 +37,27 @@ impl Default for MergeOptions {
     }
 }
 
-fn check_nucleotide(motifs: &[Motif]) -> Result<Alphabet> {
+fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
     let Some(first) = motifs.first() else {
         return arg_err("no motifs given");
     };
     if motifs.iter().any(|m| m.alphabet != first.alphabet) {
         return arg_err("all motifs must share the same alphabet");
     }
-    if !first.alphabet.is_nucleotide() {
-        return Err(Error::Unsupported(format!(
-            "only DNA and RNA motifs can be merged; got {}",
-            first.alphabet
-        )));
-    }
     Ok(first.alphabet.clone())
 }
 
-/// Merge DNA or RNA motifs into one.
+/// Merge motifs into one.
 ///
 /// The motif with the highest total IC is the anchor. Every other motif is
 /// aligned to it (see [`crate::compare::align`]), reverse complemented if
-/// that fits better, and the aligned probabilities are averaged position by
-/// position. Positions covered by no motif are uniform. The result is a PPM
+/// that fits better (DNA and RNA only), and the aligned probabilities are
+/// averaged position by position. Positions covered by no motif are uniform. The result is a PPM
 /// whose `nsites` is the sum of the motifs' (1 for motifs without one), with
 /// the average background and the anchor's pseudocount.
 pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
-    let alphabet = check_nucleotide(motifs)?;
+    let alphabet = shared_alphabet(motifs)?;
+    let nl = alphabet.len();
     if motifs.len() == 1 {
         let mut p = convert_type(&motifs[0], MotifType::Ppm, None, false)?.into_parts();
         if let Some(n) = &opts.name {
@@ -123,7 +118,7 @@ pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
     let mut cols = Vec::with_capacity(width);
     for p in 0..width as i64 {
         let frame = lo + p;
-        let mut sum = [0.0; 4];
+        let mut sum = vec![0.0; nl];
         let mut wsum = 0.0;
         for (u, &w) in used.iter().zip(&weights) {
             let local = frame - u.2;
@@ -136,14 +131,14 @@ pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
             wsum += w;
         }
         cols.push(if wsum == 0.0 {
-            vec![0.25; 4]
+            vec![1.0 / nl as f64; nl]
         } else {
             sum.iter().map(|s| s / wsum).collect()
         });
     }
 
     let total_nsites: f64 = used.iter().map(|u| nsites[u.0]).sum();
-    let mut bkg = [0.0; 4];
+    let mut bkg = vec![0.0; nl];
     for u in &used {
         for (b, v) in bkg.iter_mut().zip(&ppms[u.0].bkg) {
             *b += v;
@@ -174,7 +169,7 @@ pub struct MergeSimilarOptions {
     pub null: NullModel,
     pub min_overlap: usize,
     pub rc: bool,
-    /// Background (A, C, G, T) for the parametric null.
+    /// Background (A, C, G, T) for the parametric null (DNA and RNA only).
     pub bkg: [f64; 4],
     pub weighted: bool,
     pub nthreads: usize,
@@ -209,7 +204,7 @@ pub fn merge_similar(
     if motifs.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    check_nucleotide(motifs)?;
+    shared_alphabet(motifs)?;
     if !(opts.qvalue > 0.0 && opts.qvalue <= 1.0) {
         return arg_err("qvalue must be in (0, 1]");
     }
