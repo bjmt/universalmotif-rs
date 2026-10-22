@@ -183,8 +183,9 @@ change is listed here so the R package can be fixed to match.
 
 ## Additions
 
-- **FASTA files.** The port reads and writes FASTA files, since scanning
-  needs sequences; the R package relies on Biostrings for this.
+- **FASTA files.** The port reads and writes FASTA files (reading gzipped
+  ones too), since scanning needs sequences; the R package relies on
+  Biostrings for this.
 - **Scanning without holding sequences as text.** Scanning can read a FASTA
   file a batch at a time, or take sequences packed at two bits per base
   (a byte per letter for other alphabets), which hold a human genome in

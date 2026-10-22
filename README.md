@@ -18,7 +18,7 @@ positional enrichment, proximity to genomic anchors and
 composition-matched backgrounds are done. Scanning, comparison, merging,
 clustering and enrichment work for amino acid and custom alphabets as well
 as DNA and RNA. Large sequence sets can be scanned straight from a FASTA
-file with `scan::scan_fasta`, which reads and scans a batch at a time (a
+file (gzipped or not) with `scan::scan_fasta`, which reads and scans a batch at a time (a
 human genome in a few hundred MB), or packed once at two bits per base with
 `io::fasta::read_encoded` and scanned repeatedly with `scan::scan_encoded`.
 

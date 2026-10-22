@@ -10,6 +10,7 @@ keywords = ["bioinformatics", "motif", "pwm", "genomics"]
 categories = ["science"]
 
 [dependencies]
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 libm = "0.2.16"
 rand = "0.10.3"
 rand_distr = "0.6.0"

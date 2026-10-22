@@ -737,7 +737,8 @@ impl FastaHits {
     }
 }
 
-/// [`scan_table`] for the sequences of a FASTA file, read a batch at a time
+/// [`scan_table`] for the sequences of a FASTA file (which may be gzipped,
+/// bgzip included), read a batch at a time
 /// on a thread of its own while the last batch is scanned, so the file is
 /// never held in memory whole. Sequence indices follow the file's records.
 pub fn scan_fasta(
@@ -757,9 +758,7 @@ fn scan_fasta_with(
     tail_budget: usize,
 ) -> Result<FastaHits> {
     let alphabet = check_scan(motifs, opts)?;
-    let file = std::fs::File::open(path)
-        .map_err(|e| Error::Argument(format!("could not open {}: {e}", path.display())))?;
-    let reader = std::io::BufReader::with_capacity(1 << 20, file);
+    let reader = crate::io::fasta::open(path)?;
     let mut out = FastaHits::default();
     let mut raw: Vec<RawHit> = Vec::new();
     // Each found hit's letters start at letter_starts[id].
@@ -1108,8 +1107,17 @@ mod tests {
                 assert_eq!(got_matched, matched, "{label}: encoded letters");
 
                 // Small batches, and no room for any P-value tail.
-                for (batch, budget) in [(STREAM_BATCH, TAIL_BUDGET), (2_500, 0), (1, 0)] {
-                    let f = scan_fasta_with(motifs, &path, &opts, batch, budget).unwrap();
+                let text = std::fs::read(&path).unwrap();
+                let gz = dir.join(format!("{label}.fa.gz"));
+                let split = text.len() / 2;
+                std::fs::write(&gz, crate::io::fasta::tests::gzip_members(&text, split)).unwrap();
+                for (file, batch, budget) in [
+                    (&path, STREAM_BATCH, TAIL_BUDGET),
+                    (&path, 2_500, 0),
+                    (&path, 1, 0),
+                    (&gz, 2_500, TAIL_BUDGET),
+                ] {
+                    let f = scan_fasta_with(motifs, file, &opts, batch, budget).unwrap();
                     assert_eq!(f.table, want, "{label}: fasta, batches of {batch}");
                     let fm: Vec<&str> = (0..f.len()).map(|i| f.matched(i)).collect();
                     assert_eq!(fm, matched, "{label}: fasta letters");
