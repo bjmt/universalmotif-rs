@@ -34,12 +34,10 @@ impl Default for PvalueOptions {
     }
 }
 
-/// Run `f` on a thread pool of `nthreads` threads (0 for all available), or
-/// directly when only one thread is asked for.
+/// Run `f` on a thread pool of `nthreads` threads (0 for all available).
+/// Parallel iterators inside `f` use this pool, so they never spread to
+/// more threads than asked for.
 pub(crate) fn with_threads<T: Send>(nthreads: usize, f: impl FnOnce() -> T + Send) -> Result<T> {
-    if nthreads == 1 {
-        return Ok(f());
-    }
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(nthreads)
         .build()

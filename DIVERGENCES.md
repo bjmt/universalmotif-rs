@@ -125,6 +125,10 @@ change is listed here so the R package can be fixed to match.
 - Schneider's small-sample correction for information content.
 - The non-lite versions of functions that have a lite counterpart in
   the R package.
+- Drawing trees. `motif_tree()` builds the tree (with R's `hclust`
+  algorithm, so it matches exactly) and returns it as data, a Newick
+  string and a SciPy linkage matrix rather than a ggtree plot. Plotting is
+  planned for a later milestone.
 - `motif_pvalue(method = "exhaustive")`: the branch-and-bound P-value
   search and the random score search. Only the exact dynamic method is
   ported.

@@ -710,3 +710,105 @@ add_scan("promoters.fa", proms, list(pvalue = 1e-3, no.overlaps = TRUE,
                                      no.overlaps.by.motif = TRUE))
 add_scan("extra.fa", extra[c(1, 3)], list(pvalue = 0.05))
 write_ref(list(motifs = lapply(scan_motifs, motif_record), cases = scan_cases), "scan.json")
+
+# ---------------------------------------------------------------------------
+# Comparison, merging and trees (lite functions)
+
+homer_m <- read_homer(fp("homer.txt"))
+meme_m <- read_meme(fp("meme_full.txt"))
+transfac_m <- read_transfac(fp("transfac.txt"))
+cmp_dna <- c(jaspar, list(examplemotif, ArabidopsisMotif), homer_m, meme_m,
+             transfac_m[1:2])
+cmp_dna <- lapply(cmp_dna, function(m) { m@multifreq <- list(); m })
+cmp_rna <- list(
+  create_motif(c("ACGU", "ACGA", "UCGU"), name = "r1", nsites = 3),
+  create_motif("UUGACUAA", name = "r2", nsites = 20, pseudocount = 1),
+  create_motif("CCGUAAGCU", name = "r3", nsites = 20, pseudocount = 1))
+rows <- function(m) lapply(seq_len(nrow(m)), function(i) vec(m[i, ]))
+
+cmp_cases <- list()
+add_cmp <- function(set, motifs, args) {
+  r <- attempt(do.call(compare_motifs_lite, c(list(motifs = motifs), args)))
+  case <- list(set = set, args = args)
+  if (!r$ok) {
+    case$error <- r$error
+  } else if (is.matrix(r$value)) {
+    case$matrix <- rows(r$value)
+  } else {
+    d <- r$value
+    case$long <- list(subject_i = I(d$subject.i), target_i = I(d$target.i),
+                      offset = I(d$offset), strand = I(d$strand),
+                      overlap = I(d$overlap), score = vec(d$score),
+                      subject_consensus = I(d$subject.consensus),
+                      target_consensus = I(d$target.consensus),
+                      pvalue = vec(d$pvalue), qvalue = vec(d$qvalue))
+  }
+  cmp_cases[[length(cmp_cases) + 1]] <<- case
+}
+for (out in c("score", "pvalue", "qvalue"))
+  for (rc in c(TRUE, FALSE))
+    add_cmp("dna", cmp_dna, list(matrix.out = out, RC = rc))
+for (mo in c(3L, 12L)) add_cmp("dna", cmp_dna, list(matrix.out = "pvalue", min.overlap = mo))
+add_cmp("dna", cmp_dna, list(matrix.out = "pvalue", null = "parametric"))
+add_cmp("dna", cmp_dna, list(matrix.out = "qvalue", null = "parametric",
+                             bkg = c(A = 0.3, C = 0.2, G = 0.2, T = 0.3)))
+add_cmp("dna", cmp_dna, list(compare.to = c(1L, 7L), qvalue = 1))
+add_cmp("dna", cmp_dna, list(compare.to = c(3L, 9L, 12L)))
+add_cmp("dna", cmp_dna, list(compare.to = 2L, qvalue = 1, RC = FALSE, null = "parametric"))
+add_cmp("rna", cmp_rna, list(matrix.out = "pvalue"))
+add_cmp("rna", cmp_rna, list(compare.to = 1L, qvalue = 1))
+
+merge_cases <- list()
+add_merge <- function(set, idx, args) {
+  ms <- (if (set == "dna") cmp_dna else cmp_rna)[idx]
+  r <- attempt(do.call(merge_motifs_lite, c(list(motifs = ms), args)))
+  merge_cases[[length(merge_cases) + 1]] <<- c(
+    list(set = set, idx = I(idx), args = args), as_motif_result(r))
+}
+add_merge("dna", 1:3, list())
+add_merge("dna", 1:3, list(weighted = TRUE))
+add_merge("dna", 1:3, list(RC = FALSE, new.name = "joined"))
+add_merge("dna", c(6, 8, 9, 10), list())
+add_merge("dna", c(6, 8, 9, 10), list(min.overlap = 8L))
+add_merge("dna", c(13, 14, 15), list(weighted = TRUE))
+add_merge("dna", 4L, list(new.name = "single"))
+add_merge("rna", 1:3, list(min.overlap = 3L))
+
+similar_cases <- list()
+for (args in list(list(), list(qvalue = 0.1), list(qvalue = 0.5),
+                  list(qvalue = 0.1, null = "parametric", weighted = TRUE),
+                  list(qvalue = 0.1, RC = FALSE, min.overlap = 6L))) {
+  cl <- do.call(merge_similar_lite, c(list(motifs = cmp_dna, return.clusters = TRUE), args))
+  ms <- do.call(merge_similar_lite, c(list(motifs = cmp_dna), args))
+  similar_cases[[length(similar_cases) + 1]] <- list(
+    args = args, clusters = I(cl$cluster), motifs = lapply(ms, motif_record))
+}
+
+tree_cases <- list()
+methods <- c("ward.D", "single", "complete", "average", "mcquitty", "median",
+             "centroid", "ward.D2")
+add_tree <- function(source, dmat, method, labels, extra = list()) {
+  h <- hclust(as.dist(dmat), method = method)
+  h$labels <- labels
+  tree_cases[[length(tree_cases) + 1]] <<- c(list(
+    source = source, method = method, dist = rows(dmat), labels = I(labels),
+    merge = rows(h$merge), height = vec(h$height), order = I(h$order),
+    newick = ape::write.tree(ape::as.phylo(h))), extra)
+}
+for (rc in c(TRUE, FALSE)) for (mo in c(6L, 4L)) {
+  s <- compare_motifs_lite(cmp_dna, matrix.out = "score", RC = rc, min.overlap = mo)
+  for (meth in c("complete", "average"))
+    add_tree("motifs", (1 - s) / 2, meth, rownames(s),
+             list(args = list(RC = rc, min.overlap = mo)))
+}
+set.seed(42)
+for (k in 1:3) {
+  pts <- matrix(round(runif(14 * 2) * 4), ncol = 2)  # many tied distances
+  dmat <- as.matrix(dist(pts))
+  for (meth in methods)
+    add_tree("random", dmat, meth, paste0("leaf ", seq_len(nrow(dmat))))
+}
+
+write_ref(list(dna = lapply(cmp_dna, motif_record), rna = lapply(cmp_rna, motif_record),
+               compare = cmp_cases, merge = merge_cases, similar = similar_cases,
+               tree = tree_cases), "compare.json")

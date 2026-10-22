@@ -14,6 +14,7 @@ pub mod convert;
 pub mod create;
 pub mod error;
 pub mod matrix;
+pub mod merge;
 pub mod motif;
 pub mod ops;
 

@@ -10,6 +10,7 @@ keywords = ["bioinformatics", "motif", "pwm", "genomics"]
 categories = ["science"]
 
 [dependencies]
+libm = "0.2.16"
 rand = "0.10.3"
 rand_distr = "0.6.0"
 rayon = "1.12"
