@@ -34,7 +34,10 @@ pub struct CooccOptions {
     pub min_coocc: u64,
     /// Added to every cell of the 2x2 table.
     pub pseudocount: u64,
-    /// Also test each motif against itself.
+    /// Also pair each motif with itself. Such a pair is not tested: `both`
+    /// counts the sequences with hits at two or more positions and `a_only`
+    /// those with a hit at only one, and distances are between a motif's own
+    /// hits.
     pub self_pairs: bool,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
@@ -88,6 +91,9 @@ struct MotifHits {
 impl MotifHits {
     fn new(mut hits: Vec<(usize, i64)>, words: usize) -> MotifHits {
         hits.sort_unstable();
+        // Hits on both strands at the same position, as palindromes give,
+        // count once.
+        hits.dedup();
         let mut runs: Vec<(usize, usize, usize)> = Vec::new();
         let mut present = vec![0u64; words];
         for (k, &(seq, _)) in hits.iter().enumerate() {
@@ -197,6 +203,29 @@ pub fn motif_coocc(
             .par_iter()
             .map(|&(i, j)| {
                 let (mi, mj) = (&motifs[i], &motifs[j]);
+                if i == j {
+                    let multi = mi.runs.iter().filter(|r| r.2 - r.1 >= 2).count() as u64;
+                    let mut p = CooccPair {
+                        a: i,
+                        b: j,
+                        a_only: mi.n_sequences() - multi,
+                        b_only: 0,
+                        both: multi,
+                        neither: n_sequences as u64 - mi.n_sequences(),
+                        odds_ratio: None,
+                        pvalue: None,
+                        qvalue: None,
+                        both_clustered: None,
+                        median_distance: None,
+                    };
+                    if let Some(maxd) = opts.max_distance {
+                        let mut close = nearest_distances(mi, mi, true);
+                        close.retain(|&d| d <= maxd as f64);
+                        p.both_clustered = Some(close.len() as u64);
+                        p.median_distance = median(&close);
+                    }
+                    return p;
+                }
                 let both = mi
                     .present
                     .iter()
@@ -223,7 +252,7 @@ pub fn motif_coocc(
                 };
                 if let Some(maxd) = opts.max_distance {
                     let mut close = if both > 0 {
-                        nearest_distances(mi, mj, i == j)
+                        nearest_distances(mi, mj, false)
                     } else {
                         Vec::new()
                     };

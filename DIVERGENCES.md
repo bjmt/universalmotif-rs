@@ -29,6 +29,34 @@ change is listed here so the R package can be fixed to match.
   length 1. The port always checks it, and also enforces the
   `mingap <= maxgap` and `maxgap > 0` rules that the R package only applies
   in `add_gap()`.
+- **`ppm_to_pcm()` can make uneven or negative counts.** Each value is
+  rounded and the whole rounding error goes to the largest count, so a
+  uniform column at 50 sites becomes 11, 13, 13 and 13, and when many small
+  probabilities round up the largest count goes negative and the motif is
+  rejected (for example `create_motif("BZJX", nsites = 50)`). The port keeps
+  this rule when the rounded counts fall short or overshoot by one, which
+  covers ordinary DNA columns, and otherwise rounds down and gives the
+  remaining sites to the largest remainders, so the uniform column becomes
+  13, 13, 12 and 12. Amino acid columns overshoot more often, so their counts,
+  and the PWMs made from them, differ from the R package's more often too.
+- **The total IC and consensus go stale.** `round_motif()` and `normalize()`
+  change the matrix or pseudocount but keep the old total IC and consensus,
+  and `convert_type()` with a new pseudocount keeps the old total IC. The
+  port recomputes them.
+- **Relative entropy is NaN for zero probabilities.**
+  `ppm_to_icm(relative_entropy = TRUE)` computes `0 * log2(0)` for letters
+  that never occur, which is NaN, so the column, and a logo drawn with
+  `view_motifs(relative_entropy = TRUE)`, comes out empty. The port takes
+  those letters as 0.
+- **CWMs get a total IC.** Contribution weights are not probabilities, so
+  the IC the R package reports for a CWM has no meaning. The port gives CWMs
+  none (NaN) and leaves it out when printing them, and computes one when a
+  CWM is converted to another type.
+- **A matrix with negative values becomes a near-uniform PPM.**
+  `create_motif()` takes a matrix with negative values to be a PWM and,
+  with the default `type = "PPM"`, converts it, so a matrix of contribution
+  weights silently becomes a PPM of nearly uniform columns. The Python
+  package asks for the type of such a matrix, `"PWM"` or `"CWM"`, instead.
 - **Some invalid values pass validation.** The port also rejects matrices
   containing NaN and pseudocounts that are negative or not finite.
 - **Letters outside a custom alphabet are ignored.** When `create_motif()` is
@@ -80,6 +108,19 @@ change is listed here so the R package can be fixed to match.
   after the closing parenthesis.
 - **MEME block diagrams over three lines.** `read_meme()` joins only the
   first two lines of a combined block diagram. The port joins all of them.
+- **MEME files get a placeholder E-value.** `write_meme()` writes `E= 0`
+  for motifs without an E-value, which reads back as an E-value of 0, and
+  leaves trailing spaces on the MOTIF and matrix lines. The port leaves
+  out the optional E-value when there is none and the trailing spaces.
+- **`meme_alph()` declares each complementary pair twice.** Every core
+  letter gets its own `X ~ Y` line, so A ~ T is followed later by T ~ A.
+  MEME's own alphabet files declare each pair once, as the port does.
+- **Rounded probabilities are taken for information content.** A matrix
+  of probabilities written to two decimals can have columns summing to
+  0.98 or 1.02, and guessing its type, as `read_matrix()` and
+  `create_motif()` do, only accepts sums between 0.99 and 1.01, so such a
+  matrix is read as an ICM. The port accepts sums within 0.02 of 1 when
+  guessing and renormalises the columns.
 - **Numbers are parsed with correct rounding.** R's parser can be one unit
   in the last place off (`as.numeric("5.3e-032")` is not the closest double
   to 5.3e-32), so values read by the two packages can differ in the last
@@ -117,11 +158,34 @@ change is listed here so the R package can be fixed to match.
   the column correlations, for example). Since the P-value depends on the
   alignment chosen, results can differ between machines. The port keeps
   the first alignment found (forward strand, leftmost offset) unless a
-  later one is better by more than 1e-10. This also affects which motifs
-  `view_motifs_lite()` shows as reverse complements.
+  later one is better by more than 1e-10, or ties with it over a longer
+  overlap. Preferring the longer overlap keeps the mean score the same
+  whichever way round two motifs are compared; the R package's choice
+  depends on the order in which offsets are tried, so its score matrices
+  can be asymmetric. This also affects which motifs `view_motifs_lite()`
+  shows as reverse complements.
 - **RNA consensus strings use U.** `compare_motifs()` writes T in the
   consensus strings of aligned RNA motifs, unlike every other RNA consensus
   in the package. The port writes U.
+- **The parametric null gives P-values of exactly 0.** The parametric
+  null describes random columns with a coarse grid of 56 columns, which
+  some real columns never match perfectly, so a near-perfect alignment
+  such as a motif with itself can score beyond anything the null reaches
+  and get a P-value of 0. The port gives such scores the probability of
+  the null's highest score, a small but honest upper bound.
+- **Aligned consensus strings follow their own rule.** The consensus
+  strings in `compare_motifs()` results take the most probable letters of
+  each column until they reach 75%, which can give a different letter from
+  the motif's own consensus. The port uses the motif consensus rule.
+- **WPCC weights are not normalised.** `compare_columns(method = "WPCC")`
+  weights each letter by the sum of the two backgrounds, which adds up to
+  2, and uses those weights directly as if they summed to 1, so the
+  weighted means are doubled and WPCC with a uniform background is not
+  PCC. The port divides the weights by their sum.
+- **KL and ALLR give NaN for zero probabilities.** `0 * log(0)` is NaN in
+  R, so a letter with probability zero in both columns makes the whole
+  score NaN. The port takes those terms as zero; a zero facing a nonzero
+  probability still gives an infinite score, as it should.
 
 ### Plotting
 
@@ -140,6 +204,14 @@ change is listed here so the R package can be fixed to match.
   does not follow the k-let frequencies it was built from (for k = 2 the
   letter just written is ignored). The port conditions on the last k-1
   letters.
+- **`calc_complexity()` scores each string against its own letters.**
+  Without `alph`, each string's alphabet is the set of letters it contains,
+  so ATATATATAT counts as a two-letter sequence and scores twice as complex
+  as it does in `sequence_complexity()`, which uses ACGT for DNA, and a
+  homopolymer gives NaN. The port uses ACGT or ACGU for DNA and RNA in both
+  functions, and otherwise the letters of all the strings together.
+- **`get_bkg(to.meme = ...)` leaves trailing spaces.** Each line of the
+  background file ends in a space. The port leaves it out.
 - **Wootton-Federhen complexity fails for windows of 171 letters or more.**
   `calc_complexity()` and `sequence_complexity()` compute the factorials in
   the formula directly, which overflow a double at 171! and give NaN. The
@@ -196,10 +268,34 @@ change is listed here so the R package can be fixed to match.
   R's `sample()` treats a single number `n` as `1:n`, so with one target
   sequence of width 150 the windows get any width from 1 to 150. The port
   always uses the target widths.
+- **`motif_finder()` P-values ignore the search.** Each motif is the best
+  of the thousands of words tried at each width, but its P-value is that
+  of a single Fisher's exact test, and the Benjamini-Hochberg correction
+  only counts the motifs that were kept. Random sequences compared with
+  random sequences therefore give "motifs" with q-values around 1e-4. The
+  port multiplies each P-value by the number of words tried in the search
+  that found it and counts every word tried at every width in the
+  q-values, which in tests on random sequences leaves nothing below 0.05;
+  with that, the default q-value cutoff is 0.05 rather than 0.001. The
+  motifs found are the same.
+- **`motif_coocc(self.pairs = TRUE)` tests a motif against itself.** The
+  2x2 table of a motif with itself has nothing in the off-diagonal cells,
+  so the test always gives an infinite odds ratio and a P-value near zero,
+  and those P-values also enter the multiple testing correction of the
+  other pairs. A site on both strands at one position, as palindromes
+  give, also counts as two hits at distance zero. The port does not test
+  self pairs: `both` counts the sequences with hits at two or more
+  positions and `a_only` those with a hit at one, and hits at the same
+  position count once.
 - **`motif_peaks()` orders motifs by locale.** Motifs are numbered (and
   ties in P-value broken) by `sort()` on their names, which follows the
   locale's collation rules, so `motif.i` can differ between machines. The
   port sorts names by code point.
+- **`motif_proximity()` numbers motifs by name.** `motif.i` is a motif's
+  rank among the sorted names rather than its place in the input, and ties
+  in P-value are broken in that order. The port keeps the index that
+  `scan_sequences()` gave each motif, or numbers motifs in order of first
+  appearance.
 
 ## Additions
 
@@ -234,6 +330,17 @@ change is listed here so the R package can be fixed to match.
   scored once per
   position and the combinations are built from those scores, which is
   about twice as fast as scanning every combination separately.
+- **P-values on a log scale.** `motif_finder()` and `enrich_motifs()` also
+  report `log10_pvalue` and `log10_qvalue`, which stay finite where the
+  P-values themselves are too small for a double and come out as 0.
+- **Warnings for results that come out empty or odd.** The Python
+  package warns when a motif cannot reach the P-value cutoff of a scan or
+  enrichment test and so can have no hits (naming the smallest P-value it
+  can give), when DNA motifs are scanned against sequences that look like
+  RNA or the other way round, when a string naming a file is scanned as a
+  sequence, when a score is above a motif's highest possible score, when
+  `merge_motifs()` leaves out motifs that cannot overlap the anchor, and
+  when FASTA names repeat. The R package returns these results silently.
 - **Lower case letters.** `score_match()`, `prob_match()` and `mask_seqs()`
   accept lower case DNA, RNA and amino acid letters (Biostrings sequences
   are always upper case); masking keeps the case of the letters it leaves.
@@ -252,14 +359,6 @@ change is listed here so the R package can be fixed to match.
   number generator, which the port does not reproduce. The port also gives a
   random PPM a random `nsites` whenever none is supplied, whereas
   the R package only does so when the type was left at its default.
-
-## Known issues shared with the R package
-
-- **`ppm_to_pcm()` can produce negative counts.** The rounding error is added
-  to the largest count, which goes negative when many small probabilities all
-  round up (for example `create_motif("BZJX", nsites = 50)`). Both packages
-  then reject the motif. Fixing this needs a different rounding scheme, which
-  would change counts for ordinary motifs too, so it is left for now.
 
 ## Not supported by design
 

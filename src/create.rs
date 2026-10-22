@@ -204,14 +204,16 @@ fn check_string_letters(letters: &[char], alphabet: &Alphabet) -> Result<()> {
     let (allowed, what): (String, &str) = match alphabet {
         Alphabet::Dna => (DNA_IUPAC.into(), "DNA"),
         Alphabet::Rna => ("ACGU".into(), "RNA"),
-        Alphabet::Aa => (AMINO_ACIDS.iter().collect(), "AA"),
+        Alphabet::Aa => (AA_IUPAC.into(), "AA"),
         Alphabet::Custom(l) => (l.iter().collect(), "alphabet"),
     };
     let bad: String = letters.iter().filter(|&&l| !allowed.contains(l)).collect();
     if bad.is_empty() {
         Ok(())
     } else {
-        arg_err(format!("detected non-{what} letters in input [{bad}]"))
+        arg_err(format!(
+            "the input has letters outside the {what} alphabet: {bad}"
+        ))
     }
 }
 
@@ -288,14 +290,16 @@ pub fn from_strings(
             Alphabet::Dna | Alphabet::Rna => {
                 if letters.iter().any(|&l| !"ACGTU".contains(l)) {
                     return arg_err(format!(
-                        "{alphabet} ambiguity letters are not accepted if input is more than one string"
+                        "{alphabet} ambiguity letters are not accepted if input is more than one \
+                         string; to count them as letters of their own, give a custom alphabet"
                     ));
                 }
             }
             Alphabet::Aa => {
                 if letters.iter().any(|&l| "UOBJZX".contains(l)) {
                     return arg_err(
-                        "AA ambiguity letters are not accepted if input is more than one string",
+                        "AA ambiguity letters are not accepted if input is more than one string; \
+                         to count them as letters of their own, give a custom alphabet",
                     );
                 }
             }

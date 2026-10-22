@@ -159,7 +159,7 @@ pub fn sequence_complexity<S: AsRef<str> + Sync>(
     let alph: String = letters.into_iter().map(|b| b as char).collect();
     if alph.len() <= 1 {
         return arg_err(format!(
-            "can't calculate complexity when the alphabet is a single letter [{alph}]"
+            "complexity cannot be calculated with a single-letter alphabet ({alph})"
         ));
     }
     let default_overlap = (opts.window / 2.0).round_ties_even();

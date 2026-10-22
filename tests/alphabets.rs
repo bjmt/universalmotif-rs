@@ -82,12 +82,9 @@ fn check_scans(motifs: &[Motif], seqs: &[String], cases: &Value, label: &str) {
 #[test]
 fn protein_and_custom_scans_match_r() {
     let r = reference();
-    check_scans(
-        &motifs(&r, "aa_motifs"),
-        &texts(&r["aa_sequences"]),
-        &r["aa_scan"],
-        "aa",
-    );
+    // R's rounding of counts is reproduced here: see `r_style_pwm`.
+    let aa: Vec<Motif> = motifs(&r, "aa_motifs").iter().map(r_style_pwm).collect();
+    check_scans(&aa, &texts(&r["aa_sequences"]), &r["aa_scan"], "aa");
     check_scans(
         &motifs(&r, "custom_motifs"),
         &texts(&r["custom_sequences"]),

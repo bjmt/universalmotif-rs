@@ -3,6 +3,7 @@
 mod common;
 
 use common::*;
+use universalmotif::MotifType;
 use universalmotif::convert::convert_type;
 
 #[test]
@@ -23,7 +24,29 @@ fn convert_type_matches_r() {
             (serde_json::Value::Null, Ok(m)) => {
                 panic!("{ctx}: R failed with {}, but got\n{m}", case["error"])
             }
-            (want, Ok(m)) => assert_motif_eq(&m, want, &ctx),
+            (want, Ok(m)) => {
+                // A new pseudocount changes the total IC, which the R package
+                // leaves as it was.
+                let new_pseudo = opt_num(&a["pseudocount"])
+                    .filter(|&p| p != input.pseudocount && m.motif_type != input.motif_type);
+                // A CWM has no total IC, so one is computed for the new type.
+                let from_cwm = input.motif_type == MotifType::Cwm;
+                let skip = Skip {
+                    derived: new_pseudo.is_some() || from_cwm,
+                    ..Default::default()
+                };
+                assert_motif_eq_skip(&m, want, &ctx, skip);
+                if from_cwm && m.motif_type != MotifType::Cwm {
+                    assert!(close(m.icscore, own_icscore(&m)), "{ctx}: icscore");
+                }
+                if let Some(p) = new_pseudo.filter(|_| !from_cwm) {
+                    let mut parts = input.clone().into_parts();
+                    parts.pseudocount = p;
+                    let want_ic = own_icscore(&universalmotif::Motif::from_parts(parts).unwrap());
+                    assert!(close(m.icscore, want_ic), "{ctx}: icscore");
+                    assert_eq!(m.consensus, input.consensus, "{ctx}: consensus");
+                }
+            }
             (_, Err(e)) => panic!("{ctx}: {e}"),
         }
     }

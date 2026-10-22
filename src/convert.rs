@@ -28,16 +28,34 @@ pub fn pcm_to_ppm(pos: &[f64], pseudocount: f64) -> Vec<f64> {
     }
 }
 
-/// Probabilities to counts. Each value is rounded, and any rounding error is
-/// added to the largest count so the column sums to `nsites`. An `nsites` of 1
-/// or less, or NaN, is replaced by 100.
+/// Probabilities to counts summing to `nsites`. Each value is rounded, and any
+/// shortfall, or an excess of one count, is added to or taken from the largest
+/// count. A larger excess, which would make the counts uneven or even
+/// negative, is avoided by rounding down instead and giving the remaining
+/// sites to the values with the largest remainders, ties going to the earlier
+/// letter. An `nsites` of 1 or less, or NaN, is replaced by 100.
 pub fn ppm_to_pcm(pos: &[f64], nsites: f64) -> Vec<f64> {
     let nsites = if nsites.is_nan() || nsites <= 1.0 {
         100.0
     } else {
         nsites
     };
-    let mut out: Vec<f64> = pos.iter().map(|&p| (p * nsites).round()).collect();
+    let scaled: Vec<f64> = pos.iter().map(|&p| p * nsites).collect();
+    let mut out: Vec<f64> = scaled.iter().map(|v| v.round()).collect();
+    if sum(&out) - nsites > 1.0 {
+        out = scaled.iter().map(|v| v.floor()).collect();
+        let short = (nsites - sum(&out)).round();
+        if short >= 1.0 {
+            // Remainders are compared to nine decimal places so that values
+            // meant to be equal tie.
+            let rem = |i: usize| ((scaled[i] - out[i]) * 1e9).round() as i64;
+            let mut order: Vec<usize> = (0..out.len()).collect();
+            order.sort_by_key(|&i| std::cmp::Reverse(rem(i)));
+            for &i in order.iter().take(short as usize) {
+                out[i] += 1.0;
+            }
+        }
+    }
     let spos = sum(&out);
     if spos != nsites {
         let i = which_max(&out);
@@ -92,7 +110,7 @@ pub fn pwm_to_ppm(pos: &[f64], bkg: &[f64]) -> Vec<f64> {
 
 /// Probabilities to information content heights, either as Shannon IC, with
 /// each probability scaled by the column's total IC, or as relative entropy
-/// against `bkg`.
+/// against `bkg`, where letters less common than in the background get 0.
 pub fn ppm_to_icm(pos: &[f64], bkg: &[f64], relative_entropy: bool) -> Vec<f64> {
     let n = pos.len();
     let bkg = if bkg.len() != n {
@@ -109,6 +127,11 @@ pub fn ppm_to_icm(pos: &[f64], bkg: &[f64], relative_entropy: bool) -> Vec<f64> 
         pos.iter()
             .zip(&bkg)
             .map(|(&p, &b)| {
+                // A letter that never occurs adds nothing, rather than the
+                // NaN of 0 * log(0).
+                if p == 0.0 {
+                    return 0.0;
+                }
                 let tmp = p / b;
                 let v = p * if tmp >= 0.0 { tmp.log2() } else { 0.0 };
                 if v < 0.0 { 0.0 } else { v }
@@ -329,7 +352,9 @@ pub fn consensus_to_ppm_aa(letter: char) -> Result<[f64; 20]> {
 /// weights cannot be recovered from probabilities. Converting a motif to its
 /// own type returns it unchanged.
 ///
-/// The consensus and total IC are left as they were.
+/// The consensus and total IC are left as they were, except that the total IC
+/// is recomputed when `pseudocount` changes it or the motif was a CWM, which
+/// has none.
 ///
 /// # Example
 ///
@@ -363,8 +388,11 @@ pub fn convert_type(
     }
 
     let mut parts = motif.clone().into_parts();
-    if let Some(p) = pseudocount {
+    if let Some(p) = pseudocount
+        && p != parts.pseudocount
+    {
         parts.pseudocount = p;
+        parts.icscore = Motif::compute_icscore(&parts.matrix, &parts.bkg, from, p, parts.nsites);
     }
     let pseudo = parts.pseudocount;
     let bkg = if parts.bkg.contains(&0.0) {
@@ -418,5 +446,14 @@ pub fn convert_type(
 
     parts.matrix = out;
     parts.motif_type = to;
+    if from == MotifType::Cwm {
+        parts.icscore = Motif::compute_icscore(
+            &parts.matrix,
+            &parts.bkg,
+            to,
+            parts.pseudocount,
+            parts.nsites,
+        );
+    }
     Motif::from_parts(parts)
 }

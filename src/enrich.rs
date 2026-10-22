@@ -9,7 +9,9 @@ use crate::error::{Result, arg_err};
 use crate::motif::Motif;
 use crate::scan::{ScanOptions, scan_table};
 use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffle_sequences};
-use crate::stats::{fisher_greater, p_adjust_bh};
+use std::f64::consts::LN_10;
+
+use crate::stats::{fisher_greater, ln_fisher_greater, ln_p_adjust_bh, p_adjust_bh};
 
 /// What [`enrich_motifs`] counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,8 +82,12 @@ pub struct Enrichment {
     pub log2_enrichment: f64,
     /// One-sided Fisher's exact P-value.
     pub pvalue: f64,
+    /// Base 10 log of `pvalue`, which stays finite when `pvalue` is too small
+    /// for a double.
+    pub log10_pvalue: f64,
     /// Benjamini-Hochberg q-value across all motifs.
     pub qvalue: f64,
+    pub log10_qvalue: f64,
 }
 
 struct Counts {
@@ -214,7 +220,9 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
                 (a, b, ppos.saturating_sub(a), npos.saturating_sub(b), eff)
             }
         };
-        let pvalue = fisher_greater(a as u64 + pc, b as u64 + pc, c as u64 + pc, d as u64 + pc);
+        let cells = (a as u64 + pc, b as u64 + pc, c as u64 + pc, d as u64 + pc);
+        let pvalue = fisher_greater(cells.0, cells.1, cells.2, cells.3);
+        let log10_pvalue = ln_fisher_greater(cells.0, cells.1, cells.2, cells.3) / LN_10;
         out.push(Enrichment {
             motif: i,
             target_seq_n: n_tgt,
@@ -230,12 +238,23 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
                 f64::NEG_INFINITY
             },
             pvalue,
+            log10_pvalue,
             qvalue: 0.0,
+            log10_qvalue: 0.0,
         });
     }
     let q = p_adjust_bh(&out.iter().map(|e| e.pvalue).collect::<Vec<_>>());
-    for (e, q) in out.iter_mut().zip(q) {
+    let ln_q = ln_p_adjust_bh(
+        &out.iter()
+            .map(|e| e.log10_pvalue * LN_10)
+            .collect::<Vec<_>>(),
+        out.len() as f64,
+    );
+    for ((e, q), ln_q) in out.iter_mut().zip(q).zip(ln_q) {
         e.qvalue = q;
+        // Where the q-value is representable, its log is taken directly so
+        // that the two columns agree exactly.
+        e.log10_qvalue = if q > 1e-300 { q.log10() } else { ln_q / LN_10 };
     }
     Ok(out)
 }

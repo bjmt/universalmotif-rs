@@ -219,6 +219,13 @@ pub fn motif_score(
     per_motif(motifs, queries, opts, |d, p| d.score(p))
 }
 
+/// The smallest P-value each motif can give, that of its highest possible
+/// score. A P-value cutoff below it leaves the motif without hits.
+pub fn min_pvalues(motifs: &[Motif], opts: &PvalueOptions) -> Result<Vec<f64>> {
+    let queries: Vec<(usize, f64)> = (0..motifs.len()).map(|i| (i, 0.0)).collect();
+    per_motif(motifs, &queries, opts, |d, _| d.pvalue(d.score_range().1))
+}
+
 /// The natural logarithm of a P-value written as text, such as `"1e-400"`.
 /// Values too small for a double are handled through their mantissa and
 /// exponent.

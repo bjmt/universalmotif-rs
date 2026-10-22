@@ -51,7 +51,6 @@ struct FMotif {
     pwm: Vec<i32>,
     pwm_rc: Vec<i32>,
     probs: Vec<[f64; 4]>,
-    cdf: Vec<f64>,
     threshold: i32,
     mn: i32,
     mx: i32,
@@ -94,39 +93,48 @@ fn calc_score_ns(prob: f64, bkg: f64, ns: u64, pc: u32) -> i32 {
     ((x / bkg).log2() * 1000.0) as i32
 }
 
-fn fill_cdf(m: &mut FMotif, bkg: &[f64; 4]) -> bool {
+thread_local! {
+    /// Buffers for score distributions, reused because they can take 16 MB
+    /// each and differ in size from motif to motif, which leaves the system
+    /// allocator holding on to many freed blocks if each is allocated anew.
+    static CDF_BUFFERS: std::cell::RefCell<(Vec<f64>, Vec<f64>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
+fn fill_cdf(m: &FMotif, bkg: &[f64; 4], cdf: &mut Vec<f64>, tmp: &mut Vec<f64>) -> bool {
     if m.cdf_size == 0 || m.cdf_size > MAX_CDF_SIZE {
         return false;
     }
     let size = m.cdf_size as usize;
     let cmax = m.cdf_max as usize;
-    m.cdf = vec![1.0; size];
-    let mut tmp = vec![0.0; size];
+    cdf.clear();
+    cdf.resize(size, 1.0);
+    tmp.clear();
+    tmp.resize(size, 0.0);
     for i in 0..m.size {
         let max_step = i * cmax;
-        tmp.copy_from_slice(&m.cdf);
+        tmp.copy_from_slice(cdf);
         let end = (max_step + cmax + 1).min(size);
-        m.cdf[..end].fill(0.0);
+        cdf[..end].fill(0.0);
         for (j, b) in bkg.iter().enumerate() {
             let s = (m.score(j, i) - m.mn) as usize;
-            for (c, t) in m.cdf[s..=s + max_step].iter_mut().zip(&tmp) {
+            for (c, t) in cdf[s..=s + max_step].iter_mut().zip(tmp.iter()) {
                 *c += t * b;
             }
         }
     }
-    let sum: f64 = m.cdf.iter().fold(0.0, |a, &b| a + b);
+    let sum: f64 = cdf.iter().fold(0.0, |a, &b| a + b);
     if (sum - 1.0).abs() > 0.0001 {
-        m.cdf.iter_mut().for_each(|v| *v /= sum);
+        cdf.iter_mut().for_each(|v| *v /= sum);
     }
     for i in (0..size - 1).rev() {
-        m.cdf[i] += m.cdf[i + 1];
+        cdf[i] += cdf[i + 1];
     }
     true
 }
 
-fn set_threshold_pval(m: &mut FMotif, pval: f64) {
-    let threshold_i = m
-        .cdf
+fn set_threshold_pval(m: &mut FMotif, cdf: &[f64], pval: f64) {
+    let threshold_i = cdf
         .iter()
         .position(|&c| c < pval)
         .unwrap_or(m.cdf_size as usize) as i32;
@@ -138,7 +146,7 @@ fn set_threshold_pval(m: &mut FMotif, pval: f64) {
         m.max_score += *col.iter().max().unwrap();
         m.min_score += *col.iter().min().unwrap();
     }
-    let min_pval = m.cdf[(m.max_score - m.cdf_offset) as usize];
+    let min_pval = cdf[(m.max_score - m.cdf_offset) as usize];
     if min_pval / pval > 1.0001 {
         m.threshold = i32::MAX;
     }
@@ -180,14 +188,17 @@ fn convert_ppm_to_motif(
     }
     m.cdf_max = m.mx - m.mn;
     m.cdf_size = w as u64 * m.cdf_max as u64 + 1;
-    if m.cdf_max == 0 || m.cdf_size > MAX_CDF_SIZE || !fill_cdf(m, bkg) {
-        m.threshold = i32::MAX;
-        return;
-    }
-    set_threshold_pval(m, hit_pval);
-    if m.threshold == i32::MAX {
-        set_threshold_pval(m, 0.01);
-    }
+    CDF_BUFFERS.with(|b| {
+        let (cdf, tmp) = &mut *b.borrow_mut();
+        if m.cdf_max == 0 || m.cdf_size > MAX_CDF_SIZE || !fill_cdf(m, bkg, cdf, tmp) {
+            m.threshold = i32::MAX;
+            return;
+        }
+        set_threshold_pval(m, cdf, hit_pval);
+        if m.threshold == i32::MAX {
+            set_threshold_pval(m, cdf, 0.01);
+        }
+    });
 }
 
 fn kmer_encode(seq: &[u8], w: usize, off: usize) -> Option<u64> {
@@ -240,6 +251,12 @@ impl LogFact {
 /// One-sided Fisher's exact test P-value for a 2x2 table, with the "greater"
 /// alternative.
 fn fisher_greater(lf: &LogFact, a: u64, b: u64, c: u64, d: u64) -> f64 {
+    ln_fisher_greater(lf, a, b, c, d).exp()
+}
+
+/// The natural log of [`fisher_greater`], which stays finite for P-values too
+/// small for a double.
+fn ln_fisher_greater(lf: &LogFact, a: u64, b: u64, c: u64, d: u64) -> f64 {
     let (r1, r2) = (a + b, c + d);
     let c1 = a + c;
     let n = a + b + c + d;
@@ -254,21 +271,7 @@ fn fisher_greater(lf: &LogFact, a: u64, b: u64, c: u64, d: u64) -> f64 {
             log_sum += (term - log_sum).exp().ln_1p();
         }
     }
-    log_sum.exp().min(1.0)
-}
-
-fn bh(p: &[f64]) -> Vec<f64> {
-    let n = p.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| p[a].total_cmp(&p[b]));
-    let mut q = vec![1.0; n];
-    let mut prev = 1.0f64;
-    for i in (0..n).rev() {
-        let qv = (p[order[i]] * n as f64 / (i + 1) as f64).min(prev);
-        prev = qv;
-        q[order[i]] = qv.min(1.0);
-    }
-    q
+    log_sum.min(0.0)
 }
 
 fn score_at(m: &FMotif, seq: &[u8], off: usize) -> (i32, i32) {
@@ -281,16 +284,20 @@ fn score_at(m: &FMotif, seq: &[u8], off: usize) -> (i32, i32) {
     (s, src)
 }
 
-/// For each k-mer, or the smaller of it and its reverse complement, the number
-/// of sequences containing it, sorted by k-mer.
-fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> Vec<(u64, u64)> {
+/// Every k-mer, or the smaller of it and its reverse complement, found in the
+/// sequences, sorted, with the number of sequences containing each.
+fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
     let mask = if w == 32 {
         u64::MAX
     } else {
         (1u64 << (2 * w)) - 1
     };
-    let mut all: Vec<u64> = Vec::new();
-    let mut seen: Vec<u64> = Vec::new();
+    // Sized up front: grown by doubling, the vector leaves a trail of large
+    // freed blocks that the system allocator may keep, inflating memory use.
+    let total: usize = seqs.iter().map(|s| (s.len() + 1).saturating_sub(w)).sum();
+    let mut all: Vec<u64> = Vec::with_capacity(total);
+    let longest = seqs.iter().map(|s| s.len()).max().unwrap_or(0);
+    let mut seen: Vec<u64> = Vec::with_capacity(longest);
     for s in seqs {
         seen.clear();
         // Rolling codes of the last w letters on each strand.
@@ -313,14 +320,20 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> Vec<(u64, u64)> {
         all.extend_from_slice(&seen);
     }
     all.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::new();
-    for k in all {
-        match out.last_mut() {
-            Some(last) if last.0 == k => last.1 += 1,
-            _ => out.push((k, 1)),
+    // Collapse runs of the same k-mer in place, counting them.
+    let mut counts: Vec<u32> = Vec::with_capacity(all.len());
+    let mut n = 0;
+    for i in 0..all.len() {
+        if n > 0 && all[n - 1] == all[i] {
+            counts[n - 1] += 1;
+        } else {
+            all[n] = all[i];
+            counts.push(1);
+            n += 1;
         }
     }
-    out
+    all.truncate(n);
+    (all, counts)
 }
 
 fn enumerate_seeds(
@@ -329,19 +342,20 @@ fn enumerate_seeds(
     w: usize,
     rc: bool,
     lf: &LogFact,
-) -> Vec<(u64, f64)> {
-    let (ph, nh) = (kmer_presence(pos, w, rc), kmer_presence(neg, w, rc));
+) -> (Vec<(u64, f64)>, u64) {
+    let ((pk, pn), (nk, nn_)) = (kmer_presence(pos, w, rc), kmer_presence(neg, w, rc));
     let (np, nn) = (pos.len() as u64, neg.len() as u64);
     // Many k-mers share the same counts, so each table is tested once.
     let mut memo: HashMap<(u64, u64), f64> = HashMap::new();
     let mut best: Vec<(u64, f64)> = Vec::with_capacity(TOP_K_SEEDS + 1);
     let mut j = 0;
-    for &(k, pc) in &ph {
-        while j < nh.len() && nh[j].0 < k {
+    for (&k, &pc) in pk.iter().zip(&pn) {
+        let pc = pc as u64;
+        while j < nk.len() && nk[j] < k {
             j += 1;
         }
-        let nc = if j < nh.len() && nh[j].0 == k {
-            nh[j].1
+        let nc = if j < nk.len() && nk[j] == k {
+            nn_[j] as u64
         } else {
             0
         };
@@ -356,7 +370,7 @@ fn enumerate_seeds(
             best.truncate(TOP_K_SEEDS);
         }
     }
-    best
+    (best, pk.len() as u64)
 }
 
 fn add_site(ppm: &mut [[u64; 4]], seq: &[u8], off: usize, w: usize, reverse: bool) {
@@ -438,7 +452,8 @@ fn refine(
 }
 
 struct Evaluation {
-    pvalue: f64,
+    /// Natural log of the P-value.
+    ln_pvalue: f64,
     sites_pos: u64,
     sites_neg: u64,
     seqs_pos: u64,
@@ -486,7 +501,7 @@ fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool, lf: &LogFact
     }
     let (np, nn) = (pos.len() as u64, neg.len() as u64);
     Evaluation {
-        pvalue: fisher_greater(
+        ln_pvalue: ln_fisher_greater(
             lf,
             seqs_pos,
             seqs_neg,
@@ -506,6 +521,8 @@ struct Found {
     eval: Evaluation,
     width: usize,
     order: usize,
+    /// Words tested in the search that found the motif.
+    candidates: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -520,11 +537,13 @@ fn discover_for_width(
     hit_pval: f64,
     stop_pval: f64,
     lf: &LogFact,
-) -> Vec<Found> {
+) -> (Vec<Found>, u64) {
     let mut work = pos.to_vec();
     let mut out = Vec::new();
+    let mut tested = 0;
     for _ in 0..nmotifs {
-        let seeds = enumerate_seeds(&work, neg, w, rc, lf);
+        let (seeds, candidates) = enumerate_seeds(&work, neg, w, rc, lf);
+        tested += candidates;
         if seeds.is_empty() {
             break;
         }
@@ -548,7 +567,7 @@ fn discover_for_width(
                 continue;
             }
             let eval = evaluate(&work, neg, &m, rc, lf);
-            if eval.pvalue > stop_pval {
+            if eval.ln_pvalue > stop_pval.ln() {
                 continue;
             }
             for (s, c) in work.iter_mut().zip(&eval.covered) {
@@ -564,6 +583,7 @@ fn discover_for_width(
                 eval,
                 width: w,
                 order,
+                candidates,
             });
             accepted = true;
             break;
@@ -572,7 +592,7 @@ fn discover_for_width(
             break;
         }
     }
-    out
+    (out, tested)
 }
 
 fn column_ic(p: &[f64; 4]) -> f64 {
@@ -616,7 +636,7 @@ impl Default for FinderOptions {
             nmotifs: 10,
             hit_pvalue: 1e-4,
             stop_pvalue: 1e-3,
-            qvalue: 1e-3,
+            qvalue: 0.05,
             dedup_overlap: 0.5,
             rc: true,
             shuffle_k: 2,
@@ -641,8 +661,19 @@ pub struct FoundMotif {
     pub sites_neg: u64,
     pub n_pos: usize,
     pub n_neg: usize,
+    /// Words tested in the search that found the motif, which its P-value is
+    /// corrected for.
+    pub candidates: u64,
+    /// Fisher's exact test P-value of the motif's hits in positive against
+    /// negative sequences, multiplied by `candidates` and capped at 1.
     pub pvalue: f64,
+    /// Base 10 log of `pvalue`, which stays finite when `pvalue` is too small
+    /// for a double.
+    pub log10_pvalue: f64,
+    /// Benjamini-Hochberg q-value, counting every word tested at every width
+    /// as a test.
     pub qvalue: f64,
+    pub log10_qvalue: f64,
 }
 
 /// The background used by [`motif_finder`]: A, C, G and T or U frequencies over
@@ -671,6 +702,12 @@ pub fn finder_background<S: AsRef<str>>(pos: &[S], neg: &[S]) -> [f64; 4] {
 /// which by default are the positives shuffled keeping `shuffle_k`-lets. Motifs
 /// come back as PPMs named `motif_1`, `motif_2` and so on, in order of P-value,
 /// with the q-value stored as their E-value.
+///
+/// Each motif is the best of many candidate words, so its P-value is
+/// corrected for the number of words tested in the search that found it, and
+/// q-values count every word tested at every width. This accounts for most of
+/// the search, though not for the refinement of each motif from its word, so
+/// the P-values remain somewhat optimistic.
 pub fn motif_finder<S: AsRef<str> + Sync>(
     sequences: &[S],
     negatives: Option<&[S]>,
@@ -723,7 +760,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
 
     let lf = LogFact::new(pos.len() + neg.len());
     let widths: Vec<usize> = (opts.min_width..=opts.max_width).collect();
-    let per_width: Vec<Vec<Found>> = with_threads(opts.nthreads, || {
+    let per_width: Vec<(Vec<Found>, u64)> = with_threads(opts.nthreads, || {
         widths
             .par_iter()
             .map(|&w| {
@@ -742,7 +779,8 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
             })
             .collect()
     })?;
-    let mut found: Vec<Found> = per_width.into_iter().flatten().collect();
+    let total_tests: u64 = per_width.iter().map(|(_, t)| t).sum();
+    let mut found: Vec<Found> = per_width.into_iter().flat_map(|(f, _)| f).collect();
     found.sort_by_key(|f| (f.width, f.order));
     if found.is_empty() {
         return Ok(Vec::new());
@@ -751,7 +789,9 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     for f in found.iter_mut() {
         f.eval = evaluate(&pos, &neg, &f.motif, opts.rc, &lf);
     }
-    found.sort_by(|a, b| a.eval.pvalue.total_cmp(&b.eval.pvalue));
+    let corrected = |f: &Found| (f.eval.ln_pvalue + (f.candidates as f64).ln()).min(0.0);
+    // Of two motifs covering the same sites, the one more enriched keeps them.
+    found.sort_by(|a, b| a.eval.ln_pvalue.total_cmp(&b.eval.ln_pvalue));
     let mut dropped = vec![false; found.len()];
     for i in 0..found.len() {
         if dropped[i] {
@@ -775,16 +815,25 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
             }
         }
     }
-    let survivors: Vec<Found> = found
+    let mut survivors: Vec<Found> = found
         .into_iter()
         .zip(dropped)
         .filter(|(_, d)| !d)
         .map(|(f, _)| f)
         .collect();
-    let q = bh(&survivors.iter().map(|f| f.eval.pvalue).collect::<Vec<_>>());
+    survivors.sort_by(|a, b| corrected(a).total_cmp(&corrected(b)));
+    let ln_q = crate::stats::ln_p_adjust_bh(
+        &survivors
+            .iter()
+            .map(|f| f.eval.ln_pvalue)
+            .collect::<Vec<_>>(),
+        total_tests.max(survivors.len() as u64) as f64,
+    );
 
     let mut out = Vec::new();
-    for (i, (f, qv)) in survivors.iter().zip(q).enumerate() {
+    for (i, (f, ln_qv)) in survivors.iter().zip(ln_q).enumerate() {
+        let qv = ln_qv.exp();
+        let ln_pv = corrected(f);
         // Trim low-information flanks, keeping at least three columns.
         let probs = &f.motif.probs;
         let mut left = 0;
@@ -810,7 +859,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
             nsites: Some(f.motif.nsites as f64),
             pseudocount: opts.pseudocount as f64,
             bkg: Some(bkg.to_vec()),
-            pval: Some(f.eval.pvalue),
+            pval: Some(ln_pv.exp()),
             eval: Some(qv),
             ..Default::default()
         };
@@ -829,8 +878,11 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
             sites_neg: f.eval.sites_neg,
             n_pos: pos.len(),
             n_neg: neg.len(),
-            pvalue: f.eval.pvalue,
+            candidates: f.candidates,
+            pvalue: ln_pv.exp(),
+            log10_pvalue: ln_pv / std::f64::consts::LN_10,
             qvalue: qv,
+            log10_qvalue: ln_qv / std::f64::consts::LN_10,
         });
     }
     Ok(out)

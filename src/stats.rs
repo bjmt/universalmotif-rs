@@ -201,6 +201,55 @@ pub fn fisher_greater(a: u64, b: u64, c: u64, d: u64) -> f64 {
     phyper(a as i64 - 1, a + c, b + d, a + b, false)
 }
 
+/// The natural log of [`fisher_greater`], which stays finite for P-values too
+/// small for a double.
+pub fn ln_fisher_greater(a: u64, b: u64, c: u64, d: u64) -> f64 {
+    let p = fisher_greater(a, b, c, d);
+    if p > 1e-300 {
+        return p.ln();
+    }
+    // The upper tail from `a` to the largest possible count, summed in log
+    // space from the hypergeometric densities.
+    let (r, n, k) = (a + c, a + b + c + d, a + b);
+    let lchoose = |n: u64, k: u64| {
+        libm::lgamma(n as f64 + 1.0)
+            - libm::lgamma(k as f64 + 1.0)
+            - libm::lgamma((n - k) as f64 + 1.0)
+    };
+    let denom = lchoose(n, k);
+    let mut log_sum = f64::NEG_INFINITY;
+    for x in a..=r.min(k) {
+        let term = lchoose(r, x) + lchoose(n - r, k - x) - denom;
+        if term < log_sum - 40.0 {
+            break;
+        }
+        log_sum = if log_sum > term {
+            log_sum + (term - log_sum).exp().ln_1p()
+        } else {
+            term + (log_sum - term).exp().ln_1p()
+        };
+    }
+    log_sum.min(0.0)
+}
+
+/// Benjamini-Hochberg q-values, in natural log, for P-values given as natural
+/// logs, counting `m` tests in all; tests not given are taken to have larger
+/// P-values. With `m` equal to the number given, these are the logs of
+/// [`p_adjust_bh`].
+pub fn ln_p_adjust_bh(ln_p: &[f64], m: f64) -> Vec<f64> {
+    let n = ln_p.len();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| ln_p[a].total_cmp(&ln_p[b]));
+    let mut q = vec![0.0; n];
+    let mut prev = 0.0f64;
+    for i in (0..n).rev() {
+        let qv = (ln_p[order[i]] + (m / (i + 1) as f64).ln()).min(prev);
+        prev = qv;
+        q[order[i]] = qv;
+    }
+    q
+}
+
 /// Benjamini-Hochberg adjusted P-values.
 pub fn p_adjust_bh(p: &[f64]) -> Vec<f64> {
     let n = p.len();

@@ -65,7 +65,8 @@ fn comparisons_match_r() {
                 _ => m.qvalues,
             };
             for (r, (g, w)) in got.iter().zip(rows).enumerate() {
-                assert_close_vec(g, &nums(w), &format!("{ctx}: row {r}"));
+                let g = beyond_null(g, &nums(w), opts.null);
+                assert_close_vec(&g, &nums(w), &format!("{ctx}: row {r}"));
             }
         } else {
             let w = &case["long"];
@@ -117,8 +118,23 @@ fn comparisons_match_r() {
                     .map(|s| if rna { s.replace('T', "U") } else { s })
                     .collect()
             };
-            assert_eq!(qc, want("subject_consensus"), "{ctx}: subject consensus");
-            assert_eq!(tc, want("target_consensus"), "{ctx}: target consensus");
+            // The R package builds these with its own 75% rule rather than
+            // the motif consensus rule the port uses (see DIVERGENCES.md).
+            // A single base under the 75% rule is also one under the motif
+            // rule, so those letters must agree.
+            let agree = |got: &[String], want: &[String], what: &str| {
+                assert_eq!(got.len(), want.len(), "{ctx}: {what}");
+                for (g, w) in got.iter().zip(want) {
+                    assert_eq!(g.len(), w.len(), "{ctx}: {what} {g} vs {w}");
+                    for (a, b) in g.chars().zip(w.chars()) {
+                        if "ACGTU".contains(b) {
+                            assert_eq!(a, b, "{ctx}: {what} {g} vs {w}");
+                        }
+                    }
+                }
+            };
+            agree(&qc, &want("subject_consensus"), "subject consensus");
+            agree(&tc, &want("target_consensus"), "target consensus");
             let f = |g: &dyn Fn(&universalmotif::compare::Comparison) -> f64| {
                 rows.iter().map(g).collect::<Vec<_>>()
             };
@@ -128,17 +144,35 @@ fn comparisons_match_r() {
                 &format!("{ctx}: score"),
             );
             assert_close_vec(
-                &f(&|c| c.pvalue),
+                &beyond_null(&f(&|c| c.pvalue), &nums(&w["pvalue"]), opts.null),
                 &nums(&w["pvalue"]),
                 &format!("{ctx}: pvalue"),
             );
             assert_close_vec(
-                &f(&|c| c.qvalue),
+                &beyond_null(&f(&|c| c.qvalue), &nums(&w["qvalue"]), opts.null),
                 &nums(&w["qvalue"]),
                 &format!("{ctx}: qvalue"),
             );
         }
     }
+}
+
+/// The R package gives a P-value of 0 to scores beyond what the parametric
+/// null can reach, where the port gives the null's highest score's (see
+/// DIVERGENCES.md); such values are checked to be small and positive and
+/// then set to R's 0.
+fn beyond_null(got: &[f64], want: &[f64], null: NullModel) -> Vec<f64> {
+    got.iter()
+        .zip(want)
+        .map(|(&g, &w)| {
+            if null == NullModel::Parametric && w == 0.0 && g != 0.0 {
+                assert!(g > 0.0 && g < 1e-6, "{g} for R's 0");
+                0.0
+            } else {
+                g
+            }
+        })
+        .collect()
 }
 
 #[test]

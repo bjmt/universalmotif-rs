@@ -70,6 +70,13 @@ fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
 /// # Ok::<(), universalmotif::Error>(())
 /// ```
 pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
+    merge_motifs_used(motifs, opts).map(|(m, _)| m)
+}
+
+/// [`merge_motifs`], also returning the indices of the motifs that went into
+/// the merge; the others could not overlap the anchor by `min_overlap`
+/// columns.
+pub fn merge_motifs_used(motifs: &[Motif], opts: &MergeOptions) -> Result<(Motif, Vec<usize>)> {
     let alphabet = shared_alphabet(motifs)?;
     let nl = alphabet.len();
     if motifs.len() == 1 {
@@ -77,7 +84,7 @@ pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
         if let Some(n) = &opts.name {
             p.name = n.clone();
         }
-        return Motif::from_parts(p);
+        return Ok((Motif::from_parts(p)?, vec![0]));
     }
     let ppms: Vec<Motif> = motifs
         .iter()
@@ -171,7 +178,10 @@ pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
         pseudocount: ppms[anchor].pseudocount,
         ..Default::default()
     };
-    from_matrix(Matrix::from_columns(&cols)?, None, Some(alphabet), &copts)
+    let merged = from_matrix(Matrix::from_columns(&cols)?, None, Some(alphabet), &copts)?;
+    let mut used_idx: Vec<usize> = used.iter().map(|u| u.0).collect();
+    used_idx.sort_unstable();
+    Ok((merged, used_idx))
 }
 
 /// Options for [`merge_similar`].

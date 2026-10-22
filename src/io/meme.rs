@@ -596,21 +596,27 @@ pub fn write(motifs: &[Motif], opts: &WriteOptions) -> Result<String> {
     }
 
     for m in &motifs {
-        let alt = m.altname.as_deref().map(meme_name).unwrap_or_default();
-        lines.push(format!("MOTIF {} {}", meme_name(&m.name), alt));
-        lines.push(format!(
-            "letter-probability matrix: alength= {} w= {} nsites= {} E= {}",
+        let mut head = format!("MOTIF {}", meme_name(&m.name));
+        if let Some(alt) = &m.altname {
+            head.push(' ');
+            head.push_str(&meme_name(alt));
+        }
+        lines.push(head);
+        // The E-value is optional in MEME files, so it is left out rather
+        // than written as 0 when the motif has none.
+        let mut info = format!(
+            "letter-probability matrix: alength= {} w= {} nsites= {}",
             letters.len(),
             m.width(),
             format_r_number(m.nsites.unwrap_or(100.0)),
-            format_r_number(m.eval.unwrap_or(0.0))
-        ));
+        );
+        if let Some(e) = m.eval {
+            info.push_str(&format!(" E= {}", format_r_number(e)));
+        }
+        lines.push(info);
         for c in m.matrix.columns() {
-            let row: String = order
-                .iter()
-                .map(|&i| format!(" {} ", format_fixed(c[i], 6)))
-                .collect();
-            lines.push(row);
+            let row: Vec<String> = order.iter().map(|&i| format_fixed(c[i], 6)).collect();
+            lines.push(format!(" {}", row.join("  ")));
         }
         lines.push(String::new());
     }
@@ -682,6 +688,14 @@ pub fn write_alphabet(def: &AlphabetDefinition) -> Result<String> {
     };
     let mut lines = vec![head, String::new(), "# Core symbols".into()];
     for (i, &l) in core.iter().enumerate() {
+        // Each complementary pair is declared once, on the line of its first
+        // letter.
+        if let Some(c) = &compl
+            && core[..i].contains(&c[i])
+            && c[core.iter().position(|&x| x == c[i]).unwrap()] == l
+        {
+            continue;
+        }
         let mut line = describe(l)?;
         if let Some(c) = &compl {
             line.push_str(&format!(" ~ {}", describe(c[i])?));

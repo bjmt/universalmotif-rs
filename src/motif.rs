@@ -112,7 +112,7 @@ pub struct GapInfo {
 /// Use [`Motif::from_parts`] to turn this into a validated [`Motif`]. Unlike
 /// [`MotifBuilder`], it applies no defaults and recomputes nothing, which
 /// makes it the right tool for restoring a motif exactly as it was saved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct MotifParts {
     pub name: String,
     pub altname: Option<String>,
@@ -136,6 +136,53 @@ pub struct MotifParts {
     /// Free-form `(name, value)` pairs. Names may be empty.
     pub extrainfo: Vec<(String, String)>,
     pub gap: GapInfo,
+}
+
+// Equality treats two NaN totals of IC, as CWMs have, as equal.
+impl PartialEq for MotifParts {
+    fn eq(&self, o: &Self) -> bool {
+        let MotifParts {
+            name,
+            altname,
+            family,
+            organism,
+            matrix,
+            alphabet,
+            motif_type,
+            icscore,
+            nsites,
+            pseudocount,
+            bkg,
+            bkgsites,
+            consensus,
+            strand,
+            pval,
+            qval,
+            eval,
+            extrainfo,
+            gap,
+        } = self;
+        let same_ic = icscore == &o.icscore || (icscore.is_nan() && o.icscore.is_nan());
+        same_ic
+            && name == &o.name
+            && altname == &o.altname
+            && family == &o.family
+            && organism == &o.organism
+            && matrix == &o.matrix
+            && alphabet == &o.alphabet
+            && motif_type == &o.motif_type
+            && nsites == &o.nsites
+            && pseudocount == &o.pseudocount
+            && bkg == &o.bkg
+            && bkgsites == &o.bkgsites
+            && consensus == &o.consensus
+            && strand == &o.strand
+            && pval == &o.pval
+            && qval == &o.qval
+            && eval == &o.eval
+            && extrainfo == &o.extrainfo
+            && gap == &o.gap
+    }
 }
 
 impl MotifParts {
@@ -199,7 +246,7 @@ impl MotifParts {
             }
             let s = sum(&self.bkg);
             if !(0.99..=1.01).contains(&s) {
-                msg.push("0-order bkg probabilities must add up to 1".into());
+                msg.push("bkg probabilities must add up to 1".into());
             }
         }
 
@@ -209,24 +256,24 @@ impl MotifParts {
                 if let Some(&first) = colsums.first() {
                     let tol = f64::max(0.01, first.abs() * 0.01);
                     if colsums.iter().skip(1).any(|&s| (s - first).abs() > tol) {
-                        msg.push("for type PCM all column sums must be equal".into());
+                        msg.push("PCM columns must all have the same sum".into());
                     }
                 }
                 if m.as_slice().iter().any(|&v| v > 0.0 && v < 1.0) {
-                    msg.push("type PCM motifs cannot contain values between 0 and 1".into());
+                    msg.push("PCM values must be whole counts, not between 0 and 1".into());
                 }
             }
             MotifType::Ppm => {
                 if !colsums.iter().all(|&s| s > 0.99 && s < 1.01) {
-                    msg.push("for type PPM colSums must equal 1".into());
+                    msg.push("PPM columns must sum to 1".into());
                 }
                 if !m.as_slice().iter().all(|&v| v >= 0.0) {
-                    msg.push("for type PPM only positive values are allowed".into());
+                    msg.push("PPM values cannot be negative".into());
                 }
             }
             MotifType::Icm => {
                 if m.as_slice().iter().any(|&v| v < 0.0) {
-                    msg.push("type ICM motifs cannot contain negative values".into());
+                    msg.push("ICM values cannot be negative".into());
                 }
             }
             MotifType::Pwm | MotifType::Cwm => {}
@@ -241,6 +288,25 @@ impl MotifParts {
         }
 
         msg
+    }
+
+    /// Recompute the total IC and the consensus from the matrix, type,
+    /// background, pseudocount and `nsites`, for use after changing any of
+    /// them.
+    pub fn recompute_derived(&mut self) {
+        self.icscore = Motif::compute_icscore(
+            &self.matrix,
+            &self.bkg,
+            self.motif_type,
+            self.pseudocount,
+            self.nsites,
+        );
+        self.consensus = Motif::compute_consensus(
+            &self.matrix,
+            &self.alphabet,
+            self.motif_type,
+            self.pseudocount,
+        );
     }
 }
 
@@ -316,6 +382,7 @@ impl Motif {
 
     /// Total information content of a matrix, summed over columns. An empty
     /// `nsites` is passed on as 0, which [`position_icscore`] treats as 100.
+    /// Contribution weights carry no information content, so a CWM gets NaN.
     pub(crate) fn compute_icscore(
         matrix: &Matrix,
         bkg: &[f64],
@@ -323,6 +390,9 @@ impl Motif {
         pseudocount: f64,
         nsites: Option<f64>,
     ) -> f64 {
+        if motif_type == MotifType::Cwm {
+            return f64::NAN;
+        }
         let nsites = nsites.unwrap_or(0.0);
         let per_col: Vec<f64> = matrix
             .columns()
@@ -335,8 +405,8 @@ impl Motif {
 /// Builds a [`Motif`], filling in defaults for anything not given.
 ///
 /// - The type is guessed when not given: PCM if every value is 0 or at least
-///   1, PPM if columns sum to about 1, ICM if nothing is negative, and PWM
-///   otherwise. A PPM whose columns do not sum to 1 is renormalised.
+///   1, PPM if columns sum to within 0.02 of 1, ICM if nothing is negative,
+///   and PWM otherwise. A PPM whose columns do not sum to 1 is renormalised.
 /// - For a PCM, `nsites` defaults to the first column sum; if a different
 ///   `nsites` is given, every column is rescaled to it and rounded.
 /// - The background defaults to uniform.
@@ -465,9 +535,17 @@ impl MotifBuilder {
                 t
             }
             None => {
+                // Probabilities written to two decimals can sum to anywhere
+                // from about 0.98 to 1.02, so guessing allows for that.
+                let near_one = colsums.iter().all(|&s| (s - 1.0).abs() <= 0.0201);
                 if vals.iter().all(|&v| v >= 1.0 || v == 0.0) {
                     MotifType::Pcm
-                } else if sums_one && all_pos {
+                } else if near_one && all_pos {
+                    if !sums_one {
+                        for (j, &s) in colsums.iter().enumerate() {
+                            m.col_mut(j).iter_mut().for_each(|v| *v /= s);
+                        }
+                    }
                     MotifType::Ppm
                 } else if all_pos {
                     MotifType::Icm
@@ -510,9 +588,12 @@ impl MotifBuilder {
             Some(b) => b,
         };
 
-        let icscore = self.icscore.filter(|v| !v.is_nan()).unwrap_or_else(|| {
-            Motif::compute_icscore(&m, &bkg, motif_type, self.pseudocount, nsites)
-        });
+        let icscore = self
+            .icscore
+            .filter(|v| !v.is_nan() && motif_type != MotifType::Cwm)
+            .unwrap_or_else(|| {
+                Motif::compute_icscore(&m, &bkg, motif_type, self.pseudocount, nsites)
+            });
         let consensus = Motif::compute_consensus(&m, &self.alphabet, motif_type, self.pseudocount);
 
         let nonempty = |s: Option<String>| s.filter(|s| !s.is_empty());
@@ -595,11 +676,13 @@ impl fmt::Display for Motif {
         if p.alphabet.is_nucleotide() {
             writeln!(f, "          Strands:   {}", p.strand)?;
         }
-        writeln!(
-            f,
-            "         Total IC:   {}",
-            fmt_num(round_to(p.icscore, 2))
-        )?;
+        if !p.icscore.is_nan() {
+            writeln!(
+                f,
+                "         Total IC:   {}",
+                fmt_num(round_to(p.icscore, 2))
+            )?;
+        }
         writeln!(
             f,
             "      Pseudocount:   {}",
@@ -686,7 +769,7 @@ fn write_matrix(f: &mut fmt::Formatter<'_>, p: &MotifParts) -> fmt::Result {
     let m = &p.matrix;
     let headers: Vec<String> = match &p.consensus {
         Some(c) => c.chars().map(String::from).collect(),
-        None => (1..=m.ncol()).map(|i| format!("[,{i}]")).collect(),
+        None => (1..=m.ncol()).map(|i| i.to_string()).collect(),
     };
     let mut cols: Vec<Vec<String>> = Vec::with_capacity(m.ncol());
     for c in m.columns() {

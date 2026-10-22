@@ -16,7 +16,7 @@
 use rayon::prelude::*;
 
 use crate::alphabet::Alphabet;
-use crate::convert::{consensus_letter_aa, convert_type};
+use crate::convert::{consensus_letter, consensus_letter_aa, convert_type};
 use crate::error::{Error, Result, arg_err};
 use crate::matrix::which_max;
 use crate::motif::{Motif, MotifType, Strand};
@@ -25,7 +25,6 @@ use crate::pvalue::with_threads;
 const PCC_BINS: usize = 51;
 const ENUM_GRID_K: usize = 5;
 const ENUM_DIRICHLET_N: f64 = 4.0;
-const CONSENSUS_THRESHOLD: f64 = 0.75;
 const TIE_TOLERANCE: f64 = 1e-10;
 
 /// A motif column of probabilities. Fixed-size arrays of 4 letters for DNA and
@@ -84,47 +83,6 @@ fn sum_score_to_bin(s: f64, len: usize) -> usize {
     let per_col = ((s / len as f64 + 1.0) / 2.0).clamp(0.0, 1.0);
     let bin = (per_col * (PCC_BINS - 1) as f64 * len as f64 + 0.5).floor() as i64;
     bin.clamp(0, (len * (PCC_BINS - 1)) as i64) as usize
-}
-
-fn iupac(mask: u8) -> char {
-    match mask {
-        0x1 => 'A',
-        0x2 => 'C',
-        0x4 => 'G',
-        0x8 => 'T',
-        0x3 => 'M',
-        0x5 => 'R',
-        0x9 => 'W',
-        0x6 => 'S',
-        0xA => 'Y',
-        0xC => 'K',
-        0x7 => 'V',
-        0xB => 'H',
-        0xD => 'D',
-        0xE => 'B',
-        _ => 'N',
-    }
-}
-
-/// IUPAC letter covering the most probable letters until 75% is reached.
-fn consensus_char(p: &[f64]) -> char {
-    let mut order = [0usize, 1, 2, 3];
-    for i in 1..4 {
-        let mut j = i;
-        while j > 0 && p[order[j]] > p[order[j - 1]] {
-            order.swap(j, j - 1);
-            j -= 1;
-        }
-    }
-    let (mut cum, mut mask) = (0.0, 0u8);
-    for &k in &order {
-        cum += p[k];
-        mask |= 1 << k;
-        if cum >= CONSENSUS_THRESHOLD {
-            break;
-        }
-    }
-    iupac(mask)
 }
 
 /// Reverse complement of DNA or RNA columns. In A, C, G, T order the complement
@@ -303,9 +261,12 @@ fn best_alignment<C: Col>(
                 acc + pcc_column(&qq[(q_start + j) as usize], &t[(t_start + j) as usize])
             });
             best.5 += 1;
-            // Ties (such as both strands of a palindrome) go to the first
-            // alignment, rather than to whichever rounds higher.
-            if s > best.0 + TIE_TOLERANCE || best.5 == 1 {
+            // Ties (such as both strands of a palindrome) go to the longer
+            // overlap, so that comparing the two motifs either way round gives
+            // the same mean score, and then to the first alignment, rather than
+            // to whichever rounds higher.
+            let tied_longer = (s - best.0).abs() <= TIE_TOLERANCE && len as usize > best.1;
+            if s > best.0 + TIE_TOLERANCE || tied_longer || best.5 == 1 {
                 best = (s, len as usize, d, strand, q_start as usize, best.5);
             }
         }
@@ -387,11 +348,18 @@ fn convolve(a: &[f64], b: &[f64]) -> Vec<f64> {
     out
 }
 
+/// The probability of a score in `bin` or above. A score beyond what the null
+/// can reach gets the probability of the null's highest score rather than 0,
+/// since a null built from a coarse grid of columns may not reach scores that
+/// real columns do.
 fn tail_prob(pmf: &[f64], bin: usize) -> f64 {
-    if bin >= pmf.len() {
+    let Some(top) = pmf.iter().rposition(|&p| p > 0.0) else {
         return 0.0;
-    }
-    pmf[bin..].iter().fold(0.0, |a, &b| a + b).clamp(0.0, 1.0)
+    };
+    pmf[bin.min(top)..]
+        .iter()
+        .fold(0.0, |a, &b| a + b)
+        .clamp(0.0, 1.0)
 }
 
 /// Where a motif sits in a shared column frame, as laid out by
@@ -583,8 +551,8 @@ pub struct Comparison {
     pub target_consensus: String,
 }
 
-/// Consensus letters of some columns: IUPAC codes for DNA and RNA, the
-/// amino acid consensus for proteins, and the most probable letter for other
+/// Consensus letters of some columns, by the same rules as a motif's own
+/// consensus for DNA, RNA and proteins, and the most probable letter for other
 /// alphabets.
 fn consensus_range<C: Col>(cols: &[C], start: i64, len: usize, alphabet: &Alphabet) -> String {
     let start = start.max(0) as usize;
@@ -595,11 +563,8 @@ fn consensus_range<C: Col>(cols: &[C], start: i64, len: usize, alphabet: &Alphab
         .map(|c| {
             let v = c.values();
             match alphabet {
-                Alphabet::Dna => consensus_char(v),
-                Alphabet::Rna => match consensus_char(v) {
-                    'T' => 'U',
-                    x => x,
-                },
+                Alphabet::Dna => consensus_letter(v, false, MotifType::Ppm, 0.0),
+                Alphabet::Rna => consensus_letter(v, true, MotifType::Ppm, 0.0),
                 Alphabet::Aa => consensus_letter_aa(v, MotifType::Ppm, 0.0),
                 _ => letters[which_max(v)],
             }

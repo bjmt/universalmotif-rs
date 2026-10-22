@@ -194,27 +194,54 @@ fn motif_finder_matches_r() {
         o.pseudocount = int("pseudocount", o.pseudocount as usize) as u32;
         o.hit_pvalue = a.get("hit.pvalue").map(num).unwrap_or(o.hit_pvalue);
         o.stop_pvalue = a.get("stop.pvalue").map(num).unwrap_or(o.stop_pvalue);
-        o.qvalue = a.get("qvalue").map(num).unwrap_or(o.qvalue);
+        // The R package's default cutoff, which the reference values used.
+        o.qvalue = a.get("qvalue").map(num).unwrap_or(1e-3);
         o.dedup_overlap = a.get("dedup.overlap").map(num).unwrap_or(o.dedup_overlap);
         o.rc = a.get("RC").and_then(Value::as_bool).unwrap_or(true);
+        // The port corrects P-values for the words searched and counts every
+        // word in the q-values, where the R package does neither (see
+        // DIVERGENCES.md). The motifs found are the same, so every motif R
+        // reports is looked for among all of the port's, whose P-value must
+        // be R's times the words searched, and whose q-value is no smaller.
+        let kept = motif_finder(&pos, Some(&neg), &o).unwrap();
+        o.qvalue = 1.0;
         let got = motif_finder(&pos, Some(&neg), &o).unwrap();
         let want = case["motifs"].as_array().unwrap();
-        assert_eq!(got.len(), want.len(), "{ctx}: number of motifs");
+        assert!(kept.len() <= want.len(), "{ctx}: number of motifs");
         let s = &case["stats"];
-        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        for (i, w) in want.iter().enumerate() {
             let ctx = format!("{ctx}, motif {i}");
-            assert_motif_eq(&g.motif, w, &ctx);
+            let wm = motif_from_record(w);
+            let g = got
+                .iter()
+                .find(|g| g.motif.matrix == wm.matrix)
+                .unwrap_or_else(|| panic!("{ctx}: not found"));
+            assert_eq!(g.motif.nsites, wm.nsites, "{ctx}: nsites");
+            assert_eq!(g.motif.bkg, wm.bkg, "{ctx}: bkg");
             let col = |k: &str| nums(&s[k])[i];
-            assert_eq!(g.rank as f64, col("rank"), "{ctx}: rank");
-            assert_eq!(g.motif.matrix.ncol() as f64, col("width"), "{ctx}: width");
             assert_eq!(g.seqs_pos as f64, col("seqs_pos"), "{ctx}: seqs_pos");
             assert_eq!(g.seqs_neg as f64, col("seqs_neg"), "{ctx}: seqs_neg");
             assert_eq!(g.sites_pos as f64, col("sites_pos"), "{ctx}: sites_pos");
             assert_eq!(g.sites_neg as f64, col("sites_neg"), "{ctx}: sites_neg");
             assert_eq!(g.n_pos as f64, col("n_pos"), "{ctx}: n_pos");
             assert_eq!(g.n_neg as f64, col("n_neg"), "{ctx}: n_neg");
-            assert!(close(g.pvalue, col("pvalue")), "{ctx}: pvalue");
-            assert!(close(g.qvalue, col("qvalue")), "{ctx}: qvalue");
+            let want_p = (col("pvalue") * g.candidates as f64).min(1.0);
+            assert!(
+                (g.pvalue - want_p).abs() <= 1e-9 * want_p,
+                "{ctx}: pvalue {} vs {want_p}",
+                g.pvalue
+            );
+            assert!(g.qvalue >= col("qvalue") * (1.0 - 1e-9), "{ctx}: qvalue");
+            assert!(
+                (g.log10_pvalue - g.pvalue.log10()).abs() < 1e-9,
+                "{ctx}: log10"
+            );
+        }
+        for g in &kept {
+            assert!(
+                g.qvalue <= a.get("qvalue").map(num).unwrap_or(1e-3),
+                "{ctx}"
+            );
         }
     }
 }

@@ -103,7 +103,12 @@ pub fn motif_from_record(r: &Value) -> Motif {
         matrix: Matrix::from_columns(&cols).unwrap(),
         alphabet: alphabet(r["alphabet"].as_str().unwrap()),
         motif_type: motif_type(r["type"].as_str().unwrap()),
-        icscore: num(&r["icscore"]),
+        // The port gives CWMs no total IC (see DIVERGENCES.md).
+        icscore: if r["type"] == "CWM" {
+            f64::NAN
+        } else {
+            num(&r["icscore"])
+        },
         nsites: opt_num(&r["nsites"]),
         pseudocount: num(&r["pseudocount"]),
         bkg: nums(&r["bkg"]),
@@ -150,6 +155,52 @@ pub fn assert_opt_close(got: Option<f64>, want: Option<f64>, ctx: &str) {
 #[derive(Default, Clone, Copy)]
 pub struct Skip {
     pub nsites: bool,
+    /// The R package leaves the total IC and consensus as they were after
+    /// some operations where the port recomputes them (see DIVERGENCES.md).
+    pub derived: bool,
+    /// The R package rounds some columns to counts differently (see
+    /// DIVERGENCES.md), so the matrix is checked by the caller.
+    pub matrix: bool,
+}
+
+/// The total IC computed afresh from a motif's own matrix and settings.
+pub fn own_icscore(m: &Motif) -> f64 {
+    let nsites = m.nsites.unwrap_or(0.0);
+    m.matrix
+        .columns()
+        .map(|c| {
+            universalmotif::convert::position_icscore(
+                c,
+                &m.bkg,
+                m.motif_type,
+                m.pseudocount,
+                nsites,
+                false,
+            )
+        })
+        .sum()
+}
+
+/// Whether R's rounding of a column of probabilities to `nsites` counts
+/// overshoots by more than one count, in which case the port rounds
+/// differently (see DIVERGENCES.md).
+pub fn r_rounding_differs(pos: &[f64], nsites: f64) -> bool {
+    let nsites = if nsites.is_nan() || nsites <= 1.0 {
+        100.0
+    } else {
+        nsites
+    };
+    let s: f64 = pos.iter().map(|&p| (p * nsites).round()).sum();
+    s - nsites > 1.0
+}
+
+/// Whether the total IC of a PPM motif goes through a column that R rounds
+/// differently.
+fn ic_rounds_differently(m: &Motif) -> bool {
+    m.motif_type == MotifType::Ppm
+        && m.matrix
+            .columns()
+            .any(|c| r_rounding_differs(c, m.nsites.unwrap_or(0.0)))
 }
 
 /// Compare a motif against a record from R, field by field.
@@ -166,19 +217,28 @@ pub fn assert_motif_eq_skip(got: &Motif, want: &Value, ctx: &str, skip: Skip) {
     assert_eq!(got.organism, w.organism, "{ctx}: organism");
     assert_eq!(got.alphabet, w.alphabet, "{ctx}: alphabet");
     assert_eq!(got.motif_type, w.motif_type, "{ctx}: type");
-    assert!(
-        close(got.icscore, w.icscore),
-        "{ctx}: icscore: got {}, want {}",
-        got.icscore,
-        w.icscore
-    );
+    if got.motif_type == MotifType::Cwm {
+        // The R package gives CWMs a total IC; the port has none.
+        assert!(got.icscore.is_nan(), "{ctx}: CWM icscore {}", got.icscore);
+    } else if skip.derived || skip.matrix || ic_rounds_differently(&want_motif) {
+        // Checked by the caller where it matters.
+    } else {
+        assert!(
+            close(got.icscore, w.icscore),
+            "{ctx}: icscore: got {}, want {}",
+            got.icscore,
+            w.icscore
+        );
+    }
     if !skip.nsites {
         assert_opt_close(got.nsites, w.nsites, &format!("{ctx}: nsites"));
     }
     assert!(close(got.pseudocount, w.pseudocount), "{ctx}: pseudocount");
     assert_close_vec(&got.bkg, &w.bkg, &format!("{ctx}: bkg"));
     assert_opt_close(got.bkgsites, w.bkgsites, &format!("{ctx}: bkgsites"));
-    assert_eq!(got.consensus, w.consensus, "{ctx}: consensus");
+    if !skip.derived && !skip.matrix {
+        assert_eq!(got.consensus, w.consensus, "{ctx}: consensus");
+    }
     assert_eq!(got.strand, w.strand, "{ctx}: strand");
     assert_opt_close(got.pval, w.pval, &format!("{ctx}: pval"));
     assert_opt_close(got.qval, w.qval, &format!("{ctx}: qval"));
@@ -187,9 +247,40 @@ pub fn assert_motif_eq_skip(got: &Motif, want: &Value, ctx: &str, skip: Skip) {
     assert_eq!(got.gap, w.gap, "{ctx}: gap");
     assert_eq!(got.matrix.nrow(), w.matrix.nrow(), "{ctx}: nrow");
     assert_eq!(got.matrix.ncol(), w.matrix.ncol(), "{ctx}: ncol");
-    assert_close_vec(
-        got.matrix.as_slice(),
-        w.matrix.as_slice(),
-        &format!("{ctx}: matrix"),
-    );
+    if !skip.matrix {
+        assert_close_vec(
+            got.matrix.as_slice(),
+            w.matrix.as_slice(),
+            &format!("{ctx}: matrix"),
+        );
+    }
+}
+
+/// The PWM the R package makes from a PPM motif. R rounds a column to counts
+/// and adds any rounding error to the largest count, where the port uses
+/// largest remainders, so the two differ for columns that do not round to
+/// `nsites` exactly, which is common with twenty letters. Building the PWM
+/// R's way lets scans be compared with R's without that difference.
+pub fn r_style_pwm(m: &Motif) -> Motif {
+    use universalmotif::convert::{pcm_to_ppm, ppm_to_pwm};
+    assert_eq!(m.motif_type, MotifType::Ppm);
+    let nsites = m.nsites.filter(|&n| n > 1.0).unwrap_or(100.0);
+    let pseudo = m.pseudocount;
+    let mut p = m.clone().into_parts();
+    p.matrix = m.matrix.map_columns(|c| {
+        let mut counts: Vec<f64> = c.iter().map(|&x| (x * nsites).round()).collect();
+        let s: f64 = counts.iter().sum();
+        if s != nsites {
+            let mut i = 0;
+            for j in 1..counts.len() {
+                if counts[j] > counts[i] {
+                    i = j;
+                }
+            }
+            counts[i] += nsites - s;
+        }
+        ppm_to_pwm(&pcm_to_ppm(&counts, pseudo), &m.bkg, 0.0, nsites)
+    });
+    p.motif_type = MotifType::Pwm;
+    Motif::from_parts(p).unwrap()
 }

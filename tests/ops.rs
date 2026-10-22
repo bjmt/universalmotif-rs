@@ -18,8 +18,14 @@ fn ops_match_r() {
         let mut skip = Skip::default();
         let got = match op {
             "motif_rc" => reverse_complement(&input, false).map(Some),
-            "round_motif" => round_motif(&input, num(&a["pct_tolerance"])).map(Some),
-            "normalize" => normalize(&input).map(Some),
+            "round_motif" => {
+                skip.derived = true;
+                round_motif(&input, num(&a["pct_tolerance"])).map(Some)
+            }
+            "normalize" => {
+                skip.derived = true;
+                normalize(&input).map(Some)
+            }
             "trim_motifs" => {
                 // universalmotif stores nsites = 100 in trimmed motifs that had
                 // none (see DIVERGENCES.md); this crate leaves it empty.
@@ -50,6 +56,10 @@ fn ops_match_r() {
             }
             (want, Some(m)) => {
                 assert_motif_eq_skip(&m, want, &ctx, skip);
+                if skip.derived {
+                    // The port recomputes the total IC from the new matrix.
+                    assert!(close(m.icscore, own_icscore(&m)), "{ctx}: icscore");
+                }
                 if skip.nsites {
                     assert_eq!(m.nsites, None, "{ctx}: nsites");
                 }

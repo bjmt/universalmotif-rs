@@ -69,6 +69,12 @@ impl ColumnMetric {
     }
 }
 
+/// `w * ln(r)`, taking a zero weight to give zero even where the log is
+/// infinite.
+fn xlog(w: f64, r: f64) -> f64 {
+    if w == 0.0 { 0.0 } else { w * r.ln() }
+}
+
 fn total(v: impl Iterator<Item = f64>) -> f64 {
     v.fold(0.0, |a, b| a + b)
 }
@@ -87,7 +93,7 @@ pub fn compare_columns(
 ) -> Result<f64> {
     if x.len() != y.len() {
         return arg_err(format!(
-            "length(x) does not match length(y) [{}, {}]",
+            "x and y must have the same length, not {} and {}",
             x.len(),
             y.len()
         ));
@@ -121,7 +127,7 @@ pub fn compare_columns(
         // Each pair's two terms are added to the running sum one after the
         // other rather than summed first.
         ColumnMetric::Kl => {
-            0.5 * pairs().fold(0.0, |s, (a, b)| s + a * (a / b).ln() + b * (b / a).ln())
+            0.5 * pairs().fold(0.0, |s, (a, b)| s + xlog(*a, a / b) + xlog(*b, b / a))
         }
         ColumnMetric::Weucl => total(
             pairs()
@@ -138,7 +144,8 @@ pub fn compare_columns(
             if bot == 0.0 { 1.0 } else { top / bot }
         }
         ColumnMetric::Wpcc => {
-            let w: Vec<f64> = bkg1.iter().zip(bkg2).map(|(a, b)| a + b).collect();
+            let wsum = total(bkg1.iter().zip(bkg2).map(|(a, b)| a + b));
+            let w: Vec<f64> = bkg1.iter().zip(bkg2).map(|(a, b)| (a + b) / wsum).collect();
             let m1 = total(w.iter().zip(x).map(|(w, a)| w * a));
             let m2 = total(w.iter().zip(y).map(|(w, b)| w * b));
             let v1 = total(w.iter().zip(x).map(|(w, a)| w * (a - m1) * (a - m1)));
@@ -155,12 +162,12 @@ pub fn compare_columns(
             let left = total(
                 pairs()
                     .zip(bkg1)
-                    .map(|((a, b), g)| (b * nsites2) * (a / g).ln()),
+                    .map(|((a, b), g)| xlog(b * nsites2, a / g)),
             );
             let right = total(
                 pairs()
                     .zip(bkg2)
-                    .map(|((a, b), g)| (a * nsites1) * (b / g).ln()),
+                    .map(|((a, b), g)| xlog(a * nsites1, b / g)),
             );
             let v = (0.0 + left + right) / (nsites1 + nsites2);
             if metric == ColumnMetric::AllrLl && v < -2.0 {

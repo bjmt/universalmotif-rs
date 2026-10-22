@@ -234,6 +234,21 @@ fn writers_match_r() {
                     assert_eq!(strip(&got), strip(want), "{ctx}");
                     continue;
                 }
+                // The R package leaves trailing spaces in MEME files and writes
+                // E= 0 for motifs without an E-value; the port does neither
+                // (see DIVERGENCES.md).
+                let tidied;
+                let want = if case["format"] == "meme" {
+                    tidied = want
+                        .lines()
+                        .map(|l| l.trim_end().trim_end_matches(" E= 0"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        + if want.ends_with('\n') { "\n" } else { "" };
+                    tidied.as_str()
+                } else {
+                    want
+                };
                 if got != want {
                     for (k, (g, w)) in got.lines().zip(want.lines()).enumerate() {
                         assert_eq!(g, w, "{ctx}: line {}", k + 1);

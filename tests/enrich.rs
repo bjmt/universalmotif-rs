@@ -204,44 +204,59 @@ fn enrichment_matches_r() {
 }
 
 fn check_coocc(got: &[universalmotif::coocc::CooccPair], t: &Value, names: &[String], ctx: &str) {
+    // The port does not test a motif against itself (see DIVERGENCES.md), so
+    // self pairs are checked on their own and left out of the comparison with
+    // R, whose q-values are recomputed without them.
+    for p in got.iter().filter(|p| p.a == p.b) {
+        assert!(
+            p.odds_ratio.is_none() && p.pvalue.is_none() && p.qvalue.is_none(),
+            "{ctx}"
+        );
+        assert_eq!(p.b_only, 0, "{ctx}: self pair b_only");
+    }
+    let got: Vec<_> = got.iter().filter(|p| p.a != p.b).collect();
+    let ra = texts(&t["motif_a"]);
+    let rb = texts(&t["motif_b"]);
+    let keep: Vec<usize> = (0..ra.len()).filter(|&k| ra[k] != rb[k]).collect();
+    let sel = |v: Vec<f64>| keep.iter().map(|&k| v[k]).collect::<Vec<f64>>();
+    let sel_t = |v: Vec<String>| keep.iter().map(|&k| v[k].clone()).collect::<Vec<String>>();
     let na: Vec<String> = got.iter().map(|p| names[p.a].clone()).collect();
     let nb: Vec<String> = got.iter().map(|p| names[p.b].clone()).collect();
-    assert_eq!(na, texts(&t["motif_a"]), "{ctx}: motif_a");
-    assert_eq!(nb, texts(&t["motif_b"]), "{ctx}: motif_b");
+    assert_eq!(na, sel_t(ra.clone()), "{ctx}: motif_a");
+    assert_eq!(nb, sel_t(rb.clone()), "{ctx}: motif_b");
     let c = |f: fn(&universalmotif::coocc::CooccPair) -> u64| {
         got.iter().map(|p| f(p) as f64).collect::<Vec<_>>()
     };
-    assert_eq!(c(|p| p.a_only), nums(&t["a_only"]), "{ctx}: a_only");
-    assert_eq!(c(|p| p.b_only), nums(&t["b_only"]), "{ctx}: b_only");
-    assert_eq!(c(|p| p.both), nums(&t["both"]), "{ctx}: both");
-    assert_eq!(c(|p| p.neither), nums(&t["neither"]), "{ctx}: neither");
+    assert_eq!(c(|p| p.a_only), sel(nums(&t["a_only"])), "{ctx}: a_only");
+    assert_eq!(c(|p| p.b_only), sel(nums(&t["b_only"])), "{ctx}: b_only");
+    assert_eq!(c(|p| p.both), sel(nums(&t["both"])), "{ctx}: both");
+    assert_eq!(c(|p| p.neither), sel(nums(&t["neither"])), "{ctx}: neither");
     let o = |f: fn(&universalmotif::coocc::CooccPair) -> Option<f64>| {
         got.iter().map(|p| opt(f(p))).collect::<Vec<_>>()
     };
     assert_close_vec(
         &o(|p| p.odds_ratio),
-        &nums(&t["odds_ratio"]),
+        &sel(nums(&t["odds_ratio"])),
         &format!("{ctx}: or"),
     );
-    assert_close_vec(
-        &o(|p| p.pvalue),
-        &nums(&t["pvalue"]),
-        &format!("{ctx}: pvalue"),
-    );
-    assert_close_vec(
-        &o(|p| p.qvalue),
-        &nums(&t["qvalue"]),
-        &format!("{ctx}: qvalue"),
-    );
+    let rp = sel(nums(&t["pvalue"]));
+    assert_close_vec(&o(|p| p.pvalue), &rp, &format!("{ctx}: pvalue"));
+    let tested: Vec<usize> = (0..rp.len()).filter(|&k| !rp[k].is_nan()).collect();
+    let q = stats::p_adjust_bh(&tested.iter().map(|&k| rp[k]).collect::<Vec<_>>());
+    let mut rq = vec![f64::NAN; rp.len()];
+    for (&k, q) in tested.iter().zip(q) {
+        rq[k] = q;
+    }
+    assert_close_vec(&o(|p| p.qvalue), &rq, &format!("{ctx}: qvalue"));
     if !t["both.clustered"].is_null() {
         let bc: Vec<f64> = got
             .iter()
             .map(|p| p.both_clustered.unwrap() as f64)
             .collect();
-        assert_eq!(bc, nums(&t["both.clustered"]), "{ctx}: both.clustered");
+        assert_eq!(bc, sel(nums(&t["both.clustered"])), "{ctx}: both.clustered");
         assert_close_vec(
             &o(|p| p.median_distance),
-            &nums(&t["median.distance"]),
+            &sel(nums(&t["median.distance"])),
             &format!("{ctx}: median.distance"),
         );
     } else {

@@ -127,7 +127,7 @@ fn word_rows(motif: &Motif, word: &str) -> Result<Vec<usize>> {
     let n = word.chars().count();
     if n != motif.width() {
         return arg_err(format!(
-            "motif length [{}] and match length [{n}] are not equal",
+            "the match has {n} letters but the motif has {} positions",
             motif.width()
         ));
     }
@@ -232,12 +232,12 @@ pub fn get_matches(motif: &Motif, score: f64, allow_nonfinite: bool) -> Result<V
     };
     if score > hi {
         return arg_err(format!(
-            "input score is greater than max possible score [{hi}]"
+            "the score is above the highest possible score, {hi}"
         ));
     }
     if score < lo {
         return arg_err(format!(
-            "input score is less than min possible score [{lo}]"
+            "the score is below the lowest possible score, {lo}"
         ));
     }
     let target = (score * 1000.0).trunc() as i64;

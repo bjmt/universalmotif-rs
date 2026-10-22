@@ -125,10 +125,39 @@ fn column_metrics_and_averages_match_r() {
         );
         let ctx = format!("{} {} {}", case["method"], case["x"], case["y"]);
         match case.get("value") {
+            // The R package does not normalise the WPCC weights (see
+            // DIVERGENCES.md), so the port is checked against a weighted
+            // correlation computed here instead.
+            Some(_) if metric == ColumnMetric::Wpcc => {
+                let want = weighted_pcc(
+                    &nums(&case["x"]),
+                    &nums(&case["y"]),
+                    &nums(&case["bkg1"]),
+                    &nums(&case["bkg2"]),
+                );
+                assert!(close(got.unwrap(), want), "{ctx}");
+            }
             Some(v) => assert!(close(got.unwrap(), num(v)), "{ctx}"),
             None => assert!(got.is_err(), "{ctx}"),
         }
     }
+    let x = [0.5, 0.1, 0.1, 0.3];
+    let y = [0.7, 0.1, 0.1, 0.1];
+    let u = [0.25; 4];
+    let pcc = compare_columns(&x, &y, ColumnMetric::Pcc, &u, &u, 100.0, 100.0).unwrap();
+    let wpcc = compare_columns(&x, &y, ColumnMetric::Wpcc, &u, &u, 100.0, 100.0).unwrap();
+    assert!(close(pcc, wpcc), "WPCC with a uniform background is PCC");
+    let kl = compare_columns(
+        &[0.5, 0.5, 0.0, 0.0],
+        &[0.5, 0.5, 0.0, 0.0],
+        ColumnMetric::Kl,
+        &u,
+        &u,
+        100.0,
+        100.0,
+    )
+    .unwrap();
+    assert_eq!(kl, 0.0, "zeros in both columns add nothing to KL");
     assert!(
         compare_columns(
             &[0.5, 0.5],
@@ -271,7 +300,27 @@ fn small_helpers_match_r() {
         };
         let got = write_alphabet(&def);
         match case.get("value") {
-            Some(v) => assert_eq!(got.unwrap().trim_end(), v.as_str().unwrap(), "{a}"),
+            Some(v) => {
+                // The R package declares each complementary pair twice, once
+                // from each letter; the port declares it once (see
+                // DIVERGENCES.md).
+                let mut seen: Vec<(String, String)> = Vec::new();
+                let want: Vec<&str> = v
+                    .as_str()
+                    .unwrap()
+                    .lines()
+                    .filter(|l| {
+                        let Some((x, y)) = l.split_once(" ~ ") else {
+                            return true;
+                        };
+                        let (x, y) = (x[..1].to_string(), y[..1].to_string());
+                        let mirrored = seen.contains(&(y.clone(), x.clone()));
+                        seen.push((x, y));
+                        !mirrored
+                    })
+                    .collect();
+                assert_eq!(got.unwrap().trim_end(), want.join("\n"), "{a}");
+            }
             None => assert!(got.is_err(), "{a}"),
         }
     }
@@ -284,4 +333,27 @@ fn small_helpers_match_r() {
     assert!((tiny - (2.5f64.ln() - 400.0 * std::f64::consts::LN_10)).abs() < 1e-9);
     assert_eq!(log_pvalue_text("0e-5").unwrap(), f64::NEG_INFINITY);
     assert!(log_pvalue_text("-1").is_err() && log_pvalue_text("abc").is_err());
+}
+
+/// Pearson correlation of `x` and `y`, with each letter weighted by its share
+/// of the two backgrounds.
+fn weighted_pcc(x: &[f64], y: &[f64], bkg1: &[f64], bkg2: &[f64]) -> f64 {
+    let w: Vec<f64> = bkg1.iter().zip(bkg2).map(|(a, b)| a + b).collect();
+    let ws: f64 = w.iter().sum();
+    let mean = |v: &[f64]| v.iter().zip(&w).map(|(a, w)| a * w).sum::<f64>() / ws;
+    let (mx, my) = (mean(x), mean(y));
+    let cov = |a: &[f64], b: &[f64], ma: f64, mb: f64| {
+        a.iter()
+            .zip(b)
+            .zip(&w)
+            .map(|((a, b), w)| w * (a - ma) * (b - mb))
+            .sum::<f64>()
+    };
+    let bot = (cov(x, x, mx, mx) * cov(y, y, my, my)).sqrt();
+    // Constant columns count as perfectly correlated, as with PCC.
+    if bot == 0.0 {
+        1.0
+    } else {
+        cov(x, y, mx, my) / bot
+    }
 }

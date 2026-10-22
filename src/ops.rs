@@ -222,7 +222,9 @@ pub fn round_motif(motif: &Motif, pct_tolerance: f64) -> Result<Motif> {
         kept.iter().map(|&v| v / s).collect()
     });
     let rounded = Motif::from_parts(p)?;
-    convert_type(&rounded, motif.motif_type, None, false)
+    let mut out = convert_type(&rounded, motif.motif_type, None, false)?.into_parts();
+    out.recompute_derived();
+    Motif::from_parts(out)
 }
 
 /// Re-apply the pseudocount by converting to counts and back. A pseudocount of
@@ -234,7 +236,9 @@ pub fn normalize(motif: &Motif) -> Result<Motif> {
         motif.pseudocount
     };
     let pcm = convert_type(motif, MotifType::Pcm, None, false)?;
-    convert_type(&pcm, motif.motif_type, Some(pseudo), false)
+    let mut out = convert_type(&pcm, motif.motif_type, Some(pseudo), false)?.into_parts();
+    out.recompute_derived();
+    Motif::from_parts(out)
 }
 
 /// Add gaps to a motif: gap `i` follows column `gaploc[i]`, counting from 1,
