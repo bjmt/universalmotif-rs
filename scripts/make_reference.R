@@ -1149,3 +1149,134 @@ write_ref(list(logo_matrices = lapply(logo_mats, function(m) list(
                  rows = I(rownames(m)), columns = lapply(seq_len(ncol(m)), function(j) vec(m[, j])))),
                logo = logo_cases, motifs = lapply(vm, motif_record),
                raw = raw_cases, single = single_cases, multi = multi_data), "plot.json")
+
+# ---------------------------------------------------------------------------
+# Proximity to genomic anchors, and background matching
+#
+# Permutation tests and background sampling use R's random number
+# generator, so only the deterministic parts are compared.
+
+suppressMessages(library(GenomicRanges))
+set.seed(17)
+px_chrs <- rand_dna(3, 6000)
+px_chrs[2] <- rand_dna(1, 9000)
+names(px_chrs) <- c("chr1", "chr2", "chr3")
+px_anchors <- GRanges(c(rep("chr1", 8), rep("chr2", 6)),
+  IRanges(c(seq(400, 5600, length.out = 8), seq(700, 8200, length.out = 6)), width = 1),
+  strand = rep(c("+", "-"), 7))
+plant_at <- function(chrs, chr, pos, m) {
+  s <- as.character(chrs[[chr]])
+  for (p in pos) substr(s, p, p + nchar(m) - 1) <- m
+  chrs[[chr]] <- Biostrings::DNAString(s)
+  chrs
+}
+a1 <- start(px_anchors)[as.character(seqnames(px_anchors)) == "chr1"]
+a2 <- start(px_anchors)[as.character(seqnames(px_anchors)) == "chr2"]
+px_chrs <- plant_at(px_chrs, "chr1", a1[-1] + 12L, "TTGACGTCAA")
+px_chrs <- plant_at(px_chrs, "chr2", a2 + 30L, "TTGACGTCAA")
+px_chrs <- plant_at(px_chrs, "chr1", a1[c(2, 5)] - 70L, "GGGGCCCCAT")
+px_chrs <- plant_at(px_chrs, "chr3", c(100L, 2000L, 4000L), "GGGGCCCCAT")
+px_motifs <- en_motifs[c(1, 2, 3, 5)]
+px_hits <- scan_sequences_lite(px_motifs, px_chrs, pvalue = 1e-3, return.granges = TRUE)
+px_universe <- GRanges(c("chr1", "chr1", "chr2"), IRanges(c(1, 3001, 1), c(2800, 6000, 9000)))
+# R's motif_proximity() counts a hit as near when any of it overlaps the
+# zone, but sizes the null as if hits were single positions, which inflates
+# the counts (see DIVERGENCES.md). The port places each hit at its middle
+# position; for 1 bp hits the two agree, so R is run on the hits reduced to
+# their middles (after restricting them to the universe by their middles and
+# collapsing overlapping ones at full width). Distances and the KS test are
+# computed here from the middles.
+px_middles <- function(universe, count, ignore.strand) {
+  h <- normalize_motif_proximity_input(px_hits)
+  U <- build_proximity_universe(universe, h)
+  U <- reduce(U[as.character(seqnames(U)) %in% as.character(seqnames(px_anchors))],
+              ignore.strand = TRUE)
+  mid <- floor((start(h) + end(h)) / 2)
+  pts <- GRanges(seqnames(h), IRanges(mid, width = 1))
+  h <- h[overlapsAny(pts, U, ignore.strand = TRUE)]
+  if (count == "hits") h <- collapse_hits_per_cluster(h, ignore.strand)
+  out <- GRanges(seqnames(h), IRanges(floor((start(h) + end(h)) / 2), width = 1),
+                 strand = strand(h), motif = mcols(h)$motif, score = mcols(h)$score,
+                 seqinfo = seqinfo(h))
+  out
+}
+middle_distances <- function(pts, anchors) {
+  vapply(seq_along(pts), function(i) {
+    same <- which(as.character(seqnames(anchors)) == as.character(seqnames(pts))[i])
+    if (!length(same)) return(NA_real_)
+    m <- start(pts)[i]
+    d <- pmax(0, start(anchors)[same] - m, m - end(anchors)[same])
+    j <- same[which.min(d)]
+    sg <- if (m - (start(anchors)[j] + end(anchors)[j]) / 2 < 0) -1 else 1
+    if (as.character(strand(anchors))[j] == "-") sg <- -sg
+    min(d) * sg
+  }, numeric(1))
+}
+prox_cases <- list()
+add_prox <- function(args, universe = FALSE) {
+  uni <- if (universe) px_universe else NULL
+  count <- if (is.null(args$count)) "hits" else args$count
+  ignore <- if (is.null(args$ignore.strand)) TRUE else args$ignore.strand
+  pts <- px_middles(uni, count, ignore)
+  a <- c(list(hits = pts, anchors = px_anchors, qvalue = 1, universe = uni), args)
+  r <- suppressMessages(do.call(motif_proximity, a))
+  rr <- suppressMessages(restrict_to_anchored_universe(
+    build_proximity_universe(uni, pts), pts, px_anchors))
+  dists <- lapply(r$motif, function(m)
+    middle_distances(rr$hits[mcols(rr$hits)$motif == m], rr$anchors))
+  if (identical(args$method, "ks")) {
+    fc <- proximity_f_curve(rr$anchors, rr$U, sum(as.numeric(width(rr$U))), "undirected")
+    Ffun <- stats::approxfun(fc$d, fc$f, yleft = 0, yright = 1, rule = 2)
+    ks <- lapply(dists, function(d) suppressWarnings(
+      stats::ks.test(abs(d[is.finite(d)]), Ffun, alternative = "greater")))
+    r$ks.D <- vapply(ks, function(k) unname(k$statistic), numeric(1))
+    r$pvalue <- vapply(ks, function(k) k$p.value, numeric(1))
+    r$qvalue <- p.adjust(r$pvalue, "BH")
+    o <- order(r$pvalue, r$motif.i)
+    r <- r[o, ]; dists <- dists[o]
+  }
+  t <- df_cols(r[, setdiff(names(r), "dist.to.nearest")])
+  t$dist.to.nearest <- lapply(dists, function(x) vec(x))
+  prox_cases[[length(prox_cases) + 1]] <<- list(args = args, universe = universe, table = t)
+}
+add_prox(list())
+add_prox(list(count = "anchors"))
+add_prox(list(method = "ks"))
+add_prox(list(orientation = "downstream"))
+add_prox(list(orientation = "upstream", count = "anchors", dist.thresholds = c(20L, 80L, 300L)))
+add_prox(list(dist.thresholds = c(5L, 15L, 40L, 100L, 1000L), ignore.strand = FALSE))
+add_prox(list(), universe = TRUE)
+add_prox(list(method = "ks"), universe = TRUE)
+add_prox(list(count = "anchors"), universe = TRUE)
+
+set.seed(23)
+mb_t <- rand_dna(12, 150)
+mb_u <- Biostrings::DNAStringSet(vapply(1:80, function(i) {
+  paste(sample(c("A", "C", "G", "T"), sample(80:400, 1), TRUE,
+               prob = c(0.3, 0.2, 0.2, 0.3) + c(-1, 1, 1, -1) * (i %% 5) * 0.03), collapse = "")
+}, character(1)))
+cov_t <- round(runif(12) * 10, 1)
+cov_u <- round(runif(80) * 10, 1)
+axis_case <- function(vt, vu, n, type, range = NULL)
+  c(list(targets = vec(vt), universe = vec(vu), n_bins = n, type = type,
+         range = if (is.null(range)) NULL else vec(range)),
+    make_match_axis(vt, vu, n, type, "x", range = range)[c("bin.t", "bin.u", "n.bins")])
+axis_cases <- list(
+  axis_case(compute_gc(mb_t), compute_gc(mb_u), 20L, "equalwidth", c(0, 1)),
+  axis_case(width(mb_t), width(mb_u), 10L, "quantile"),
+  axis_case(cov_t, cov_u, 6L, "quantile"),
+  axis_case(cov_t, cov_u, 7L, "equalwidth"),
+  axis_case(rep(3, 4), rep(3, 9), 5L, "quantile"),
+  axis_case(c(1, 2, 2, 2), c(2, 2, 2, 2, 2, 5), 4L, "quantile"))
+axis_cases <- lapply(axis_cases, function(x) {
+  x$bin.t <- vec(x$bin.t); x$bin.u <- vec(x$bin.u); x })
+
+write_ref(list(chromosomes = I(as.character(px_chrs)), chromosome_names = I(names(px_chrs)),
+               anchors = df_cols(as.data.frame(px_anchors)),
+               hits = df_cols(as.data.frame(px_hits)),
+               universe = df_cols(as.data.frame(px_universe)),
+               proximity_motifs = lapply(px_motifs, motif_record),
+               proximity = prox_cases,
+               match_targets = I(as.character(mb_t)), match_universe = I(as.character(mb_u)),
+               gc_targets = vec(compute_gc(mb_t)), gc_universe = vec(compute_gc(mb_u)),
+               axes = axis_cases), "proximity.json")

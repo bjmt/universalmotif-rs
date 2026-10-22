@@ -13,8 +13,9 @@ basic operations, reading and writing motif files (MEME, JASPAR, HOMER,
 TRANSFAC, CIS-BP, UniPROBE, plain matrices and FASTA), exact P-values,
 sequence scanning, motif comparison, merging and clustering, k-let
 backgrounds, sequence complexity, shuffling, random sequences, implanting
-sites, *de novo* motif discovery, enrichment testing, co-occurrence and
-positional enrichment are done.
+sites, *de novo* motif discovery, enrichment testing, co-occurrence,
+positional enrichment, proximity to genomic anchors and
+composition-matched backgrounds are done.
 
 ## Example
 

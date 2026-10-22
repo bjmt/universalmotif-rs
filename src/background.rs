@@ -1,0 +1,466 @@
+//! Composition-matched background sequences (`match_bkg()`).
+//!
+//! HOMER-style matching: the universe of candidate sequences is binned by GC
+//! fraction (equal-width bins over [0, 1]), length (quantile bins) and any
+//! extra covariates, and each target draws background sequences from its
+//! own bin, widening the search ring by ring when the bin runs short.
+
+use std::collections::{HashMap, HashSet};
+
+use rand::RngExt;
+use rand::rngs::StdRng;
+
+use crate::error::{Result, arg_err};
+use crate::ranges::{GRange, overlaps_any, reduce};
+use crate::shuffle::rng_for;
+
+/// Fraction of G and C (either case) in a sequence.
+pub fn gc_fraction(seq: &str) -> f64 {
+    let gc = seq
+        .bytes()
+        .filter(|b| matches!(b, b'G' | b'C' | b'g' | b'c'))
+        .count();
+    gc as f64 / seq.len().max(1) as f64
+}
+
+/// How a matching axis is binned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinType {
+    /// Breaks at quantiles of the universe values.
+    Quantile,
+    /// Equal-width breaks over the range of all values.
+    EqualWidth,
+}
+
+impl BinType {
+    pub fn parse(s: &str) -> Result<BinType> {
+        match s {
+            "quantile" => Ok(BinType::Quantile),
+            "equalwidth" => Ok(BinType::EqualWidth),
+            _ => arg_err(format!(
+                "unknown bin type '{s}'; expected 'quantile' or 'equalwidth'"
+            )),
+        }
+    }
+}
+
+/// An extra per-sequence value to match on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Covariate {
+    pub name: String,
+    pub targets: Vec<f64>,
+    pub universe: Vec<f64>,
+    pub n_bins: usize,
+    pub bin_type: BinType,
+}
+
+/// Per-target and per-universe bins (0-based) on one axis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Axis {
+    pub bin_targets: Vec<usize>,
+    pub bin_universe: Vec<usize>,
+    pub n_bins: usize,
+}
+
+/// R's `seq(from, to, length.out = n)`.
+fn r_seq(from: f64, to: f64, n: usize) -> Vec<f64> {
+    if n == 1 {
+        return vec![from];
+    }
+    if from == to {
+        return vec![from; n];
+    }
+    let n1 = (n - 1) as f64;
+    let mut v: Vec<f64> = (0..n - 1)
+        .map(|i| from + i as f64 * ((to - from) / n1))
+        .collect();
+    v.push(to);
+    v
+}
+
+/// R's `quantile(x, probs, type = 7)`.
+fn quantile7(x: &[f64], probs: &[f64]) -> Vec<f64> {
+    let mut v = x.to_vec();
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    probs
+        .iter()
+        .map(|&p| {
+            let index = 1.0 + (n.saturating_sub(1)) as f64 * p;
+            let (lo, hi) = (index.floor(), index.ceil());
+            let qs = v[lo as usize - 1];
+            let xh = v[hi as usize - 1];
+            if index > lo && xh != qs {
+                let h = index - lo;
+                (1.0 - h) * qs + h * xh
+            } else {
+                qs
+            }
+        })
+        .collect()
+}
+
+/// R's `findInterval(x, breaks, rightmost.closed = TRUE)`, clamped to a
+/// valid bin and made 0-based.
+fn bin_of(x: f64, breaks: &[f64]) -> usize {
+    let nb = breaks.len() - 1;
+    let mut k = breaks.partition_point(|&b| b <= x);
+    if x == breaks[nb] {
+        k = nb;
+    }
+    k.clamp(1, nb) - 1
+}
+
+/// Bin targets and universe on one axis, as universalmotif's
+/// `make_match_axis()`. Equal-width breaks span `range` (by default all the
+/// values); quantile breaks come from the universe. A constant axis
+/// collapses to one bin.
+pub fn match_axis(
+    targets: &[f64],
+    universe: &[f64],
+    n_bins: usize,
+    bin_type: BinType,
+    range: Option<(f64, f64)>,
+) -> Axis {
+    let all = targets.iter().chain(universe);
+    let lo = all.clone().copied().fold(f64::INFINITY, f64::min);
+    let hi = all.copied().fold(f64::NEG_INFINITY, f64::max);
+    let breaks = match bin_type {
+        BinType::EqualWidth => {
+            let (a, b) = range.unwrap_or((lo, hi));
+            let br = r_seq(a, b, n_bins + 1);
+            let mut u = br.clone();
+            u.dedup();
+            if u.len() < 2 {
+                vec![lo - 1.0, hi + 1.0]
+            } else {
+                br
+            }
+        }
+        BinType::Quantile => {
+            let probs = r_seq(0.0, 1.0, n_bins + 1);
+            let mut br = quantile7(universe, &probs);
+            br.dedup();
+            if br.len() < 2 {
+                vec![lo - 1.0, hi + 1.0]
+            } else {
+                let last = br.len() - 1;
+                br[0] = br[0].min(lo) - 1.0;
+                br[last] = br[last].max(hi) + 1.0;
+                br
+            }
+        }
+    };
+    Axis {
+        bin_targets: targets.iter().map(|&x| bin_of(x, &breaks)).collect(),
+        bin_universe: universe.iter().map(|&x| bin_of(x, &breaks)).collect(),
+        n_bins: breaks.len() - 1,
+    }
+}
+
+/// Options for [`match_bkg`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchOptions {
+    pub n_per_target: usize,
+    pub n_bins_gc: usize,
+    pub n_bins_length: usize,
+    /// Draw each universe sequence at most once (falling back to drawing
+    /// with replacement from nearby bins when they run out).
+    pub unique: bool,
+    pub seed: u64,
+}
+
+impl Default for MatchOptions {
+    fn default() -> Self {
+        MatchOptions {
+            n_per_target: 1,
+            n_bins_gc: 20,
+            n_bins_length: 10,
+            unique: true,
+            seed: 1,
+        }
+    }
+}
+
+/// Result of [`match_bkg`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Matched {
+    /// The universe sequence drawn for each target, `n_per_target` per
+    /// target in target order.
+    pub universe_index: Vec<usize>,
+    /// Targets that needed drawing with replacement from nearby bins.
+    pub fallback_targets: usize,
+    pub gc_targets: Vec<f64>,
+    pub gc_universe: Vec<f64>,
+}
+
+/// Offsets with absolute values summing to `ring` (a Manhattan ring).
+fn ring_offsets(ring: i64, n_axes: usize) -> Vec<Vec<i64>> {
+    fn rec(axis: usize, n: usize, remaining: i64, acc: &mut Vec<i64>, out: &mut Vec<Vec<i64>>) {
+        if axis + 1 == n {
+            for v in if remaining == 0 {
+                vec![0]
+            } else {
+                vec![remaining, -remaining]
+            } {
+                acc.push(v);
+                out.push(acc.clone());
+                acc.pop();
+            }
+            return;
+        }
+        for m in 0..=remaining {
+            for v in if m == 0 { vec![0] } else { vec![m, -m] } {
+                acc.push(v);
+                rec(axis + 1, n, remaining - m, acc, out);
+                acc.pop();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    rec(0, n_axes, ring, &mut Vec::new(), &mut out);
+    out
+}
+
+fn sample_without(rng: &mut StdRng, pool: &[usize], k: usize) -> Vec<usize> {
+    let mut v = pool.to_vec();
+    for i in 0..k.min(v.len()) {
+        let j = rng.random_range(i..v.len());
+        v.swap(i, j);
+    }
+    v.truncate(k);
+    v
+}
+
+/// Draw `opts.n_per_target` universe sequences for each target with the
+/// same GC fraction, length and covariate bins, as universalmotif's
+/// `match_bkg()`. When a target's bin runs short, up to `max(2, axes)`
+/// rings of neighbouring bins are searched; after that the rest are drawn
+/// with replacement from the bins already searched.
+pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
+    targets: &[S],
+    universe: &[U],
+    covariates: &[Covariate],
+    opts: &MatchOptions,
+) -> Result<Matched> {
+    if targets.is_empty() {
+        return arg_err("no target sequences given");
+    }
+    if universe.is_empty() {
+        return arg_err("the universe is empty");
+    }
+    if universe.iter().any(|s| s.as_ref().is_empty()) {
+        return arg_err("the universe must not contain empty sequences");
+    }
+    if opts.n_per_target < 1 {
+        return arg_err("n_per_target must be at least 1");
+    }
+    if opts.n_bins_gc < 2 || opts.n_bins_length < 2 || covariates.iter().any(|c| c.n_bins < 2) {
+        return arg_err("every axis needs at least 2 bins");
+    }
+    for c in covariates {
+        if c.targets.len() != targets.len() || c.universe.len() != universe.len() {
+            return arg_err(format!(
+                "covariate '{}' needs one value per target and per universe sequence",
+                c.name
+            ));
+        }
+        if c.targets.iter().chain(&c.universe).any(|v| !v.is_finite()) {
+            return arg_err(format!(
+                "covariate '{}' has missing or infinite values",
+                c.name
+            ));
+        }
+    }
+    let gc_t: Vec<f64> = targets.iter().map(|s| gc_fraction(s.as_ref())).collect();
+    let gc_u: Vec<f64> = universe.iter().map(|s| gc_fraction(s.as_ref())).collect();
+    let len_t: Vec<f64> = targets.iter().map(|s| s.as_ref().len() as f64).collect();
+    let len_u: Vec<f64> = universe.iter().map(|s| s.as_ref().len() as f64).collect();
+    let mut axes = vec![
+        match_axis(
+            &gc_t,
+            &gc_u,
+            opts.n_bins_gc,
+            BinType::EqualWidth,
+            Some((0.0, 1.0)),
+        ),
+        match_axis(&len_t, &len_u, opts.n_bins_length, BinType::Quantile, None),
+    ];
+    for c in covariates {
+        axes.push(match_axis(
+            &c.targets,
+            &c.universe,
+            c.n_bins,
+            c.bin_type,
+            None,
+        ));
+    }
+    let n_axes = axes.len();
+    let key = |coords: &[usize]| -> usize {
+        coords
+            .iter()
+            .zip(&axes)
+            .fold(0, |k, (&c, a)| k * a.n_bins + c)
+    };
+    let mut cells: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..universe.len() {
+        let coords: Vec<usize> = axes.iter().map(|a| a.bin_universe[i]).collect();
+        cells.entry(key(&coords)).or_default().push(i);
+    }
+    let max_ring = 2.max(n_axes as i64);
+    let rings: Vec<Vec<Vec<i64>>> = (0..=max_ring).map(|r| ring_offsets(r, n_axes)).collect();
+
+    let mut rng = rng_for(opts.seed, 0);
+    let mut used: HashSet<usize> = HashSet::new();
+    let mut out = Vec::with_capacity(targets.len() * opts.n_per_target);
+    let mut fallbacks = 0;
+    for t in 0..targets.len() {
+        let home: Vec<i64> = axes.iter().map(|a| a.bin_targets[t] as i64).collect();
+        let mut picked: Vec<usize> = Vec::new();
+        let mut local: Vec<usize> = Vec::new();
+        for offsets in &rings {
+            let mut cand: Vec<usize> = Vec::new();
+            let mut seen = HashSet::new();
+            for off in offsets {
+                let coords: Option<Vec<usize>> = home
+                    .iter()
+                    .zip(off)
+                    .zip(&axes)
+                    .map(|((&h, &o), a)| {
+                        let c = h + o;
+                        (c >= 0 && (c as usize) < a.n_bins).then_some(c as usize)
+                    })
+                    .collect();
+                if let Some(cell) = coords.and_then(|c| cells.get(&key(&c))) {
+                    cand.extend(cell.iter().copied().filter(|&i| seen.insert(i)));
+                }
+            }
+            local.extend(&cand);
+            cand.retain(|i| !(opts.unique && used.contains(i)) && !picked.contains(i));
+            let take = cand.len().min(opts.n_per_target - picked.len());
+            picked.extend(sample_without(&mut rng, &cand, take));
+            if picked.len() >= opts.n_per_target {
+                break;
+            }
+        }
+        let need = opts.n_per_target - picked.len();
+        if need > 0 {
+            fallbacks += 1;
+            let mut pool: Vec<usize> = Vec::new();
+            let mut seen = HashSet::new();
+            pool.extend(local.into_iter().filter(|&i| seen.insert(i)));
+            if pool.is_empty() {
+                pool = (0..universe.len()).collect();
+            }
+            for _ in 0..need {
+                picked.push(pool[rng.random_range(0..pool.len())]);
+            }
+        }
+        if opts.unique {
+            used.extend(&picked);
+        }
+        out.extend(picked);
+    }
+    Ok(Matched {
+        universe_index: out,
+        fallback_targets: fallbacks,
+        gc_targets: gc_t,
+        gc_universe: gc_u,
+    })
+}
+
+/// Random genomic windows with widths drawn from `target_widths`, for a
+/// background universe (universalmotif's `match_bkg(genome = ...)`).
+/// Chromosomes are chosen in proportion to their lengths; windows that do
+/// not fit are dropped, as are windows overlapping `exclude`. Returns the
+/// first `n_candidates` windows.
+pub fn genome_windows(
+    chrom_lengths: &[i64],
+    target_widths: &[i64],
+    n_candidates: usize,
+    exclude: &[GRange],
+    seed: u64,
+) -> Result<Vec<GRange>> {
+    if target_widths.is_empty() || target_widths.iter().any(|&w| w < 1) {
+        return arg_err("target sequences must not be empty");
+    }
+    if n_candidates < target_widths.len() {
+        return arg_err("n_candidates must be at least the number of targets");
+    }
+    let total: f64 = chrom_lengths.iter().map(|&l| l.max(0) as f64).sum();
+    if total <= 0.0 {
+        return arg_err("no usable chromosomes");
+    }
+    let n_try = if exclude.is_empty() {
+        n_candidates
+    } else {
+        2 * n_candidates
+    };
+    let exclude = reduce(exclude, 1);
+    let mut rng = rng_for(seed, 0);
+    let mut out = Vec::new();
+    for _ in 0..n_try {
+        let mut r = rng.random::<f64>() * total;
+        let mut chrom = chrom_lengths.len() - 1;
+        for (i, &l) in chrom_lengths.iter().enumerate() {
+            if r < l.max(0) as f64 {
+                chrom = i;
+                break;
+            }
+            r -= l.max(0) as f64;
+        }
+        let w = target_widths[rng.random_range(0..target_widths.len())];
+        let max_start = chrom_lengths[chrom] - w + 1;
+        if max_start < 1 {
+            continue;
+        }
+        let start = (rng.random::<f64>() * max_start as f64).floor() as i64 + 1;
+        let g = GRange::new(chrom, start, start + w - 1);
+        if !overlaps_any(&g, &exclude) {
+            out.push(g);
+        }
+    }
+    if out.len() < target_widths.len() {
+        return arg_err(format!(
+            "could not sample enough windows outside the excluded regions (got {}, need {})",
+            out.len(),
+            target_widths.len()
+        ));
+    }
+    out.truncate(n_candidates);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ring_offsets_cover_the_ring() {
+        for (ring, n) in [(0, 2), (1, 2), (2, 2), (2, 3), (3, 4)] {
+            let offs = ring_offsets(ring, n);
+            assert!(
+                offs.iter()
+                    .all(|o| o.len() == n && o.iter().map(|x| x.abs()).sum::<i64>() == ring)
+            );
+            let uniq: HashSet<_> = offs.iter().collect();
+            assert_eq!(
+                uniq.len(),
+                offs.len(),
+                "duplicates for ring {ring}, {n} axes"
+            );
+        }
+        // 4 * ring cells on a 2-D ring.
+        assert_eq!(ring_offsets(3, 2).len(), 12);
+    }
+
+    #[test]
+    fn quantiles_match_r() {
+        // quantile(c(5, 1, 9, 3, 7, 2), seq(0, 1, length.out = 5))
+        let q = quantile7(&[5.0, 1.0, 9.0, 3.0, 7.0, 2.0], &r_seq(0.0, 1.0, 5));
+        let want = [1.0, 2.25, 4.0, 6.5, 9.0];
+        for (a, b) in q.iter().zip(want) {
+            assert!((a - b).abs() < 1e-12, "{q:?}");
+        }
+    }
+}

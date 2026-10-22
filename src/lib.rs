@@ -18,6 +18,7 @@ pub mod merge;
 pub mod motif;
 pub mod ops;
 
+pub mod background;
 pub mod cdf;
 pub mod cluster;
 pub mod compare;
@@ -29,7 +30,9 @@ pub mod finder;
 pub mod io;
 pub mod kmer;
 pub mod peaks;
+pub mod proximity;
 pub mod pvalue;
+pub mod ranges;
 pub mod sample;
 pub mod scan;
 pub mod shuffle;

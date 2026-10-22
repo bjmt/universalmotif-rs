@@ -150,6 +150,29 @@ change is listed here so the R package can be fixed to match.
   so `both * neither` and `a_only * b_only` overflow once they pass 2^31,
   and the odds ratio becomes NA with a warning (for example with 60,000
   shared sequences out of 200,000). The port computes it in floating point.
+- **`motif_proximity()` counts wide hits too often.** A hit is counted as
+  near an anchor when any of it overlaps the near zone, but the null
+  probability is the zone's share of the universe, as if hits were single
+  positions. A 10 bp hit overlaps a 21 bp zone from 30 start positions, so
+  near-zone counts run about 40% high at small distances and the binomial
+  test reports enrichment for hits placed at random (p = 0.007 for 20,000
+  random 10 bp hits and 1,000 random anchors, against p = 0.87 for the same
+  hits as single positions). The distances behind the KS test have the
+  same problem. The port places every hit at its middle position, which
+  makes the counts, distances and nulls agree; distances are the number of
+  positions from that middle to the anchor (0 inside it).
+- **`motif_proximity()` never clips zones at chromosome ends.** The
+  anchors are meant to take the universe's chromosome lengths so that
+  `trim()` clips widened zones, but the universe built from
+  `seqlengths(hits)` is created without lengths, so nothing is clipped.
+  When counting anchors, zones near the ends then include positions off
+  the chromosome, which inflates the expected count. The port clips
+  wherever the lengths are known.
+- **`match_bkg(genome = ...)` with one target draws random window
+  widths.** The window widths come from `sample(target.widths, ...)`, and
+  R's `sample()` treats a single number `n` as `1:n`, so with one target
+  sequence of width 150 the windows get any width from 1 to 150. The port
+  always uses the target widths.
 - **`motif_peaks()` orders motifs by locale.** Motifs are numbered (and
   ties in P-value broken) by `sort()` on their names, which follows the
   locale's collation rules, so `motif.i` can differ between machines. The
@@ -168,7 +191,9 @@ change is listed here so the R package can be fixed to match.
 
 - **Random sequences, shuffles and samples.** `shuffle_sequences()`,
   `create_sequences()`, `shuffle_motifs()`, `sample_sites()`,
-  `implant_motifs()` and `motif_finder()` without background sequences use
+  `implant_motifs()`, `match_bkg()`, `motif_finder()` and
+  `enrich_motifs_lite()` without background sequences, and
+  `motif_proximity(method = "permutation")` use
   the port's own random number generator, so a given seed gives different
   results from the R package. Results do not depend on the number of
   threads, which is not true of the R package's shuffles.
@@ -192,6 +217,10 @@ change is listed here so the R package can be fixed to match.
 - Schneider's small-sample correction for information content.
 - The non-lite versions of functions that have a lite counterpart in
   the R package.
+- Bioconductor containers. The port takes sequences as strings (or
+  mappings from names), genomes as mappings from chromosome names to
+  sequences instead of BSgenome objects, and genomic ranges as tables
+  instead of GRanges.
 - ggplot2 and ggtree. The Python package draws with matplotlib instead:
   `view_motifs()` and `view_logo()` reproduce the R package's letter
   polygons exactly (they are tested against them), while trees and peak
