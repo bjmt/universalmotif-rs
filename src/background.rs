@@ -5,7 +5,7 @@
 //! extra covariates, and each target draws background sequences from its
 //! own bin, widening the search ring by ring when the bin runs short.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rand::RngExt;
 use rand::rngs::StdRng;
@@ -222,14 +222,26 @@ fn ring_offsets(ring: i64, n_axes: usize) -> Vec<Vec<i64>> {
     out
 }
 
-fn sample_without(rng: &mut StdRng, pool: &[usize], k: usize) -> Vec<usize> {
-    let mut v = pool.to_vec();
-    for i in 0..k.min(v.len()) {
-        let j = rng.random_range(i..v.len());
-        v.swap(i, j);
+/// `k` distinct positions in `0..n`, by Floyd's algorithm.
+fn distinct_positions(rng: &mut StdRng, n: usize, k: usize) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::with_capacity(k);
+    for j in n - k..n {
+        let t = rng.random_range(0..=j);
+        out.push(if out.contains(&t) { j } else { t });
     }
-    v.truncate(k);
-    v
+    out
+}
+
+/// The cell and the index within it of position `pos` in the concatenation
+/// of `pools[c]` over `cells`.
+fn locate(cells: &[usize], pools: &[Vec<usize>], mut pos: usize) -> (usize, usize) {
+    for &c in cells {
+        if pos < pools[c].len() {
+            return (c, pos);
+        }
+        pos -= pools[c].len();
+    }
+    unreachable!("position past the end of the pool")
 }
 
 /// Draw `opts.n_per_target` universe sequences for each target with the
@@ -302,62 +314,79 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
             .zip(&axes)
             .fold(0, |k, (&c, a)| k * a.n_bins + c)
     };
-    let mut cells: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Cells are disjoint, so the cells of a ring never share sequences.
+    // `free` holds each cell's sequences not yet drawn (all of them when
+    // draws need not be unique), so a draw only touches a ring's few cells.
+    let mut cell_ids: HashMap<usize, usize> = HashMap::new();
+    let mut all: Vec<Vec<usize>> = Vec::new();
     for i in 0..universe.len() {
         let coords: Vec<usize> = axes.iter().map(|a| a.bin_universe[i]).collect();
-        cells.entry(key(&coords)).or_default().push(i);
+        let id = *cell_ids.entry(key(&coords)).or_insert_with(|| {
+            all.push(Vec::new());
+            all.len() - 1
+        });
+        all[id].push(i);
     }
+    let mut free = all.clone();
     let max_ring = 2.max(n_axes as i64);
     let rings: Vec<Vec<Vec<i64>>> = (0..=max_ring).map(|r| ring_offsets(r, n_axes)).collect();
 
     let mut rng = rng_for(opts.seed, 0);
-    let mut used: HashSet<usize> = HashSet::new();
     let mut out = Vec::with_capacity(targets.len() * opts.n_per_target);
     let mut fallbacks = 0;
     for t in 0..targets.len() {
         let home: Vec<i64> = axes.iter().map(|a| a.bin_targets[t] as i64).collect();
         let mut picked: Vec<usize> = Vec::new();
-        let mut local: Vec<usize> = Vec::new();
+        let mut searched: Vec<usize> = Vec::new();
         for offsets in &rings {
-            let mut cand: Vec<usize> = Vec::new();
-            let mut seen = HashSet::new();
-            for off in offsets {
-                let coords: Option<Vec<usize>> = home
-                    .iter()
-                    .zip(off)
-                    .zip(&axes)
-                    .map(|((&h, &o), a)| {
-                        let c = h + o;
-                        (c >= 0 && (c as usize) < a.n_bins).then_some(c as usize)
-                    })
-                    .collect();
-                if let Some(cell) = coords.and_then(|c| cells.get(&key(&c))) {
-                    cand.extend(cell.iter().copied().filter(|&i| seen.insert(i)));
+            let ring: Vec<usize> = offsets
+                .iter()
+                .filter_map(|off| {
+                    let coords: Option<Vec<usize>> = home
+                        .iter()
+                        .zip(off)
+                        .zip(&axes)
+                        .map(|((&h, &o), a)| {
+                            let c = h + o;
+                            (c >= 0 && (c as usize) < a.n_bins).then_some(c as usize)
+                        })
+                        .collect();
+                    coords.and_then(|c| cell_ids.get(&key(&c)).copied())
+                })
+                .collect();
+            searched.extend(&ring);
+            let total: usize = ring.iter().map(|&c| free[c].len()).sum();
+            let take = total.min(opts.n_per_target - picked.len());
+            let mut chosen: Vec<(usize, usize)> = distinct_positions(&mut rng, total, take)
+                .into_iter()
+                .map(|p| locate(&ring, &free, p))
+                .collect();
+            picked.extend(chosen.iter().map(|&(c, k)| free[c][k]));
+            if opts.unique {
+                // Highest index first, so earlier ones stay put.
+                chosen.sort_unstable_by(|a, b| b.cmp(a));
+                for (c, k) in chosen {
+                    free[c].swap_remove(k);
                 }
             }
-            local.extend(&cand);
-            cand.retain(|i| !(opts.unique && used.contains(i)) && !picked.contains(i));
-            let take = cand.len().min(opts.n_per_target - picked.len());
-            picked.extend(sample_without(&mut rng, &cand, take));
             if picked.len() >= opts.n_per_target {
                 break;
             }
         }
         let need = opts.n_per_target - picked.len();
         if need > 0 {
+            // Draw the rest with replacement from every searched cell,
+            // drawn already or not.
             fallbacks += 1;
-            let mut pool: Vec<usize> = Vec::new();
-            let mut seen = HashSet::new();
-            pool.extend(local.into_iter().filter(|&i| seen.insert(i)));
-            if pool.is_empty() {
-                pool = (0..universe.len()).collect();
-            }
+            let total: usize = searched.iter().map(|&c| all[c].len()).sum();
             for _ in 0..need {
-                picked.push(pool[rng.random_range(0..pool.len())]);
+                picked.push(if total == 0 {
+                    rng.random_range(0..universe.len())
+                } else {
+                    let (c, k) = locate(&searched, &all, rng.random_range(0..total));
+                    all[c][k]
+                });
             }
-        }
-        if opts.unique {
-            used.extend(&picked);
         }
         out.extend(picked);
     }
@@ -436,6 +465,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn distinct_positions_cover_the_range_evenly() {
+        let mut rng = rng_for(3, 0);
+        let mut seen = [0usize; 10];
+        for _ in 0..20_000 {
+            let mut p = distinct_positions(&mut rng, 10, 3);
+            for &x in &p {
+                seen[x] += 1;
+            }
+            p.sort_unstable();
+            p.dedup();
+            assert_eq!(p.len(), 3);
+        }
+        // Each position is drawn in 3 of every 10 draws.
+        assert!(
+            seen.iter().all(|&n| (5_600..6_400).contains(&n)),
+            "{seen:?}"
+        );
+        assert_eq!(distinct_positions(&mut rng, 4, 4).len(), 4);
+        assert!(distinct_positions(&mut rng, 0, 0).is_empty());
+        let pools = vec![vec![7, 8], vec![], vec![9]];
+        assert_eq!(locate(&[0, 1, 2], &pools, 2), (2, 0));
+    }
+
+    #[test]
     fn ring_offsets_cover_the_ring() {
         for (ring, n) in [(0, 2), (1, 2), (2, 2), (2, 3), (3, 4)] {
             let offs = ring_offsets(ring, n);
@@ -443,7 +496,7 @@ mod tests {
                 offs.iter()
                     .all(|o| o.len() == n && o.iter().map(|x| x.abs()).sum::<i64>() == ring)
             );
-            let uniq: HashSet<_> = offs.iter().collect();
+            let uniq: std::collections::HashSet<_> = offs.iter().collect();
             assert_eq!(
                 uniq.len(),
                 offs.len(),

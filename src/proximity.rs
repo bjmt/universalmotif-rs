@@ -18,7 +18,8 @@ use rayon::prelude::*;
 use crate::error::{Result, arg_err};
 use crate::pvalue::with_threads;
 use crate::ranges::{
-    AnchorIndex, GRange, GStrand, Orientation, intersect, overlaps_any, reduce, total_width, zone,
+    AnchorIndex, GRange, GStrand, Orientation, count_overlapping, intersect, overlaps_any, reduce,
+    total_width, zone,
 };
 use crate::shuffle::rng_for;
 use crate::stats::{p_adjust_bh, pbinom_upper};
@@ -245,6 +246,8 @@ struct Scan {
     n_tested: usize,
 }
 
+/// The best-scoring distance for one set of hits (sorted by chromosome and
+/// start) and anchors.
 fn scan(
     hits: &[GRange],
     anchors: &[GRange],
@@ -273,6 +276,14 @@ fn scan(
     }
     let lambda = hits.len() as f64 / u.total;
     let hit_union = reduce(hits, 1);
+    // Zones are reduced (sorted) for every distance; starting from sorted
+    // anchors makes those sorts cheap. Anchor counts keep the given order,
+    // since their zone fractions are summed in it.
+    let mut sorted_anchors = anchors.to_vec();
+    if count == ProximityCount::Hits {
+        sorted_anchors.sort_by_key(|a| (a.chrom, a.start, a.end));
+    }
+    let anchors = &sorted_anchors[..];
     let mut n_tested = 0;
     for &d in dists {
         let (f, k) = match count {
@@ -281,10 +292,7 @@ fn scan(
                 if !(f.is_finite() && f > 0.0 && f < 1.0) {
                     continue;
                 }
-                (
-                    f,
-                    hits.iter().filter(|h| overlaps_any(h, &z)).count() as u64,
-                )
+                (f, count_overlapping(hits, &z) as u64)
             }
             ProximityCount::Anchors => {
                 let zones: Vec<GRange> = anchors
@@ -580,6 +588,8 @@ pub fn motif_proximity(
                     .filter(|h| h.motif == m)
                     .map(|h| h.range)
                     .collect();
+                let mut sorted = hm.clone();
+                sorted.sort_by_key(|h| (h.chrom, h.start, h.end));
                 let mut res = Proximity {
                     motif: m,
                     nhits: match opts.count {
@@ -610,7 +620,7 @@ pub fn motif_proximity(
                 };
                 match opts.method {
                     ProximityMethod::Binomial => {
-                        let sc = scan(&hm, &anchors, &u, &dists, opts.count, opts.orientation);
+                        let sc = scan(&sorted, &anchors, &u, &dists, opts.count, opts.orientation);
                         let p = (sc.p * sc.n_tested.max(1) as f64).min(1.0);
                         fill(&mut res, &sc, p);
                     }
@@ -629,12 +639,12 @@ pub fn motif_proximity(
                         }
                     }
                     ProximityMethod::Permutation => {
-                        let obs = scan(&hm, &anchors, &u, &dists, opts.count, opts.orientation);
+                        let obs = scan(&sorted, &anchors, &u, &dists, opts.count, opts.orientation);
                         let mut rng = rng_for(opts.seed, m);
                         let mut above = 0usize;
                         for _ in 0..opts.n_perm {
                             let ra = permute_anchors(&anchors, &u, opts.perm_per_chrom, &mut rng)?;
-                            let z = scan(&hm, &ra, &u, &dists, opts.count, opts.orientation).z;
+                            let z = scan(&sorted, &ra, &u, &dists, opts.count, opts.orientation).z;
                             if z >= obs.z {
                                 above += 1;
                             }

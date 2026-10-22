@@ -119,6 +119,25 @@ pub fn overlaps_any(q: &GRange, reduced: &[GRange]) -> bool {
     reduced.get(k).is_some_and(|r| r.overlaps(q))
 }
 
+/// How many of `queries` (sorted by chromosome and start) overlap the
+/// reduced ranges; the same as counting with [`overlaps_any`], in one pass.
+pub(crate) fn count_overlapping(queries: &[GRange], reduced: &[GRange]) -> usize {
+    let mut k = 0;
+    let mut n = 0;
+    for q in queries.iter().filter(|q| !q.is_empty()) {
+        while reduced
+            .get(k)
+            .is_some_and(|r| (r.chrom, r.end) < (q.chrom, q.start))
+        {
+            k += 1;
+        }
+        if reduced.get(k).is_some_and(|r| r.overlaps(q)) {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Which side of an anchor [`zone`] covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -288,6 +307,19 @@ mod tests {
         assert!(overlaps_any(&r(0, 9, 12), &reduce(&x, 1)));
         assert!(!overlaps_any(&r(0, 10, 12), &reduce(&x, 1)));
         assert!(!overlaps_any(&r(2, 1, 100), &reduce(&x, 1)));
+    }
+
+    #[test]
+    fn counting_matches_overlaps_any() {
+        let z = reduce(&[r(0, 5, 9), r(0, 20, 30), r(1, 3, 4), r(3, 10, 12)], 1);
+        let mut q: Vec<GRange> = (0..4)
+            .flat_map(|c| (0..40).step_by(3).map(move |s| r(c, s, s + (s % 4))))
+            .collect();
+        q.push(r(0, 8, 7));
+        q.sort_by_key(|g| (g.chrom, g.start, g.end));
+        let brute = q.iter().filter(|g| overlaps_any(g, &z)).count();
+        assert_eq!(count_overlapping(&q, &z), brute);
+        assert!(brute > 0);
     }
 
     #[test]
