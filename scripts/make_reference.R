@@ -812,3 +812,144 @@ for (k in 1:3) {
 write_ref(list(dna = lapply(cmp_dna, motif_record), rna = lapply(cmp_rna, motif_record),
                compare = cmp_cases, merge = merge_cases, similar = similar_cases,
                tree = tree_cases), "compare.json")
+
+# ---------------------------------------------------------------------------
+# k-lets, backgrounds, complexity and motif discovery
+#
+# Shuffling and sequence generation use R's random number generator, which
+# the port does not reproduce, so those are covered by property tests in the
+# crate instead.
+
+df_cols <- function(d) {
+  d <- as.data.frame(d)
+  lapply(d, function(x) if (is.numeric(x)) vec(x) else I(as.character(x)))
+}
+
+klet_cases <- list(
+  list(letters = I(c("A", "C", "G")), k = 2L, klets = I(get_klets(c("A", "C", "G"), 2))),
+  list(letters = I(c("A", "C", "G", "T")), k = 3L,
+       klets = I(get_klets(c("A", "C", "G", "T"), 3)))
+)
+count_cases <- list()
+for (x in list(list("AACGTTAACG", 1L, "ACGT"), list("AACGTTAACG", 2L, "ACGT"),
+               list("AACGTTAACG", 3L, "ACG"), list("MKVLAAGLLK", 2L, NULL))) {
+  r <- if (is.null(x[[3]])) count_klets(x[[1]], x[[2]]) else count_klets(x[[1]], x[[2]], x[[3]])
+  count_cases[[length(count_cases) + 1]] <- list(
+    string = x[[1]], k = x[[2]], alph = x[[3]], klets = I(r$klets), counts = vec(r$counts))
+}
+
+window_cases <- list()
+for (x in list(c(10, 3, 0), c(10, 3, 1), c(10, 4, 2), c(11, 4, 1), c(100, 7, 3),
+               c(5, 5, 0), c(9, 3, 2))) {
+  for (incomp in c(TRUE, FALSE)) {
+    w <- calc_windows(x[1], x[2], x[3], incomp)
+    window_cases[[length(window_cases) + 1]] <- list(
+      n = x[1], window = x[2], overlap = x[3], incomplete = incomp,
+      start = vec(w$start), stop = vec(w$stop))
+  }
+}
+
+cx_strings <- c("ACGTACGTAC", "AAAAAAAAAT", "ACGTTGCAACGGTCAGTCGATCGATTTAGC", "AAAA",
+                "MKVLAAGLLKWQRSTEE", "ATATATATATATCGCGCGCG")
+cx_methods <- c("WoottonFederhen", "WoottonFederhenFast", "Trifonov", "TrifonovFast", "DUST")
+complexity_cases <- list()
+for (s in cx_strings) for (meth in cx_methods) {
+  if (meth == "DUST" && grepl("[^ACGT]", s)) next
+  for (alph in list(NULL, "ACGT")) {
+    if (!is.null(alph) && grepl("[^ACGT]", s)) next
+    for (mw in c(7L, 3L)) {
+      if (mw != 7L && !startsWith(meth, "Trifonov")) next
+      v <- calc_complexity(s, meth, alph, mw)
+      complexity_cases[[length(complexity_cases) + 1]] <- list(
+        string = s, method = meth, alph = alph, max_word = mw, value = v)
+    }
+  }
+}
+
+set.seed(7)
+bkg_seqs <- Biostrings::DNAStringSet(vapply(1:4, function(i)
+  paste(sample(c("A", "C", "G", "T"), 24, TRUE, prob = c(0.4, 0.1, 0.2, 0.3)), collapse = ""),
+  character(1)))
+names(bkg_seqs) <- c("s3", "s1", "s10", "s2")
+cx_seqs <- Biostrings::DNAStringSet(c(
+  one = "ACGTTGCAACGGTCAGTCGATCGATTTAGCAAAAAAAAAAAAAAACGT",
+  two = "ATATATATATATCGCGCGCGTTTTTGGG",
+  three = "ACGTACGTAC"))
+
+bkg_cases <- list()
+add_bkg <- function(args) {
+  r <- attempt(do.call(get_bkg, c(list(sequences = bkg_seqs), args)))
+  bkg_cases[[length(bkg_cases) + 1]] <<- c(list(args = args),
+    if (r$ok) list(table = df_cols(r$value)) else list(error = r$error))
+}
+add_bkg(list())
+add_bkg(list(k = 1:2, merge.res = FALSE))
+add_bkg(list(k = 2L, RC = TRUE))
+add_bkg(list(k = 1:2, pseudocount = 1L))
+add_bkg(list(k = 1L, alphabet = "ACGTN"))
+add_bkg(list(k = 1:2, window = TRUE, window.size = 6, window.overlap = 2))
+add_bkg(list(k = 1L, window = TRUE, window.size = 0.25, window.overlap = 0))
+add_bkg(list(k = 1:2, window = TRUE, merge.res = FALSE, window.size = 8,
+             window.overlap = 0.1))
+add_bkg(list(k = 1L, RC = TRUE, merge.res = FALSE, pseudocount = 2L))
+
+meme_bkg <- paste(capture.output(get_bkg(bkg_seqs, k = 1:3, pseudocount = 1,
+                                          to.meme = stdout())), collapse = "\n")
+
+seqcx_cases <- list()
+for (args in list(list(), list(window.size = 10, window.overlap = 0),
+                  list(window.size = 12, method = "Trifonov"),
+                  list(window.size = 15, window.overlap = 5, method = "TrifonovFast",
+                       trifonov.max.word.size = 4),
+                  list(window.size = 8, method = "WoottonFederhenFast"),
+                  list(window.size = 20, method = "DUST"))) {
+  r <- do.call(sequence_complexity, c(list(seqs = cx_seqs), args))
+  seqcx_cases[[length(seqcx_cases) + 1]] <- list(args = args, table = df_cols(r))
+}
+
+# motif_finder() with explicit negatives. Two motifs are planted in 60 of 80
+# random sequences, and the negatives are shuffled in R so the crate gets the
+# exact same input.
+set.seed(11)
+rand_seq <- function(n) paste(sample(c("A", "C", "G", "T"), n, TRUE), collapse = "")
+plant <- function(s, m) {
+  p <- sample.int(nchar(s) - nchar(m), 1)
+  substr(s, p, p + nchar(m) - 1) <- m
+  s
+}
+mf_pos <- vapply(1:80, function(i) {
+  s <- rand_seq(150)
+  if (i <= 60) s <- plant(s, sample(c("TTGACGTCAA", "TTGACGTCAT", "ATGACGTCAA"), 1))
+  if (i %% 2 == 0) s <- plant(s, "GGGGCCCAT")
+  s
+}, character(1))
+mf_neg <- as.character(shuffle_sequences(Biostrings::DNAStringSet(mf_pos), k = 2,
+                                         rng.seed = 3))
+finder_cases <- list()
+for (args in list(list(min.width = 6L, max.width = 10L, qvalue = 1),
+                  list(min.width = 8L, max.width = 8L, nmotifs = 2L, qvalue = 1, RC = FALSE),
+                  list(min.width = 5L, max.width = 12L, hit.pvalue = 1e-3,
+                       dedup.overlap = 0.2, pseudocount = 4L),
+                  list(min.width = 6L, max.width = 7L, stop.pvalue = 1e-30))) {
+  r <- do.call(motif_finder, c(list(sequences = Biostrings::DNAStringSet(mf_pos),
+                                    bkg.sequences = Biostrings::DNAStringSet(mf_neg)), args))
+  # to_list() copies the extra data frame columns into extrainfo, which the
+  # crate's motifs leave empty because the statistics are returned alongside.
+  ms <- lapply(if (nrow(r)) to_list(r) else list(), function(m) {
+    m@extrainfo <- character()
+    m
+  })
+  stats <- as.data.frame(r)[, c("rank", "width", "seqs_pos", "seqs_neg", "sites_pos",
+                                "sites_neg", "n_pos", "n_neg", "pvalue", "qvalue")]
+  finder_cases[[length(finder_cases) + 1]] <- list(
+    args = args, motifs = lapply(ms, motif_record), stats = df_cols(stats))
+}
+
+write_ref(list(klets = klet_cases, count = count_cases, windows = window_cases,
+               complexity = complexity_cases,
+               bkg_sequences = I(as.character(bkg_seqs)), bkg_names = I(names(bkg_seqs)),
+               bkg = bkg_cases, meme_bkg = meme_bkg,
+               complexity_sequences = I(as.character(cx_seqs)),
+               complexity_names = I(names(cx_seqs)), sequence_complexity = seqcx_cases,
+               finder_positives = I(mf_pos), finder_negatives = I(mf_neg),
+               finder = finder_cases), "sequences.json")

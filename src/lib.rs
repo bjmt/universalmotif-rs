@@ -27,6 +27,7 @@ pub mod finder;
 pub mod io;
 pub mod kmer;
 pub mod pvalue;
+pub mod sample;
 pub mod scan;
 pub mod shuffle;
 pub mod stats;

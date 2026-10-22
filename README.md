@@ -11,8 +11,10 @@ package, and it is the engine behind the Python version
 The library is at an early stage. Motif creation, type conversion, the
 basic operations, reading and writing motif files (MEME, JASPAR, HOMER,
 TRANSFAC, CIS-BP, UniPROBE, plain matrices and FASTA), exact P-values,
-sequence scanning, motif comparison, merging and clustering are done;
-shuffling, enrichment and motif discovery will follow.
+sequence scanning, motif comparison, merging and clustering, k-let
+backgrounds, sequence complexity, shuffling, random sequences, implanting
+sites and *de novo* motif discovery are done; enrichment testing and
+co-occurrence will follow.
 
 ## Example
 

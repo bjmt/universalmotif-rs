@@ -94,6 +94,36 @@ change is listed here so the R package can be fixed to match.
 - **Lower-case sequences.** The port scans lower-case letters like
   upper-case ones (Biostrings sequences are always upper case).
 
+### Sequences
+
+- **Markov shuffling and sequence generation skip a letter of context.**
+  `shuffle_sequences(method = "markov")` and `create_sequences()` with
+  k-let frequencies draw each new letter given the k-1 letters before the
+  previous one, rather than the k-1 letters just generated, so the output
+  does not follow the k-let frequencies it was built from (for k = 2 the
+  letter just written is ignored). The port conditions on the last k-1
+  letters.
+- **Wootton-Federhen complexity fails for windows of 171 letters or more.**
+  `calc_complexity()` and `sequence_complexity()` compute the factorials in
+  the formula directly, which overflow a double at 171! and give NaN. The
+  port works with log-factorials.
+- **k-lets with unknown letters can be counted.** `get_bkg()` and
+  `count_klets()` mark letters outside the alphabet with a large negative
+  number and skip k-lets whose index comes out negative. With large
+  alphabets or long k-lets the valid letters can outweigh the marker (for
+  amino acids from k = 5), and from k = 7 for DNA the index overflows, so
+  such k-lets are added to the wrong counts. The port skips any k-let
+  containing an unknown letter.
+- **`calc_windows(return.incomp = FALSE)` drops a complete last window.**
+  The last window is removed when `stop - start` is below the window size,
+  which is also true of a full window (`calc_windows(9, 3, 0, FALSE)` loses
+  7-9). The port removes it only when it is shorter than the window.
+- **`motif_finder()` breaks ties between seeds in hash order.** Candidate
+  k-mers with the same Fisher P-value are ranked in the iteration order of
+  an `unordered_map`, so which seed is tried first depends on the standard
+  library. The port ranks ties by k-mer. Results agree with the R package
+  whenever the best seeds have distinct P-values.
+
 ## Additions
 
 - **FASTA files.** The port reads and writes FASTA files, since scanning
@@ -105,6 +135,12 @@ change is listed here so the R package can be fixed to match.
 
 ## Not reproducible
 
+- **Random sequences, shuffles and samples.** `shuffle_sequences()`,
+  `create_sequences()`, `shuffle_motifs()`, `sample_sites()`,
+  `implant_motifs()` and `motif_finder()` without background sequences use
+  the port's own random number generator, so a given seed gives different
+  results from the R package. Results do not depend on the number of
+  threads, which is not true of the R package's shuffles.
 - **Random motifs.** `create_motif()` with a width draws from R's random
   number generator, which the port does not reproduce. The port also gives a
   random PPM a random `nsites` whenever none is supplied, whereas
