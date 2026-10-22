@@ -8,6 +8,8 @@ fixed to match.
 
 ## Fixed in umotif
 
+### Motif objects
+
 - **`trim_motifs()` invents `nsites`.** universalmotif writes `nsites = 100`
   into any trimmed motif that had no `nsites`, because it fills the slot in
   before computing the per-column IC. umotif uses 100 only for that
@@ -37,6 +39,50 @@ fixed to match.
   AA regardless of its row names. umotif requires the row names to be the
   twenty amino acids and otherwise makes a custom alphabet.
 
+### Motif files
+
+- **TRANSFAC files with a header block cannot be read.** `read_transfac()`
+  treats the `VV ... //` header at the top of TRANSFAC releases as a motif
+  and fails because it has no matrix. umotif skips records without a matrix.
+- **Only the first word of a field is kept.** `read_transfac()` keeps only
+  the first word of `HC` and `OS` (so `OS Homo sapiens` gives `Homo`), and
+  `read_cisbp()` does the same for `TF Name`, `Family` and `Species`. umotif
+  keeps the whole value.
+- **TRANSFAC names depend on field order.** When the `ID` line comes before
+  the `AC` line, `read_transfac()` uses the identifier as both the name and
+  the alternate name. umotif always uses the accession as the name.
+- **TRANSFAC and JASPAR rows are assumed to be in alphabetical order.**
+  `read_transfac()` ignores the letters on the `P0` line and `read_jaspar()`
+  ignores the order of the row labels. umotif reorders the values to match
+  the labels.
+- **Unusual JASPAR alphabets.** `read_jaspar()` treats any labelled matrix
+  that is not RNA or protein as DNA, and any unlabelled matrix as DNA.
+  umotif makes a custom alphabet from unknown labels and reads unlabelled
+  20-row matrices as protein.
+- **HOMER names with spaces.** `read_homer()` splits header lines on any
+  whitespace. umotif splits tab-separated headers on tabs only.
+- **MEME custom alphabet backgrounds.** `read_meme()` assigns background
+  frequencies by position, which puts them on the wrong letters when MEME's
+  letter order (letters before digits) differs from character order. umotif
+  matches them by letter.
+- **MEME sites at positions of 10,000 or more.** In BLOCKS sections the
+  position then fills its parentheses (`(12345)`), the columns shift, and
+  `read_meme()` returns the wrong field as the site. umotif finds the site
+  after the closing parenthesis.
+- **MEME block diagrams over three lines.** `read_meme()` joins only the
+  first two lines of a combined block diagram. umotif joins all of them.
+- **Numbers are parsed with correct rounding.** R's parser can be one unit
+  in the last place off (`as.numeric("5.3e-032")` is not the closest double
+  to 5.3e-32), so values read by the two packages can differ in the last
+  bit.
+
+## Additions
+
+- **CIS-BP and UniPROBE writers.** universalmotif can read these formats but
+  not write them. umotif writes both (UniPROBE in its minimal form), and its
+  files read correctly with universalmotif's `read_cisbp()` and
+  `read_uniprobe()`.
+
 ## Not reproducible
 
 - **Random motifs.** `create_motif()` with a width draws from R's random
@@ -54,6 +100,7 @@ fixed to match.
 
 ## Not supported by design
 
+- universalmotif's own YAML format (`read_motifs()` and `write_motifs()`).
 - Higher-order backgrounds and multifreq matrices.
 - Schneider's small-sample correction for information content.
 - The non-lite versions of functions that have a lite counterpart in

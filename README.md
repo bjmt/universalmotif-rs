@@ -7,9 +7,10 @@ reverse complementing and trimming. It is a port of the core of the
 [universalmotif](https://bioconductor.org/packages/universalmotif/) R
 package, and it is the engine behind the pyumotif Python package.
 
-The library is at an early stage. Motif creation, type conversion and the
-basic operations are done; file I/O, P-values, scanning, comparison,
-shuffling and motif discovery will follow.
+The library is at an early stage. Motif creation, type conversion, the
+basic operations, and reading and writing MEME, JASPAR, HOMER, TRANSFAC,
+CIS-BP, UniPROBE and plain matrix files are done; P-values, scanning,
+comparison, shuffling and motif discovery will follow.
 
 ## Example
 

@@ -1,0 +1,28 @@
+AC  M00001
+XX
+ID  V$MYOD_01
+XX
+NA  MyoD
+HC  bHLH
+OS  mouse
+P0      A      C      G      T
+01      1      2      2      0      S
+02      2      1      2      0      R
+03      3      0      1      1      A
+04      0      5      0      0      C
+05      5      0      0      0      A
+XX
+//
+AC  M00002
+NA  E47
+PO      A      C      G      T
+01    1.5    2.5      0      1
+02      0      5      0      0
+03      4      0      1      0
+XX
+//
+ID  only_id
+P0  A  C  G  T
+1  4  0  0  0
+2  0  4  0  0
+//

@@ -7,10 +7,28 @@ use serde_json::Value;
 use umotif::{Alphabet, GapInfo, Matrix, Motif, MotifParts, MotifType, Strand};
 
 pub fn load(file: &str) -> Vec<Value> {
+    load_key(file, "cases")
+}
+
+pub fn load_key(file: &str, key: &str) -> Vec<Value> {
     let path = format!("{}/tests/reference/{file}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let v: Value = serde_json::from_str(&text).unwrap();
-    v["cases"].as_array().unwrap().clone()
+    v[key].as_array().unwrap().clone()
+}
+
+/// The text of one of the input files in tests/reference/files.
+pub fn reference_file(name: &str) -> String {
+    let path = format!(
+        "{}/tests/reference/files/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// Function arguments recorded by R; an empty R list() is written as [].
+pub fn args(v: &Value) -> serde_json::Map<String, Value> {
+    v.as_object().cloned().unwrap_or_default()
 }
 
 /// A number, allowing for the strings jsonlite writes for non-finite values.
@@ -119,6 +137,15 @@ pub fn extrainfo(v: &Value) -> Vec<(String, String)> {
     }
 }
 
+/// Numbers read from text can differ from R in the last bit, because R's
+/// parser is not always correctly rounded.
+pub fn assert_opt_close(got: Option<f64>, want: Option<f64>, ctx: &str) {
+    match (got, want) {
+        (Some(g), Some(w)) => assert!(close(g, w), "{ctx}: got {g}, want {w}"),
+        _ => assert_eq!(got, want, "{ctx}"),
+    }
+}
+
 /// Fields that are allowed to differ from R for a given comparison.
 #[derive(Default, Clone, Copy)]
 pub struct Skip {
@@ -146,16 +173,16 @@ pub fn assert_motif_eq_skip(got: &Motif, want: &Value, ctx: &str, skip: Skip) {
         w.icscore
     );
     if !skip.nsites {
-        assert_eq!(got.nsites, w.nsites, "{ctx}: nsites");
+        assert_opt_close(got.nsites, w.nsites, &format!("{ctx}: nsites"));
     }
     assert!(close(got.pseudocount, w.pseudocount), "{ctx}: pseudocount");
     assert_close_vec(&got.bkg, &w.bkg, &format!("{ctx}: bkg"));
-    assert_eq!(got.bkgsites, w.bkgsites, "{ctx}: bkgsites");
+    assert_opt_close(got.bkgsites, w.bkgsites, &format!("{ctx}: bkgsites"));
     assert_eq!(got.consensus, w.consensus, "{ctx}: consensus");
     assert_eq!(got.strand, w.strand, "{ctx}: strand");
-    assert_eq!(got.pval, w.pval, "{ctx}: pval");
-    assert_eq!(got.qval, w.qval, "{ctx}: qval");
-    assert_eq!(got.eval, w.eval, "{ctx}: eval");
+    assert_opt_close(got.pval, w.pval, &format!("{ctx}: pval"));
+    assert_opt_close(got.qval, w.qval, &format!("{ctx}: qval"));
+    assert_opt_close(got.eval, w.eval, &format!("{ctx}: eval"));
     assert_eq!(got.extrainfo, w.extrainfo, "{ctx}: extrainfo");
     assert_eq!(got.gap, w.gap, "{ctx}: gap");
     assert_eq!(got.matrix.nrow(), w.matrix.nrow(), "{ctx}: nrow");
