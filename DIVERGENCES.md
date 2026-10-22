@@ -94,6 +94,26 @@ change is listed here so the R package can be fixed to match.
 - **Lower-case sequences.** The port scans lower-case letters like
   upper-case ones (Biostrings sequences are always upper case).
 
+### Comparison
+
+- **Tied alignments are decided by rounding.** When two alignments score
+  the same, as both strands of a palindromic motif do,
+  `compare_motifs_lite()` keeps whichever sums up larger in the last bit,
+  which depends on the compiler (clang on arm64 fuses the multiply-adds in
+  the column correlations, for example). Since the P-value depends on the
+  alignment chosen, results can differ between machines. The port keeps
+  the first alignment found (forward strand, leftmost offset) unless a
+  later one is better by more than 1e-10. This also affects which motifs
+  `view_motifs_lite()` shows as reverse complements.
+
+### Plotting
+
+- **Tip logos fail for motifs with the same name.** `motif_tree_lite()`
+  labels the tree's tips with deduplicated names (`creb`, `creb.1`) but
+  names the tip logos with the original ones, so drawing them stops with
+  "`motif` value(s) not found in the supplied list". The Python port matches
+  logos to tips by position.
+
 ### Sequences
 
 - **Markov shuffling and sequence generation skip a letter of context.**
@@ -172,11 +192,14 @@ change is listed here so the R package can be fixed to match.
 - Schneider's small-sample correction for information content.
 - The non-lite versions of functions that have a lite counterpart in
   the R package.
-- Drawing trees and plotting motif peaks. `motif_tree()` builds the tree
-  (with R's `hclust` algorithm, so it matches exactly) and returns it as
-  data, a Newick string and a SciPy linkage matrix rather than a ggtree
-  plot, and `plot_motif_peaks()` is not ported yet. Plotting is planned for
-  a later milestone.
+- ggplot2 and ggtree. The Python package draws with matplotlib instead:
+  `view_motifs()` and `view_logo()` reproduce the R package's letter
+  polygons exactly (they are tested against them), while trees and peak
+  plots follow the R package's layouts without matching them point for
+  point. Tree tips are ordered as `hclust()` orders them rather than
+  ladderized as ggtree does, and the unrooted `radial`, `equal_angle` and
+  `daylight` layouts are not available. Plots are not part of the Rust
+  crate.
 - `motif_pvalue(method = "exhaustive")`: the branch-and-bound P-value
   search and the random score search. Only the exact dynamic method is
   ported.

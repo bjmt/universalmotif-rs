@@ -256,3 +256,21 @@ fn linkage_matrix() {
         ]
     );
 }
+
+#[test]
+fn strand_ties_go_to_the_forward_strand() {
+    use universalmotif::Strand;
+    use universalmotif::compare::align;
+    use universalmotif::create::{CreateOptions, from_strings};
+    // TTGACGTCAA is its own reverse complement, so both strands of the
+    // query score the same against it.
+    let opts = CreateOptions {
+        nsites: Some(20.0),
+        pseudocount: 1.0,
+        ..Default::default()
+    };
+    let q = from_strings(&["GGGGCCCCAT"], None, &opts).unwrap();
+    let t = from_strings(&["TTGACGTCAA"], None, &opts).unwrap();
+    let al = align(&[q, t], &[(0, 1), (1, 0)], &CompareOptions::default()).unwrap();
+    assert!(al.iter().all(|a| a.strand == Strand::Plus), "{al:?}");
+}

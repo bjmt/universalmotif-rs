@@ -721,7 +721,7 @@ cmp_dna <- c(jaspar, list(examplemotif, ArabidopsisMotif), homer_m, meme_m,
              transfac_m[1:2])
 cmp_dna <- lapply(cmp_dna, function(m) { m@multifreq <- list(); m })
 cmp_rna <- list(
-  create_motif(c("ACGU", "ACGA", "UCGU"), name = "r1", nsites = 3),
+  create_motif(c("ACUU", "ACUA", "UCUC"), name = "r1", nsites = 3),
   create_motif("UUGACUAA", name = "r2", nsites = 20, pseudocount = 1),
   create_motif("CCGUAAGCU", name = "r3", nsites = 20, pseudocount = 1))
 rows <- function(m) lapply(seq_len(nrow(m)), function(i) vec(m[i, ]))
@@ -1078,3 +1078,74 @@ write_ref(list(stats = stat_cases, cutree = cut_cases,
                coocc_hits = df_cols(co_hits), coocc_hit_cases = co_hit_cases,
                peak_sequences = I(as.character(pk_seqs)),
                peak_hits = df_cols(pk_hits), peaks = peak_cases), "enrich.json")
+
+# ---------------------------------------------------------------------------
+# Plotting: logo polygons and the aligned matrices behind multi-motif logos
+
+poly_cols <- function(d) {
+  d <- as.data.frame(d)
+  keep <- !is.na(d$x)
+  list(x = vec(d$x[keep]), y = vec(d$y[keep]), group = I(as.character(d$group[keep])),
+       letter_id = I(as.character(d$letter.id[keep])),
+       motif = if ("motif.id" %in% names(d)) I(as.character(d$motif.id[keep])))
+}
+lmat <- function(vals, rows) matrix(vals, nrow = length(rows), dimnames = list(rows, NULL))
+logo_mats <- list(
+  plain = lmat(c(0.1, 0.6, 0.2, 0.1, 0.25, 0.25, 0.25, 0.25, 0.9, 0, 0.05, 0.05, 0, 0, 0, 0),
+               c("A", "C", "G", "T")),
+  signed = lmat(c(1.2, -0.8, 0.3, -1.5, -0.2, 0.9, -0.01, 0.4, 0.5, 0.5, -0.6, -0.6),
+                c("A", "C", "G", "T")),
+  multi = lmat(c(0.5, 1, 0.25, 0.3, 0, 2, 0.4, 0.7), c("AA", "C", "GT", "T")),
+  tall = lmat(c(3, 1, 0.5, 0.2, 0.02, 2, 2, 2), c("A", "C", "G", "T"))
+)
+logo_args <- list(list(), list(sort.positions = TRUE), list(flip.neg = TRUE, sort.positions = TRUE),
+                  list(min.height = 0.1, x.spacer = 0.1, y.spacer = 0.05),
+                  list(fit.to.height = 1, sort.positions = TRUE, sort.positions.decreasing = FALSE))
+logo_cases <- list()
+for (nm in names(logo_mats)) for (a in logo_args) {
+  m <- logo_mats[[nm]]
+  d <- suppressWarnings(do.call(view_logo, c(list(m), a))$data)
+  logo_cases[[length(logo_cases) + 1]] <- list(
+    matrix = nm, args = a, polygons = poly_cols(d))
+}
+
+vm <- list(
+  create_motif("TTGACGTCAA", nsites = 20, pseudocount = 1, name = "creb"),
+  create_motif("TGACGTCA", nsites = 30, pseudocount = 1, name = "creb2"),
+  create_motif(c("TTGACGTC", "TTGACCTC", "ATGACGTA"), name = "sites"),
+  create_motif("ATTGTCAAA", nsites = 15, pseudocount = 1, name = "rc"),
+  create_motif("GGGGCCCCAT", nsites = 25, pseudocount = 1, name = "other"),
+  create_motif("TTGACG", nsites = 10, pseudocount = 1, name = "creb")
+)
+vm[[3]] <- convert_type(vm[[3]], "PCM")
+vm[[5]]["bkg"] <- c(A = 0.3, C = 0.2, G = 0.2, T = 0.3)
+vm_rna <- lapply(vm[1:3], function(m) switch_alph(m))
+raw_cases <- list()
+add_raw <- function(set, idx, args) {
+  ms <- (if (set == "dna") vm else vm_rna)[idx]
+  r <- suppressWarnings(do.call(view_motifs_lite, c(list(ms, return.raw = TRUE), args)))
+  raw_cases[[length(raw_cases) + 1]] <<- list(
+    set = set, idx = I(idx), args = args, names = I(names(r)),
+    matrices = unname(lapply(r, function(m) lapply(seq_len(ncol(m)), function(j) vec(m[, j])))))
+}
+add_raw("dna", 1:6, list())
+add_raw("dna", 1:6, list(use.type = "PPM", sort.by = "ic"))
+add_raw("dna", 1:6, list(use.type = "PWM", sort.by = "similarity"))
+add_raw("dna", 1:6, list(use.type = "PCM", tryRC = FALSE))
+add_raw("dna", 1:6, list(relative_entropy = TRUE, min.overlap = 4))
+add_raw("dna", c(2, 4), list(min.overlap = 12))
+add_raw("dna", 3L, list(use.type = "PCM"))
+add_raw("rna", 1:3, list(sort.by = "similarity", RC.text = "(rc)"))
+
+single_cases <- list()
+for (ut in c("ICM", "PPM", "PCM", "PWM")) for (i in c(1, 3, 5)) {
+  r <- attempt(view_motifs_lite(vm[[i]], use.type = ut)$data)
+  single_cases[[length(single_cases) + 1]] <- c(list(idx = i, use_type = ut),
+    if (r$ok) list(polygons = poly_cols(r$value)) else list(error = r$error))
+}
+multi_data <- poly_cols(view_motifs_lite(vm[1:4], sort.by = "ic")$data)
+
+write_ref(list(logo_matrices = lapply(logo_mats, function(m) list(
+                 rows = I(rownames(m)), columns = lapply(seq_len(ncol(m)), function(j) vec(m[, j])))),
+               logo = logo_cases, motifs = lapply(vm, motif_record),
+               raw = raw_cases, single = single_cases, multi = multi_data), "plot.json")

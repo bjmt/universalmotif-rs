@@ -20,6 +20,7 @@ const PCC_BINS: usize = 51;
 const ENUM_GRID_K: usize = 5;
 const ENUM_DIRICHLET_N: f64 = 4.0;
 const CONSENSUS_THRESHOLD: f64 = 0.75;
+const TIE_TOLERANCE: f64 = 1e-10;
 
 type Column = [f64; 4];
 
@@ -249,7 +250,9 @@ fn best_alignment(
                 acc + pcc_column(&qq[(q_start + j) as usize], &t[(t_start + j) as usize])
             });
             best.5 += 1;
-            if s > best.0 || best.5 == 1 {
+            // Ties (such as both strands of a palindrome) go to the first
+            // alignment, rather than to whichever rounds higher.
+            if s > best.0 + TIE_TOLERANCE || best.5 == 1 {
                 best = (s, len as usize, d, strand, q_start as usize, best.5);
             }
         }
@@ -317,6 +320,61 @@ fn tail_prob(pmf: &[f64], bin: usize) -> f64 {
         return 0.0;
     }
     pmf[bin..].iter().fold(0.0, |a, &b| a + b).clamp(0.0, 1.0)
+}
+
+/// Where a motif sits in a shared column frame (see [`anchor_layout`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement {
+    /// Empty columns to the left of the motif.
+    pub left: usize,
+    /// Whether the motif is shown as its reverse complement.
+    pub rc: bool,
+}
+
+/// Lay motifs out in a common column frame by aligning each one to
+/// `motifs[anchor]`, as universalmotif's `view_motifs_lite()` does. Motifs
+/// that do not overlap the anchor by at least `opts.min_overlap` columns
+/// are placed at the anchor's left edge. Returns the placements and the
+/// frame width.
+pub fn anchor_layout(
+    motifs: &[Motif],
+    anchor: usize,
+    opts: &CompareOptions,
+) -> Result<(Vec<Placement>, usize)> {
+    if anchor >= motifs.len() {
+        return arg_err("anchor index out of range");
+    }
+    let pairs: Vec<(usize, usize)> = (0..motifs.len()).map(|t| (anchor, t)).collect();
+    let al = align(motifs, &pairs, opts)?;
+    let widths: Vec<i64> = motifs.iter().map(|m| m.width() as i64).collect();
+    let wa = widths[anchor];
+    let mut frame = vec![0i64; motifs.len()];
+    let mut rc = vec![false; motifs.len()];
+    for (i, a) in al.iter().enumerate() {
+        if i == anchor || a.overlap < opts.min_overlap {
+            continue;
+        }
+        let l = a.overlap as i64;
+        let q_start = a.query_start as i64;
+        let t_start = (-a.offset).max(0);
+        if a.strand == Strand::Minus {
+            frame[i] = (wa - q_start - l) - (widths[i] - t_start - l);
+            rc[i] = true;
+        } else {
+            frame[i] = q_start - t_start;
+        }
+    }
+    let lo = *frame.iter().min().unwrap();
+    let hi = frame.iter().zip(&widths).map(|(f, w)| f + w).max().unwrap();
+    let placements = frame
+        .iter()
+        .zip(rc)
+        .map(|(&f, rc)| Placement {
+            left: (f - lo) as usize,
+            rc,
+        })
+        .collect();
+    Ok((placements, (hi - lo) as usize))
 }
 
 /// Bonferroni-corrected P-values of alignments.
