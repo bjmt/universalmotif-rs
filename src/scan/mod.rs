@@ -44,6 +44,8 @@ pub enum OverlapPriority {
 /// Removal of overlapping hits, as done by [`crate::dedup`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NoOverlaps {
+    /// Which of two overlapping hits to keep; the one with the smaller P-value
+    /// by default.
     pub by: OverlapPriority,
     /// Compare hits on different strands too.
     pub ignore_strand: bool,
@@ -86,6 +88,7 @@ impl Default for ScanOptions {
 
 /// A motif hit.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Hit {
     /// Index of the motif.
     pub motif: usize,
@@ -95,12 +98,15 @@ pub struct Hit {
     pub start: usize,
     /// Last position of the hit on the forward strand, 1-based and inclusive.
     pub end: usize,
+    /// The strand of the hit.
     pub strand: Strand,
+    /// The hit's score.
     pub score: f64,
     /// Score as a percentage of the motif's maximum score.
     pub score_pct: f64,
     /// The matched sequence, reverse complemented for `-` strand hits.
     pub matched: String,
+    /// The P-value of the score.
     pub pvalue: f64,
 }
 
@@ -121,9 +127,11 @@ pub struct HitTable {
     pub end: Vec<i64>,
     /// Whether the hit is on the `-` strand.
     pub minus: Vec<bool>,
+    /// Each hit's score.
     pub score: Vec<f64>,
     /// Score as a percentage of the motif's maximum score.
     pub score_pct: Vec<f64>,
+    /// Each hit's P-value.
     pub pvalue: Vec<f64>,
     rna: bool,
     /// Whether matched letters are reported in upper case, as they are for all
@@ -136,10 +144,12 @@ pub struct HitTable {
 }
 
 impl HitTable {
+    /// The number of hits.
     pub fn len(&self) -> usize {
         self.motif.len()
     }
 
+    /// Whether there are no hits.
     pub fn is_empty(&self) -> bool {
         self.motif.is_empty()
     }
@@ -951,6 +961,7 @@ pub enum MatchValue {
 }
 
 impl MatchValue {
+    /// Parse `"matches"`, `"counts"` or `"scores"`.
     pub fn parse(s: &str) -> Result<MatchValue> {
         match s {
             "matches" => Ok(MatchValue::Matches),
@@ -966,11 +977,17 @@ impl MatchValue {
 /// A sparse sequences by motifs matrix from [`motif_matches`], in coordinate
 /// form, ordered by sequence and then motif. Pairs without hits are left out.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct MotifMatches {
+    /// The number of sequences, which is the number of rows.
     pub n_sequences: usize,
+    /// The number of motifs, which is the number of columns.
     pub n_motifs: usize,
+    /// The sequence, or row, of each entry.
     pub sequence: Vec<u32>,
+    /// The motif, or column, of each entry.
     pub motif: Vec<u32>,
+    /// The value of each entry.
     pub value: Vec<f64>,
 }
 
@@ -1089,6 +1106,7 @@ pub struct FastaHits {
     pub names: Vec<String>,
     /// The length of every sequence in the file.
     pub lengths: Vec<usize>,
+    /// The hits.
     pub table: HitTable,
     letters: Vec<u8>,
     /// Where each row's letters start in `letters`.
@@ -1101,6 +1119,7 @@ impl FastaHits {
         self.table.len()
     }
 
+    /// Whether there are no hits.
     pub fn is_empty(&self) -> bool {
         self.table.is_empty()
     }

@@ -23,6 +23,7 @@ pub enum EnrichTest {
 }
 
 impl EnrichTest {
+    /// Parse `"seqs"` or `"sites"`.
     pub fn parse(s: &str) -> Result<EnrichTest> {
         match s {
             "seqs" => Ok(EnrichTest::Seqs),
@@ -37,6 +38,7 @@ impl EnrichTest {
 pub struct EnrichOptions {
     /// P-value cutoff for hits.
     pub pvalue: f64,
+    /// What to count; sequences with hits by default.
     pub test: EnrichTest,
     /// Scan both strands.
     pub rc: bool,
@@ -46,6 +48,7 @@ pub struct EnrichOptions {
     pub seed: u64,
     /// Added to every cell of the 2x2 table.
     pub pseudocount: u64,
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 
@@ -65,20 +68,26 @@ impl Default for EnrichOptions {
 
 /// Enrichment of one motif.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Enrichment {
     /// Index of the motif.
     pub motif: usize,
+    /// The number of target sequences.
     pub target_seq_n: usize,
     /// Target sequences with at least one hit.
     pub target_seq_hits: usize,
     /// Hits in the target sequences.
     pub target_site_hits: usize,
+    /// The number of background sequences.
     pub bkg_seq_n: usize,
+    /// Background sequences with at least one hit.
     pub bkg_seq_hits: usize,
+    /// Hits in the background sequences.
     pub bkg_site_hits: usize,
     /// Ratio of the hit rates, with a floor of half a hit on the background
     /// rate to avoid dividing by zero.
     pub enrichment: f64,
+    /// The base 2 logarithm of the enrichment.
     pub log2_enrichment: f64,
     /// One-sided Fisher's exact P-value.
     pub pvalue: f64,
@@ -87,6 +96,8 @@ pub struct Enrichment {
     pub log10_pvalue: f64,
     /// Benjamini-Hochberg q-value across all motifs.
     pub qvalue: f64,
+    /// Base 10 log of `qvalue`, which stays finite when `qvalue` is too small
+    /// for a double.
     pub log10_qvalue: f64,
 }
 

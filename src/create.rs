@@ -15,20 +15,33 @@ use crate::motif::{GapInfo, Motif, MotifBuilder, MotifType, Strand};
 pub struct CreateOptions {
     /// Type of the returned motif.
     pub motif_type: MotifType,
+    /// The motif's name; `"motif"` by default.
     pub name: String,
+    /// The pseudocount used in conversions; 0 by default.
     pub pseudocount: f64,
+    /// The number of sites. Counts are scaled to it, and probabilities from
+    /// consensus strings are rounded to it.
     pub nsites: Option<f64>,
     /// One background frequency per letter. It is uniform when `None`, except
     /// that random motifs draw one instead.
     pub bkg: Option<Vec<f64>>,
+    /// An alternative name.
     pub altname: Option<String>,
+    /// The transcription factor family.
     pub family: Option<String>,
+    /// The organism the motif comes from.
     pub organism: Option<String>,
+    /// The number of sites the background frequencies came from.
     pub bkgsites: Option<f64>,
+    /// The strands the motif applies to; both by default.
     pub strand: Strand,
+    /// A P-value to attach to the motif.
     pub pval: Option<f64>,
+    /// A q-value to attach to the motif.
     pub qval: Option<f64>,
+    /// An E-value to attach to the motif.
     pub eval: Option<f64>,
+    /// Free-form `(name, value)` pairs.
     pub extrainfo: Vec<(String, String)>,
 }
 

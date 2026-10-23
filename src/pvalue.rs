@@ -46,7 +46,9 @@ pub(crate) fn with_threads<T: Send>(nthreads: usize, f: impl FnOnce() -> T + Sen
 /// The PWM and background a motif is scored with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoringMatrix {
+    /// The motif as a PWM of log2 odds, with no infinite values.
     pub pwm: Matrix,
+    /// The background frequencies the PWM is relative to.
     pub bkg: Vec<f64>,
     /// Whether the pseudocount had to be reapplied because the PWM had
     /// infinite values.

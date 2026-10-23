@@ -170,6 +170,7 @@ impl ScoreTail {
         self.cdf.len()
     }
 
+    /// Whether no grid points are held.
     pub fn is_empty(&self) -> bool {
         self.cdf.is_empty()
     }

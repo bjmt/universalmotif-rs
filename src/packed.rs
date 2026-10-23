@@ -90,10 +90,12 @@ impl PackedSeq {
         b.finish()
     }
 
+    /// The number of letters.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Whether there are no letters.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -167,6 +169,7 @@ impl PackedSeqBuilder {
         self.len
     }
 
+    /// Whether no letters have been added.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -211,6 +214,7 @@ impl PackedSeqBuilder {
         remainder.iter().for_each(|&b| self.push_one(b));
     }
 
+    /// Finish the sequence, ready to be scanned.
     pub fn finish(mut self) -> PackedSeq {
         self.bytes.extend([0, 0]);
         PackedSeq {
@@ -240,10 +244,12 @@ impl CodedSeq {
         b.finish()
     }
 
+    /// The number of letters.
     pub fn len(&self) -> usize {
         self.codes.len() - 1
     }
 
+    /// Whether there are no letters.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -308,6 +314,7 @@ impl CodedSeqBuilder {
         self.codes.len()
     }
 
+    /// Whether no letters have been added.
     pub fn is_empty(&self) -> bool {
         self.codes.is_empty()
     }
@@ -325,6 +332,7 @@ impl CodedSeqBuilder {
         }
     }
 
+    /// Finish the sequence, ready to be scanned.
     pub fn finish(mut self) -> CodedSeq {
         self.codes.push(0);
         CodedSeq {
@@ -389,6 +397,7 @@ impl RecordEncoder {
         }
     }
 
+    /// Whether no letters have been added.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -502,6 +511,7 @@ impl EncodedSequences {
         }
     }
 
+    /// The alphabet the sequences were encoded for.
     pub fn alphabet(&self) -> &Alphabet {
         &self.alphabet
     }
@@ -514,6 +524,7 @@ impl EncodedSequences {
         }
     }
 
+    /// Whether there are no sequences.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

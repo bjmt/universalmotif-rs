@@ -63,6 +63,14 @@
 //!
 //! Functions that do a lot of work take a thread count, `nthreads`, in their
 //! options, where 0 means all cores.
+//!
+//! Options are structs with public fields and a `Default`, so a call sets only
+//! the fields it needs and takes the rest from `..Default::default()`. Until
+//! version 1.0, options may gain fields in new minor versions. Results, such
+//! as [`scan::Hit`] or [`compare::Comparison`], are marked `#[non_exhaustive]`,
+//! so they can gain fields without breaking code that reads them.
+
+#![warn(missing_docs)]
 
 pub mod alphabet;
 pub mod convert;

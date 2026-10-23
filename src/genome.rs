@@ -127,10 +127,12 @@ impl Genome {
         &self.lengths
     }
 
+    /// The number of sequences.
     pub fn len(&self) -> usize {
         self.names.len()
     }
 
+    /// Whether there are no sequences.
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
     }

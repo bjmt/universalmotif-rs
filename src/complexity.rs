@@ -11,6 +11,7 @@ use crate::pvalue::with_threads;
 
 /// Complexity measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Method {
     /// Wootton and Federhen's complexity, the probability of a sequence's
     /// letter composition.
@@ -28,6 +29,8 @@ pub enum Method {
 }
 
 impl Method {
+    /// Parse a method name: `"WoottonFederhen"`, `"WoottonFederhenFast"`,
+    /// `"Trifonov"`, `"TrifonovFast"` or `"DUST"`.
     pub fn parse(s: &str) -> Result<Method> {
         Ok(match s {
             "WoottonFederhen" => Method::WoottonFederhen,
@@ -112,6 +115,7 @@ pub fn complexity(seq: &str, method: Method, alph: Option<&str>, max_word: usize
 /// Options for [`sequence_complexity`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComplexityOptions {
+    /// The complexity measure; Wootton and Federhen's by default.
     pub method: Method,
     /// Window width; values below 1 are a fraction of each sequence's length.
     pub window: f64,
@@ -120,7 +124,9 @@ pub struct ComplexityOptions {
     pub overlap: Option<f64>,
     /// Possible letters; by default those in the sequences.
     pub alphabet: Option<String>,
+    /// The longest word size for the Trifonov measures; 7 by default.
     pub max_word: usize,
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 
@@ -139,10 +145,15 @@ impl Default for ComplexityOptions {
 
 /// Complexity of one window.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct WindowComplexity {
+    /// Index of the sequence.
     pub sequence: usize,
+    /// First position of the window, counting from 1.
     pub start: usize,
+    /// Last position of the window, counting from 1 and inclusive.
     pub stop: usize,
+    /// The window's complexity.
     pub complexity: f64,
 }
 

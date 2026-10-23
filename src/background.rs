@@ -33,6 +33,7 @@ pub enum BinType {
 }
 
 impl BinType {
+    /// Parse `"quantile"` or `"equalwidth"`.
     pub fn parse(s: &str) -> Result<BinType> {
         match s {
             "quantile" => Ok(BinType::Quantile),
@@ -47,18 +48,27 @@ impl BinType {
 /// An extra per-sequence value to match on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Covariate {
+    /// The covariate's name, used in error messages.
     pub name: String,
+    /// The value for each target.
     pub targets: Vec<f64>,
+    /// The value for each universe sequence.
     pub universe: Vec<f64>,
+    /// The number of bins.
     pub n_bins: usize,
+    /// How the bins are made.
     pub bin_type: BinType,
 }
 
 /// Per-target and per-universe 0-based bins on one axis.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Axis {
+    /// The bin of each target.
     pub bin_targets: Vec<usize>,
+    /// The bin of each universe sequence.
     pub bin_universe: Vec<usize>,
+    /// The number of bins.
     pub n_bins: usize,
 }
 
@@ -165,12 +175,16 @@ pub fn match_axis(
 /// Options for [`match_bkg`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchOptions {
+    /// Universe sequences to draw for each target; 1 by default.
     pub n_per_target: usize,
+    /// Equal-width GC content bins between 0 and 1; 20 by default.
     pub n_bins_gc: usize,
+    /// Quantile bins of sequence length; 10 by default.
     pub n_bins_length: usize,
     /// Draw each universe sequence at most once, falling back to drawing with
     /// replacement from nearby bins when they run out.
     pub unique: bool,
+    /// Seed for the random draws.
     pub seed: u64,
 }
 
@@ -188,13 +202,16 @@ impl Default for MatchOptions {
 
 /// Result of [`match_bkg`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Matched {
     /// The universe sequence drawn for each target, `n_per_target` per
     /// target in target order.
     pub universe_index: Vec<usize>,
     /// Targets that needed drawing with replacement from nearby bins.
     pub fallback_targets: usize,
+    /// The GC fraction of each target.
     pub gc_targets: Vec<f64>,
+    /// The GC fraction of each universe sequence.
     pub gc_universe: Vec<f64>,
 }
 

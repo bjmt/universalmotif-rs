@@ -10,6 +10,7 @@ use crate::motif::{Motif, MotifType};
 
 /// A column similarity or distance metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColumnMetric {
     /// Pearson correlation coefficient.
     Pcc,
@@ -38,6 +39,7 @@ pub enum ColumnMetric {
 }
 
 impl ColumnMetric {
+    /// Parse a metric's short name, such as `"PCC"` or `"EUCL"`.
     pub fn parse(s: &str) -> Result<ColumnMetric> {
         Ok(match s {
             "PCC" => ColumnMetric::Pcc,
@@ -188,6 +190,7 @@ pub enum Average {
     /// Geometric mean of the positive values, with the sum of their logarithms
     /// divided by the number of all values.
     GeometricMean,
+    /// The median.
     Median,
     /// Fisher z-transform: the inverse hyperbolic tangent of the mean of
     /// the hyperbolic tangents.
@@ -195,6 +198,7 @@ pub enum Average {
 }
 
 impl Average {
+    /// Parse `"a.mean"`, `"g.mean"`, `"median"` or `"fzt"`.
     pub fn parse(s: &str) -> Result<Average> {
         match s {
             "a.mean" => Ok(Average::ArithmeticMean),

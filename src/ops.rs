@@ -47,13 +47,17 @@ pub fn reverse_complement(motif: &Motif, ignore_alphabet: bool) -> Result<Motif>
 /// Which ends of a motif to trim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrimFrom {
+    /// Trim both ends.
     #[default]
     Both,
+    /// Trim only the start.
     Left,
+    /// Trim only the end.
     Right,
 }
 
 impl TrimFrom {
+    /// Parse `"both"`, `"left"` or `"right"`.
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "both" => Ok(TrimFrom::Both),

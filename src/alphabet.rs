@@ -21,8 +21,11 @@ pub const AA_IUPAC: &str = "ACDEFGHIKLMNPQRSTVWYUOBJZX";
 /// order of [`Alphabet::letters`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Alphabet {
+    /// DNA: A, C, G and T.
     Dna,
+    /// RNA: A, C, G and U.
     Rna,
+    /// The 20 standard amino acids.
     Aa,
     /// Any other set of single-character letters, kept sorted and unique.
     Custom(Vec<char>),
@@ -65,10 +68,12 @@ impl Alphabet {
         }
     }
 
+    /// The number of letters.
     pub fn len(&self) -> usize {
         self.letters().len()
     }
 
+    /// Whether the alphabet has no letters, which no valid alphabet does.
     pub fn is_empty(&self) -> bool {
         self.letters().is_empty()
     }

@@ -50,10 +50,12 @@ impl Matrix {
         Matrix::from_vec(nrow, columns.len(), data)
     }
 
+    /// The number of rows, one per alphabet letter.
     pub fn nrow(&self) -> usize {
         self.nrow
     }
 
+    /// The number of columns, one per motif position.
     pub fn ncol(&self) -> usize {
         self.ncol
     }
@@ -63,26 +65,32 @@ impl Matrix {
         &self.data
     }
 
+    /// The raw position-major values, giving up the matrix.
     pub fn into_vec(self) -> Vec<f64> {
         self.data
     }
 
+    /// The value in row `row` of column `col`, counting from 0.
     pub fn get(&self, row: usize, col: usize) -> f64 {
         self.data[col * self.nrow + row]
     }
 
+    /// Column `j`, counting from 0.
     pub fn col(&self, j: usize) -> &[f64] {
         &self.data[j * self.nrow..(j + 1) * self.nrow]
     }
 
+    /// Column `j`, counting from 0, to change in place.
     pub fn col_mut(&mut self, j: usize) -> &mut [f64] {
         &mut self.data[j * self.nrow..(j + 1) * self.nrow]
     }
 
+    /// The columns in order.
     pub fn columns(&self) -> impl ExactSizeIterator<Item = &[f64]> {
         self.data.chunks_exact(self.nrow)
     }
 
+    /// The sum of each column.
     pub fn col_sums(&self) -> Vec<f64> {
         self.columns().map(sum).collect()
     }

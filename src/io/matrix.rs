@@ -10,8 +10,10 @@ use crate::motif::{Motif, MotifType};
 /// Whether motif positions are the columns or the rows of the matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Positions {
+    /// Each column is a position, and each row a letter.
     #[default]
     Columns,
+    /// Each row is a position, and each column a letter.
     Rows,
 }
 
@@ -31,13 +33,16 @@ pub enum Headers {
 /// Options for [`read()`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadOptions {
+    /// Whether positions are columns or rows; columns by default.
     pub positions: Positions,
+    /// The alphabet the letters follow; DNA by default.
     pub alphabet: Alphabet,
     /// The matrix type; detected from the values when `None`.
     pub motif_type: Option<MotifType>,
     /// Line separating motifs, where an empty string means blank lines. `None`
     /// means motifs are only separated by headers.
     pub sep: Option<String>,
+    /// How motifs are named; the first line of each by default.
     pub headers: Headers,
     /// Whether each row holds a letter label, or with `Positions::Rows` whether
     /// the first line holds them. The labels are skipped; rows are read in
@@ -164,6 +169,7 @@ pub fn read(text: &str, opts: &ReadOptions) -> Result<Vec<Motif>> {
 /// Options for [`write()`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteOptions {
+    /// Whether to write positions as columns or rows; columns by default.
     pub positions: Positions,
     /// Write letter labels.
     pub rownames: bool,
@@ -171,6 +177,7 @@ pub struct WriteOptions {
     pub motif_type: Option<MotifType>,
     /// Line written after each motif; `None` writes nothing.
     pub sep: Option<String>,
+    /// How to name the motifs; a line with the name before each by default.
     pub headers: Headers,
     /// Decimal places.
     pub digits: usize,

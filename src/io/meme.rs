@@ -292,15 +292,21 @@ pub fn read(text: &str, opts: &ReadOptions) -> Result<Vec<Motif>> {
 
 /// A site from the BLOCKS section of MEME output.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Site {
+    /// The name of the sequence the site is in.
     pub sequence: String,
+    /// The letters of the site.
     pub site: String,
 }
 
 /// The sites one motif was built from.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MotifSites {
+    /// The name of the motif.
     pub motif: String,
+    /// The motif's sites, in the order listed.
     pub sites: Vec<Site>,
 }
 
@@ -345,19 +351,27 @@ pub fn read_sites(text: &str) -> Result<Vec<MotifSites>> {
 /// A site with its P-value, from the "sites sorted by position p-value"
 /// tables of MEME output.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SitePvalue {
+    /// The name of the sequence the site is in.
     pub sequence: String,
     /// `'+'` or `'-'`, when the table has a strand column.
     pub strand: Option<char>,
+    /// The position of the site in the sequence, counting from 1.
     pub position: f64,
+    /// The site's P-value.
     pub pvalue: f64,
+    /// The letters of the site.
     pub site: String,
 }
 
 /// The site P-value table of one motif.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MotifSitePvalues {
+    /// The name of the motif.
     pub motif: String,
+    /// The motif's sites, in the order listed.
     pub sites: Vec<SitePvalue>,
 }
 
@@ -415,9 +429,13 @@ pub fn read_site_pvalues(text: &str) -> Result<Vec<MotifSitePvalues>> {
 
 /// A row of the combined block diagrams of MEME output.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CombinedSite {
+    /// The name of the sequence.
     pub sequence: String,
+    /// The combined P-value of the sequence's sites.
     pub pvalue: f64,
+    /// The block diagram, giving the motifs and the gaps between them.
     pub diagram: String,
 }
 
@@ -462,6 +480,7 @@ pub fn read_combined(text: &str) -> Result<Vec<CombinedSite>> {
 /// Options for [`write()`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteOptions {
+    /// The MEME format version written in the header; 5 by default.
     pub version: u32,
     /// Background frequencies in the order letters are written, which for DNA
     /// is A, C, G, T. By default the motifs' shared background is used, or a
@@ -634,6 +653,7 @@ pub struct AlphabetDefinition {
     pub ambiguity: Vec<(String, String)>,
     /// `"DNA"`, `"RNA"` or `"PROTEIN"`, for alphabets that extend one.
     pub like: Option<String>,
+    /// A name for the alphabet, written after the `ALPHABET` keyword.
     pub name: Option<String>,
     /// A name for each letter. If any are given, all core and complement
     /// letters need one.

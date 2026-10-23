@@ -174,12 +174,19 @@ impl Default for BkgOptions {
 /// One row of [`get_bkg`] output. `sequence`, `start` and `stop` are set only
 /// for per-sequence or windowed counts.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BkgRow {
+    /// Index of the sequence, for per-sequence counts.
     pub sequence: Option<usize>,
+    /// First position of the window, for windowed counts.
     pub start: Option<usize>,
+    /// Last position of the window, for windowed counts.
     pub stop: Option<usize>,
+    /// The k-mer.
     pub kmer: String,
+    /// The number of times it occurs.
     pub count: u64,
+    /// Its frequency among the k-mers of the same size counted with it.
     pub probability: f64,
 }
 

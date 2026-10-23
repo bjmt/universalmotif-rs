@@ -9,19 +9,30 @@ use crate::error::{Result, arg_err};
 
 /// Agglomeration method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Method {
+    /// Ward's criterion applied to the distances as they are, written `ward.D`.
     WardD,
+    /// Single linkage: the closest pair of members.
     Single,
+    /// Complete linkage: the farthest pair of members.
     #[default]
     Complete,
+    /// Average linkage, also known as UPGMA.
     Average,
+    /// McQuitty's method, also known as WPGMA.
     Mcquitty,
+    /// Median linkage, also known as WPGMC.
     Median,
+    /// Centroid linkage, also known as UPGMC.
     Centroid,
+    /// Ward's criterion applied to the squared distances, written `ward.D2`.
     WardD2,
 }
 
 impl Method {
+    /// Parse a method name: `"ward.D"`, `"single"`, `"complete"`, `"average"`,
+    /// `"mcquitty"`, `"median"`, `"centroid"` or `"ward.D2"`.
     pub fn parse(s: &str) -> Result<Method> {
         Ok(match s {
             "ward.D" => Method::WardD,
@@ -455,6 +466,7 @@ pub struct TreeOptions {
     pub min_overlap: usize,
     /// Also try reverse complements when comparing motifs.
     pub rc: bool,
+    /// The agglomeration method; complete linkage by default.
     pub method: Method,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,

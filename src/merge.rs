@@ -190,13 +190,19 @@ pub struct MergeSimilarOptions {
     /// Motifs are linked when their comparison q-value in either direction is
     /// at most this.
     pub qvalue: f64,
+    /// The null model for the comparison P-values; the empirical one by
+    /// default.
     pub null: NullModel,
+    /// Fewest overlapping columns when comparing and merging motifs.
     pub min_overlap: usize,
+    /// Also align motifs as reverse complements.
     pub rc: bool,
     /// Background for the parametric null in A, C, G, T order, used for DNA and
     /// RNA only.
     pub bkg: [f64; 4],
+    /// Weight each motif by its `nsites` when merging.
     pub weighted: bool,
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 

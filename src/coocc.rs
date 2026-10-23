@@ -57,13 +57,19 @@ impl Default for CooccOptions {
 
 /// The co-occurrence of two motifs.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CooccPair {
+    /// The first motif of the pair.
     pub a: usize,
+    /// The second motif of the pair.
     pub b: usize,
     /// Sequences with a hit from `a` but not `b`.
     pub a_only: u64,
+    /// Sequences with a hit from `b` but not `a`.
     pub b_only: u64,
+    /// Sequences with hits from both motifs.
     pub both: u64,
+    /// Sequences with hits from neither motif.
     pub neither: u64,
     /// Sample odds ratio of the table with pseudocounts; `None` if untested.
     pub odds_ratio: Option<f64>,

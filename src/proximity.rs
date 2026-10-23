@@ -36,6 +36,7 @@ pub enum ProximityMethod {
 }
 
 impl ProximityMethod {
+    /// Parse `"binomial"`, `"permutation"` or `"ks"`.
     pub fn parse(s: &str) -> Result<ProximityMethod> {
         match s {
             "binomial" => Ok(ProximityMethod::Binomial),
@@ -58,6 +59,7 @@ pub enum ProximityCount {
 }
 
 impl ProximityCount {
+    /// Parse `"hits"` or `"anchors"`.
     pub fn parse(s: &str) -> Result<ProximityCount> {
         match s {
             "hits" => Ok(ProximityCount::Hits),
@@ -70,18 +72,26 @@ impl ProximityCount {
 /// Options for [`motif_proximity`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProximityOptions {
+    /// The null model; binomial by default.
     pub method: ProximityMethod,
+    /// Whether to count hits or anchors; hits by default.
     pub count: ProximityCount,
+    /// Which side of stranded anchors the near zone covers; both sides by
+    /// default.
     pub orientation: Orientation,
     /// Distances to test; by default a log-spaced grid up to half the
     /// smallest universe segment.
     pub dist_thresholds: Option<Vec<i64>>,
+    /// Random placements of the anchors with the permutation null; 1000 by
+    /// default.
     pub n_perm: usize,
     /// Keep permuted anchors on their own chromosome.
     pub perm_per_chrom: bool,
     /// Collapse overlapping hits regardless of strand.
     pub ignore_strand: bool,
+    /// Seed for the permutation null.
     pub seed: u64,
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 
@@ -106,24 +116,36 @@ impl Default for ProximityOptions {
 pub struct ProximityHit {
     /// Motif identifier, of any value; results come in increasing order of it.
     pub motif: usize,
+    /// Where the hit is.
     pub range: GRange,
+    /// The hit's score; overlapping hits keep the best.
     pub score: f64,
 }
 
 /// Proximity of one motif's hits to the anchors.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Proximity {
+    /// The motif, as given in the hits.
     pub motif: usize,
     /// Hits tested, or anchors when counting anchors.
     pub nhits: usize,
     /// The most significant distance.
     pub best_dist: Option<i64>,
+    /// Hits, or anchors, within the best distance.
     pub hits_near: Option<u64>,
+    /// Hits, or anchors, beyond the best distance.
     pub hits_far: Option<u64>,
+    /// The fraction of hits, or anchors, within the best distance.
     pub frac_near: Option<f64>,
+    /// The fraction expected within the best distance under the null.
     pub expected_near: Option<f64>,
+    /// The observed fraction divided by the expected one.
     pub enrichment: Option<f64>,
+    /// The base 2 logarithm of the enrichment.
     pub log2_enrichment: Option<f64>,
+    /// The P-value of the test. With the binomial null it is that of the best
+    /// distance, Bonferroni-corrected for the distances tried.
     pub pvalue: f64,
     /// Benjamini-Hochberg q-value across motifs.
     pub qvalue: f64,

@@ -41,6 +41,7 @@ pub enum ImplantMode {
 /// Options for [`implant_motifs`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplantOptions {
+    /// How many sites to place in each sequence; one by default.
     pub mode: ImplantMode,
     /// Implant on either strand at random, rather than only on `+`.
     pub both_strands: bool,
@@ -51,6 +52,7 @@ pub struct ImplantOptions {
     pub min_spacing: usize,
     /// Attempts at finding a free position before giving up on an implant.
     pub max_retries: usize,
+    /// Seed for the sites and their positions.
     pub seed: u64,
 }
 
@@ -70,11 +72,15 @@ impl Default for ImplantOptions {
 /// One implanted site.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Implant {
+    /// Index of the sequence.
     pub sequence: usize,
+    /// Index of the motif.
     pub motif: usize,
     /// 1-based start.
     pub start: usize,
+    /// Width of the site.
     pub width: usize,
+    /// Whether the site was planted as its reverse complement.
     pub minus_strand: bool,
     /// The planted letters as they read on the forward strand.
     pub planted: String,
@@ -82,8 +88,11 @@ pub struct Implant {
 
 /// Result of [`implant_motifs`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Implanted {
+    /// The sequences with the sites in place.
     pub sequences: Vec<String>,
+    /// Every site planted, in the order they were placed.
     pub implants: Vec<Implant>,
     /// Problems worth reporting, such as positions that did not fit.
     pub warnings: Vec<String>,

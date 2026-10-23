@@ -64,6 +64,7 @@ pub enum ThresholdType {
 }
 
 impl ThresholdType {
+    /// Parse `"total"` or `"fromzero"`.
     pub fn parse(s: &str) -> Result<ThresholdType> {
         match s {
             "total" => Ok(ThresholdType::Total),

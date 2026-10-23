@@ -23,6 +23,7 @@ pub enum PeaksMode {
 }
 
 impl PeaksMode {
+    /// Parse `"central"` or `"local"`.
     pub fn parse(s: &str) -> Result<PeaksMode> {
         match s {
             "central" => Ok(PeaksMode::Central),
@@ -35,13 +36,17 @@ impl PeaksMode {
 /// Options for [`motif_peaks`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeaksOptions {
+    /// Where windows are placed; centred on the sequences by default.
     pub mode: PeaksMode,
+    /// Narrowest window; 10 by default.
     pub min_window: usize,
     /// Widest window; by default half the sequence length.
     pub max_window: Option<usize>,
+    /// Step between window widths; 10 by default.
     pub window_step: usize,
     /// Step between window centres in local mode.
     pub position_step: usize,
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 
@@ -63,27 +68,36 @@ impl Default for PeaksOptions {
 pub struct PeakHit {
     /// Motif identifier, of any value; results come in increasing order of it.
     pub motif: usize,
+    /// Sequence identifier, of any value.
     pub sequence: usize,
     /// Centre of the hit, `(start + end) / 2` in 1-based coordinates.
     pub centre: f64,
+    /// The hit's score; only the best hit of a motif in each sequence is used.
     pub score: f64,
 }
 
 /// The best window for one motif.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MotifPeak {
+    /// The motif, as given in the hits.
     pub motif: usize,
     /// Sequences with a hit; only the best hit per sequence is used.
     pub nhits: usize,
     /// Width and centre of the best window; `None` if no window had a
     /// P-value below 1.
     pub best_window: Option<usize>,
+    /// Centre of the best window.
     pub best_centre: Option<f64>,
+    /// Hits inside the best window.
     pub hits_in: usize,
+    /// Hits outside the best window.
     pub hits_out: usize,
     /// Hits expected in the best window if they were uniform.
     pub expected_in: Option<f64>,
+    /// The observed hits in the best window divided by the expected number.
     pub enrichment: Option<f64>,
+    /// The base 2 logarithm of the enrichment.
     pub log2_enrichment: Option<f64>,
     /// Bonferroni-corrected binomial P-value of the best window.
     pub pvalue: f64,

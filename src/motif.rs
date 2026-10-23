@@ -10,6 +10,7 @@ use crate::matrix::{Matrix, sum, which_max};
 
 /// What the values of a motif matrix represent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MotifType {
     /// Position count matrix.
     Pcm,
@@ -24,6 +25,7 @@ pub enum MotifType {
 }
 
 impl MotifType {
+    /// Every motif type, in the order PCM, PPM, PWM, ICM, CWM.
     pub const ALL: [MotifType; 5] = [
         MotifType::Pcm,
         MotifType::Ppm,
@@ -32,6 +34,7 @@ impl MotifType {
         MotifType::Cwm,
     ];
 
+    /// Parse a type name: `"PCM"`, `"PPM"`, `"PWM"`, `"ICM"` or `"CWM"`.
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "PCM" => Ok(MotifType::Pcm),
@@ -45,6 +48,7 @@ impl MotifType {
         }
     }
 
+    /// The type's name in upper case, such as `"PPM"`.
     pub fn as_str(&self) -> &'static str {
         match self {
             MotifType::Pcm => "PCM",
@@ -65,8 +69,11 @@ impl fmt::Display for MotifType {
 /// Which strand(s) a motif applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Strand {
+    /// The forward strand only.
     Plus,
+    /// The reverse strand only.
     Minus,
+    /// Both strands.
     #[default]
     Both,
 }
@@ -82,6 +89,7 @@ impl Strand {
         }
     }
 
+    /// `"+"`, `"-"` or `"+-"`.
     pub fn as_str(&self) -> &'static str {
         match self {
             Strand::Plus => "+",
@@ -101,9 +109,13 @@ impl fmt::Display for Strand {
 /// and spans `mingap[i]` to `maxgap[i]` positions.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GapInfo {
+    /// Whether the motif has any gaps.
     pub isgapped: bool,
+    /// The column after which each gap sits, counting from 1.
     pub gaploc: Vec<usize>,
+    /// The fewest positions each gap can span.
     pub mingap: Vec<usize>,
+    /// The most positions each gap can span.
     pub maxgap: Vec<usize>,
 }
 
@@ -114,27 +126,45 @@ pub struct GapInfo {
 /// makes it the right tool for restoring a motif exactly as it was saved.
 #[derive(Debug, Clone)]
 pub struct MotifParts {
+    /// The motif's name.
     pub name: String,
+    /// An alternative name, such as the transcription factor's name when the
+    /// main name is a database ID.
     pub altname: Option<String>,
+    /// The transcription factor family.
     pub family: Option<String>,
+    /// The organism the motif comes from.
     pub organism: Option<String>,
+    /// The motif matrix, with one row per alphabet letter and one column per
+    /// position.
     pub matrix: Matrix,
+    /// The alphabet the rows of the matrix follow.
     pub alphabet: Alphabet,
+    /// What the values of the matrix represent.
     pub motif_type: MotifType,
+    /// The total information content of the motif, in bits.
     pub icscore: f64,
+    /// The number of sites the motif was built from.
     pub nsites: Option<f64>,
+    /// The pseudocount added when converting to probabilities or weights.
     pub pseudocount: f64,
     /// Background frequencies, one per alphabet letter in row order.
     pub bkg: Vec<f64>,
+    /// The number of sites the background frequencies came from.
     pub bkgsites: Option<f64>,
     /// One consensus letter per column, or `None` for custom alphabets.
     pub consensus: Option<String>,
+    /// The strands the motif applies to.
     pub strand: Strand,
+    /// A P-value attached to the motif, such as from discovery.
     pub pval: Option<f64>,
+    /// A q-value attached to the motif.
     pub qval: Option<f64>,
+    /// An E-value attached to the motif.
     pub eval: Option<f64>,
     /// Free-form `(name, value)` pairs. Names may be empty.
     pub extrainfo: Vec<(String, String)>,
+    /// The motif's gaps, if it has any.
     pub gap: GapInfo,
 }
 
@@ -337,6 +367,8 @@ impl Motif {
         }
     }
 
+    /// Take the motif apart into its fields, to change them freely and validate
+    /// the result again with [`Motif::from_parts`].
     pub fn into_parts(self) -> MotifParts {
         self.0
     }
@@ -446,6 +478,8 @@ macro_rules! setter {
 }
 
 impl MotifBuilder {
+    /// Start building a motif from its matrix and alphabet, with the name `"new
+    /// motif"`, a pseudocount of 1, both strands and nothing else set.
     pub fn new(matrix: Matrix, alphabet: Alphabet) -> Self {
         MotifBuilder {
             matrix,
@@ -469,6 +503,7 @@ impl MotifBuilder {
         }
     }
 
+    /// The motif's name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
@@ -478,27 +513,72 @@ impl MotifBuilder {
         /// The matrix type; guessed from the values when `None`.
         motif_type: Option<MotifType>
     );
-    setter!(altname: Option<String>);
-    setter!(family: Option<String>);
-    setter!(organism: Option<String>);
+    setter!(
+        /// An alternative name, such as the transcription factor's name.
+        altname: Option<String>
+    );
+    setter!(
+        /// The transcription factor family.
+        family: Option<String>
+    );
+    setter!(
+        /// The organism the motif comes from.
+        organism: Option<String>
+    );
     setter!(
         /// The total IC; computed from the matrix when `None`.
         icscore: Option<f64>
     );
-    setter!(nsites: Option<f64>);
-    setter!(pseudocount: f64);
+    setter!(
+        /// The number of sites the motif was built from.
+        nsites: Option<f64>
+    );
+    setter!(
+        /// The pseudocount used in conversions; 1 by default.
+        pseudocount: f64
+    );
     setter!(
         /// Background frequencies, one per letter; uniform when `None`.
         bkg: Option<Vec<f64>>
     );
-    setter!(bkgsites: Option<f64>);
-    setter!(strand: Strand);
-    setter!(pval: Option<f64>);
-    setter!(qval: Option<f64>);
-    setter!(eval: Option<f64>);
-    setter!(extrainfo: Vec<(String, String)>);
-    setter!(gap: GapInfo);
+    setter!(
+        /// The number of sites the background frequencies came from.
+        bkgsites: Option<f64>
+    );
+    setter!(
+        /// The strands the motif applies to; both by default.
+        strand: Strand
+    );
+    setter!(
+        /// A P-value attached to the motif.
+        pval: Option<f64>
+    );
+    setter!(
+        /// A q-value attached to the motif.
+        qval: Option<f64>
+    );
+    setter!(
+        /// An E-value attached to the motif.
+        eval: Option<f64>
+    );
+    setter!(
+        /// Free-form `(name, value)` pairs.
+        extrainfo: Vec<(String, String)>
+    );
+    setter!(
+        /// The motif's gaps.
+        gap: GapInfo
+    );
 
+    /// Check the matrix against the alphabet and build the motif.
+    ///
+    /// Without a type, it is guessed from the values: counts if every value
+    /// is 0 or at least 1, probabilities if the columns sum to within about
+    /// 0.02 of 1, information content if no value is negative, and weights
+    /// otherwise. Probabilities that do not sum to 1 are renormalized. A PCM
+    /// is rescaled to `nsites` if that is given, and gives `nsites` its column
+    /// sum if not. The total IC is computed unless given, and the consensus
+    /// always is.
     pub fn build(self) -> Result<Motif> {
         let mut m = self.matrix;
         let nrow = m.nrow();

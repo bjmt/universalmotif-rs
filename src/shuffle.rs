@@ -48,6 +48,7 @@ pub(crate) fn shuffle_in_place<T>(rng: &mut StdRng, v: &mut [T]) {
 
 /// How sequences are shuffled when `k > 1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ShuffleMethod {
     /// Keep the exact k-mer counts with Altschul and Erickson's Eulerian walk.
     #[default]
@@ -61,6 +62,7 @@ pub enum ShuffleMethod {
 }
 
 impl ShuffleMethod {
+    /// Parse `"euler"`, `"markov"` or `"linear"`.
     pub fn parse(s: &str) -> Result<ShuffleMethod> {
         match s {
             "euler" => Ok(ShuffleMethod::Euler),
@@ -78,10 +80,14 @@ impl ShuffleMethod {
 pub struct ShuffleOptions {
     /// Size of the k-mers to preserve.
     pub k: usize,
+    /// The shuffling method; the Euler walk by default.
     pub method: ShuffleMethod,
+    /// Seed for the shuffle. Results depend on it but not on the number of
+    /// threads.
     pub seed: u64,
     /// Shuffle within sliding windows instead of whole sequences.
     pub window: Option<WindowOptions>,
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 

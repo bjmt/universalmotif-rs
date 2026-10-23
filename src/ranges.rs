@@ -9,13 +9,16 @@ use crate::error::{Result, arg_err};
 /// Strand of a genomic range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GStrand {
+    /// The forward strand, written `+`.
     Plus,
+    /// The reverse strand, written `-`.
     Minus,
     /// No strand, written `*`.
     Any,
 }
 
 impl GStrand {
+    /// Parse `"+"` or `"-"`; `"*"`, `"+-"` and an empty string mean no strand.
     pub fn parse(s: &str) -> Result<GStrand> {
         match s {
             "+" => Ok(GStrand::Plus),
@@ -29,13 +32,18 @@ impl GStrand {
 /// A genomic range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GRange {
+    /// The chromosome, by index.
     pub chrom: usize,
+    /// The first position, counting from 1.
     pub start: i64,
+    /// The last position, counting from 1 and inclusive.
     pub end: i64,
+    /// The strand; no strand by default.
     pub strand: GStrand,
 }
 
 impl GRange {
+    /// A range on no strand.
     pub fn new(chrom: usize, start: i64, end: i64) -> GRange {
         GRange {
             chrom,
@@ -45,10 +53,12 @@ impl GRange {
         }
     }
 
+    /// The number of positions in the range, or 0 if it is empty.
     pub fn width(&self) -> i64 {
         (self.end - self.start + 1).max(0)
     }
 
+    /// Whether the range is empty, which it is when `end < start`.
     pub fn is_empty(&self) -> bool {
         self.end < self.start
     }
@@ -150,6 +160,7 @@ pub enum Orientation {
 }
 
 impl Orientation {
+    /// Parse `"undirected"`, `"upstream"` or `"downstream"`.
     pub fn parse(s: &str) -> Result<Orientation> {
         match s {
             "undirected" => Ok(Orientation::Undirected),

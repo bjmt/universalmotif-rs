@@ -606,7 +606,9 @@ fn column_ic(p: &[f64; 4]) -> f64 {
 /// Options for [`motif_finder`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct FinderOptions {
+    /// Narrowest motif to search for; 6 by default.
     pub min_width: usize,
+    /// Widest motif to search for, at most 30; 15 by default.
     pub max_width: usize,
     /// Most motifs searched for at each width.
     pub nmotifs: usize,
@@ -623,8 +625,12 @@ pub struct FinderOptions {
     pub rc: bool,
     /// Shuffling for negative sequences when none are given.
     pub shuffle_k: usize,
+    /// Seed for shuffling the sequences into negatives.
     pub seed: u64,
+    /// Pseudocount added to the motifs' counts when scoring sites, which the
+    /// motifs found keep as their pseudocount.
     pub pseudocount: u32,
+    /// Threads to use, one width at a time; 0 means all available.
     pub nthreads: usize,
 }
 
@@ -649,17 +655,24 @@ impl Default for FinderOptions {
 
 /// A motif found by [`motif_finder`], with its discovery statistics.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct FoundMotif {
+    /// The motif, a PPM named `motif_1`, `motif_2` and so on, with its q-value
+    /// as its E-value.
     pub motif: Motif,
     /// 1-based rank by P-value.
     pub rank: usize,
     /// Positive and negative sequences with at least one hit.
     pub seqs_pos: u64,
+    /// Negative sequences with at least one hit.
     pub seqs_neg: u64,
     /// Hits in positive and negative sequences.
     pub sites_pos: u64,
+    /// Hits in negative sequences.
     pub sites_neg: u64,
+    /// The number of positive sequences.
     pub n_pos: usize,
+    /// The number of negative sequences.
     pub n_neg: usize,
     /// Words tested in the search that found the motif, which its P-value is
     /// corrected for.
@@ -673,6 +686,8 @@ pub struct FoundMotif {
     /// Benjamini-Hochberg q-value, counting every word tested at every width
     /// as a test.
     pub qvalue: f64,
+    /// Base 10 log of `qvalue`, which stays finite when `qvalue` is too small
+    /// for a double.
     pub log10_qvalue: f64,
 }
 

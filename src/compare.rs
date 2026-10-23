@@ -154,6 +154,7 @@ pub struct CompareOptions {
     pub min_overlap: usize,
     /// Also try the reverse complement of each query.
     pub rc: bool,
+    /// The null model for P-values; the empirical one by default.
     pub null: NullModel,
     /// Background for the parametric null, in A, C, G, T order.
     pub bkg: [f64; 4],
@@ -187,8 +188,11 @@ impl Default for CompareOptions {
 
 /// The best alignment of a target motif to a query motif.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Alignment {
+    /// Index of the query motif.
     pub query: usize,
+    /// Index of the target motif.
     pub target: usize,
     /// Sum of column correlations over the overlap.
     pub score: f64,
@@ -478,6 +482,7 @@ fn tail_prob(pmf: &[f64], bin: usize) -> f64 {
 /// Where a motif sits in a shared column frame, as laid out by
 /// [`anchor_layout`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Placement {
     /// Empty columns to the left of the motif.
     pub left: usize,
@@ -727,14 +732,22 @@ fn best_of_all(
 
 /// One row of a comparison: a target motif's best alignment to a query.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Comparison {
+    /// Index of the query motif.
     pub query: usize,
+    /// Index of the target motif.
     pub target: usize,
+    /// Column of the oriented query facing the target's first column, which can
+    /// be negative.
     pub offset: i64,
+    /// `Minus` if the query's reverse complement aligned best.
     pub strand: Strand,
+    /// Number of overlapping columns.
     pub overlap: usize,
     /// Mean column correlation over the overlap.
     pub score: f64,
+    /// The P-value of the alignment's score.
     pub pvalue: f64,
     /// Benjamini-Hochberg adjusted P-value, among the comparisons of the
     /// same query.
@@ -860,10 +873,13 @@ fn finish_comparisons<C: Col>(
 
 /// All-against-all comparison results, indexed `[query][target]`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ComparisonMatrices {
     /// Mean column correlations.
     pub scores: Vec<Vec<f64>>,
+    /// P-values of the best alignments.
     pub pvalues: Vec<Vec<f64>>,
+    /// Benjamini-Hochberg q-values, adjusted within each query.
     pub qvalues: Vec<Vec<f64>>,
 }
 

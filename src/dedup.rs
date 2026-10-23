@@ -9,11 +9,18 @@
 /// priority is better.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Interval {
+    /// Index of the sequence.
     pub sequence: usize,
+    /// Index of the motif.
     pub motif: usize,
+    /// A code for the strand. Hits only overlap others with the same code,
+    /// unless strands are ignored.
     pub strand: i32,
+    /// First position.
     pub start: i64,
+    /// Last position, inclusive.
     pub end: i64,
+    /// How good the hit is; higher is better.
     pub priority: f64,
 }
 
