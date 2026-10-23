@@ -59,6 +59,10 @@ modules and more examples.
   sequences can be packed once at two bits per base with
   `io::fasta::read_encoded` and scanned as often as needed with
   `scan::scan_encoded`.
+- Genomes can be read a piece at a time with `genome::Genome`, from FASTA
+  files (plain or compressed with bgzip, using or building the same
+  indexes as `samtools faidx`) and from 2bit files, so windows and peaks
+  can be taken from a genome without loading it.
 
 ## Testing
 

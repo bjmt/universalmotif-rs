@@ -343,6 +343,17 @@ change is listed here so the R package can be fixed to match.
   best scores without keeping the hits, for annotating the peaks of
   single-cell ATAC data; the Python package returns it as a SciPy matrix
   or AnnData object with `match_motifs()` and `add_motif_matches()`.
+- **Genomes on disk.** `genome::Genome` reads any part of a genome from a
+  FASTA file, plain or compressed with bgzip, or a 2bit file, through the
+  `.fai` and `.gzi` indexes `samtools faidx` writes (or ones built when the
+  file is opened). The Python package wraps it as `Genome`, a mapping that
+  `scan_sequences()`, `motif_proximity()` and `match_bkg(genome=...)` read
+  a chromosome or a window at a time, with `extract_ranges()` for the
+  sequences of peaks; the R package needs Biostrings and BSgenome for this.
+- **Matching on signal.** The Python package's `signal_stats()` summarises
+  bigWig signal over ranges, and `match_bkg()` can match the windows it
+  draws from a genome to the targets on that signal, such as chromatin
+  accessibility, as well as on GC content and length.
 - **P-values on a log scale.** `motif_finder()` and `enrich_motifs()` also
   report `log10_pvalue` and `log10_qvalue`, which stay finite where the
   P-values themselves are too small for a double and come out as 0.

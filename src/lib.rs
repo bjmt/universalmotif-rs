@@ -52,6 +52,7 @@
 //! |---|---|
 //! | Build and convert motifs | [`create`], [`convert`], [`ops`], [`merge`] |
 //! | Read and write motif and FASTA files | [`io`] |
+//! | Read genomes a piece at a time from FASTA, bgzip and 2bit files | [`genome`] |
 //! | P-values and match scores | [`pvalue`], [`scoring`], [`cdf`] |
 //! | Scan sequences, including gapped motifs and whole genomes | [`scan`], [`packed`] |
 //! | Compare and cluster motifs | [`compare`], [`cluster`], [`metrics`] |
@@ -82,6 +83,7 @@ pub mod coocc;
 pub mod dedup;
 pub mod enrich;
 pub mod finder;
+pub mod genome;
 pub mod io;
 pub mod kmer;
 pub mod mask;
