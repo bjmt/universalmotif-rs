@@ -119,6 +119,22 @@ fn errors() {
             .to_string()
             .contains("more than once")
     );
+    // The last line of the file may lack its line ending, whether it is
+    // short or full.
+    for (i, text) in [">a\nACGT\nAC", ">a\nACGT\nACGT", ">a\r\nACGT\r\nAC"]
+        .iter()
+        .enumerate()
+    {
+        let path = dir.join(format!("end{i}.fa"));
+        std::fs::write(&path, text).unwrap();
+        let g = Genome::open(&path).unwrap();
+        let whole: String = text.lines().skip(1).map(|l| l.trim_end()).collect();
+        assert_eq!(
+            g.fetch("a", 0, whole.len() as u64).unwrap(),
+            whole,
+            "{text:?}"
+        );
+    }
     let ok = dir.join("ok.fa");
     std::fs::write(&ok, ">a\nACGT\n").unwrap();
     let g = Genome::open(&ok).unwrap();

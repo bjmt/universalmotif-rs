@@ -403,8 +403,11 @@ pub fn create_sequences(
     if a.pow(k as u32) != freqs.len() {
         return arg_err("the number of frequencies must be a power of the alphabet size");
     }
-    if freqs.iter().any(|f| f.is_nan() || *f < 0.0) {
-        return arg_err("frequencies must be non-negative");
+    if freqs.iter().any(|f| !f.is_finite() || *f < 0.0) {
+        return arg_err("frequencies must be finite and non-negative");
+    }
+    if !freqs.iter().any(|&f| f > 0.0) {
+        return arg_err("at least one frequency must be above zero");
     }
     with_threads(nthreads, || {
         (0..n)

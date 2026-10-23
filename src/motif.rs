@@ -301,6 +301,9 @@ impl MotifParts {
                 if m.as_slice().iter().any(|&v| v > 0.0 && v < 1.0) {
                     msg.push("PCM values must be whole counts, not between 0 and 1".into());
                 }
+                if colsums.iter().any(|&s| s <= 0.0) {
+                    msg.push("PCM columns must have at least one count".into());
+                }
             }
             MotifType::Ppm => {
                 if !colsums.iter().all(|&s| s > 0.99 && s < 1.01) {
@@ -628,6 +631,15 @@ impl MotifBuilder {
                 // from about 0.98 to 1.02, so guessing allows for that.
                 let near_one = colsums.iter().all(|&s| (s - 1.0).abs() <= 0.0201);
                 if vals.iter().all(|&v| v >= 1.0 || v == 0.0) {
+                    let first = colsums[0];
+                    let tol = f64::max(0.01, first.abs() * 0.01);
+                    if self.nsites.is_none() && colsums.iter().any(|&s| (s - first).abs() > tol) {
+                        return arg_err(
+                            "the matrix holds whole numbers, so it was read as counts (a PCM), but \
+                             its columns have different sums; give nsites to rescale them, or \
+                             check that it is not meant to be another type",
+                        );
+                    }
                     MotifType::Pcm
                 } else if near_one && all_pos {
                     if !sums_one {

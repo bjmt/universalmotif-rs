@@ -241,3 +241,59 @@ fn complete_scores_cover_the_whole_query() {
     assert_eq!(short.overlap, 8);
     assert!(short.score > 0.9);
 }
+
+#[test]
+fn score_match_agrees_with_scanning() {
+    use universalmotif::scan::{ScanOptions, scan_sequences};
+    use universalmotif::scoring::score_match;
+    // The R package adds the rounded entries as floats and truncates the
+    // total again, which can be 0.001 off the score scanning reports.
+    let o = CreateOptions {
+        pseudocount: 1.0,
+        ..opts()
+    };
+    let motifs = [
+        from_strings(&["TGACGTCA", "TGACGTCT", "TTACGTCA", "TGACGACA"], None, &o).unwrap(),
+        from_strings(&["TATAAAT", "TATATAT", "TATAAAA"], None, &o).unwrap(),
+        from_strings(&["GGCCAATC", "AGCCAATG", "GGCCAATC"], None, &o).unwrap(),
+    ];
+    let seqs = [
+        "TAACGTGGACGTCATTTATATAAGGGCCAATCGAT",
+        "GGGTGACGTAAACCATATAAAT",
+    ];
+    let opts = ScanOptions {
+        pvalue: 0.5,
+        rc: false,
+        nthreads: 1,
+        ..Default::default()
+    };
+    let mut checked = 0;
+    for m in &motifs {
+        for h in scan_sequences(std::slice::from_ref(m), &seqs, &opts).unwrap() {
+            let word = &seqs[h.sequence][h.start..h.start + m.width()];
+            assert_eq!(
+                score_match(m, &[word], false).unwrap()[0],
+                h.score,
+                "{word}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 10);
+}
+
+#[test]
+fn bad_matrices_and_frequencies_are_rejected() {
+    use universalmotif::shuffle::create_sequences;
+    // Frequencies that are all zero would otherwise give only the first letter.
+    let e = create_sequences(&['A', 'C', 'G', 'T'], 2, 10, Some(&[0.0; 4]), 1, 1).unwrap_err();
+    assert!(e.to_string().contains("above zero"), "{e}");
+    // A count matrix with an empty column is not a motif.
+    let zero = Matrix::from_vec(4, 2, vec![0.0; 8]).unwrap();
+    let e = from_matrix(zero, None, Some(Alphabet::Dna), &opts()).unwrap_err();
+    assert!(e.to_string().contains("at least one count"), "{e}");
+    // Whole numbers are read as counts, and uneven columns say so.
+    let ints = Matrix::from_vec(4, 2, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]).unwrap();
+    let e = from_matrix(ints, None, Some(Alphabet::Dna), &opts()).unwrap_err();
+    assert!(e.to_string().contains("read as counts"), "{e}");
+}

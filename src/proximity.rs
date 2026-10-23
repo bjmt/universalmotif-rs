@@ -618,6 +618,9 @@ pub fn motif_proximity(
     let dists: Vec<i64> = match &opts.dist_thresholds {
         None => default_thresholds(&u),
         Some(d) => {
+            if d.is_empty() {
+                return arg_err("give at least one distance threshold");
+            }
             if d.iter().any(|&x| x <= 0) {
                 return arg_err("distance thresholds must be positive");
             }

@@ -5,7 +5,7 @@ use crate::compare::{CompareOptions, NullModel, align, compare_matrix};
 use crate::convert::convert_type;
 use crate::create::{CreateOptions, from_matrix};
 use crate::error::{Result, arg_err};
-use crate::matrix::{Matrix, which_max};
+use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType, Strand};
 
 /// Options for [`merge_motifs`].
@@ -108,7 +108,14 @@ pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<Me
         .map(|m| m.nsites.filter(|n| *n > 0.0).unwrap_or(1.0))
         .collect();
     let ic: Vec<f64> = ppms.iter().map(|m| m.icscore).collect();
-    let anchor = which_max(&ic);
+    // The first motif with the most IC, so that rounding cannot hand the
+    // anchor to a later motif with the same IC, such as a reverse complement.
+    let mut anchor = 0;
+    for (i, &v) in ic.iter().enumerate().skip(1) {
+        if v > ic[anchor] + 1e-9 * ic[anchor].abs().max(1.0) {
+            anchor = i;
+        }
+    }
 
     let pairs: Vec<(usize, usize)> = (0..ppms.len()).map(|i| (anchor, i)).collect();
     let copts = CompareOptions {

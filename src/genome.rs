@@ -374,7 +374,8 @@ fn build_fai<R: BufRead>(mut reader: R) -> io::Result<FaiIndex> {
                 r.line_width = n;
             } else if short_seen
                 || content > r.line_bases
-                || n - content != r.line_width - r.line_bases
+                // Only the last line of the file can lack its line ending.
+                || (n - content != r.line_width - r.line_bases && line.last() == Some(&b'\n'))
             {
                 return Err(bad(format!(
                     "the lines of {name} differ in length, so it cannot be read in pieces; \

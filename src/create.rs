@@ -125,6 +125,31 @@ pub fn from_matrix(
     alphabet: Option<Alphabet>,
     opts: &CreateOptions,
 ) -> Result<Motif> {
+    let detected = (opts.motif_type == MotifType::Cwm).then_some(MotifType::Cwm);
+    matrix_motif(matrix, row_letters, alphabet, detected, opts)
+}
+
+/// A motif from a matrix whose type is known rather than detected, such as
+/// the weights of a convolution filter, which can be log-odds scores with no
+/// negative values. It is returned as `opts.motif_type`, as for
+/// [`from_matrix`].
+pub fn from_typed_matrix(
+    matrix: Matrix,
+    row_letters: Option<&[char]>,
+    alphabet: Option<Alphabet>,
+    matrix_type: MotifType,
+    opts: &CreateOptions,
+) -> Result<Motif> {
+    matrix_motif(matrix, row_letters, alphabet, Some(matrix_type), opts)
+}
+
+fn matrix_motif(
+    matrix: Matrix,
+    row_letters: Option<&[char]>,
+    alphabet: Option<Alphabet>,
+    detected: Option<MotifType>,
+    opts: &CreateOptions,
+) -> Result<Motif> {
     opts.check()?;
     if matrix.as_slice().iter().any(|v| v.is_nan()) {
         return arg_err("matrix cannot have NaN values");
@@ -177,11 +202,6 @@ pub fn from_matrix(
         _ => {}
     }
 
-    let detected = if opts.motif_type == MotifType::Cwm {
-        Some(MotifType::Cwm)
-    } else {
-        None
-    };
     let motif = opts
         .builder(matrix, alphabet)
         .motif_type(detected)

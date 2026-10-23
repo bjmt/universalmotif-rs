@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+- `create::from_typed_matrix()` builds a motif from a matrix of a known
+  type rather than detecting it, such as log-odds filters with no negative
+  values.
+- `scoring::score_match()` adds up the rounded matrix entries as integers,
+  as scanning does, so that a word scores exactly what a scan reports;
+  adding them as floats could be 0.001 off.
+- Genomes open FASTA files whose last line has no line ending.
+- `create_sequences()` rejects frequencies that are all zero, and
+  `motif_proximity()` an empty list of distances.
+- Count matrices must have at least one count in every column, and a
+  matrix read as counts because it holds whole numbers explains when its
+  columns have different sums.
+- Merging keeps the first of two motifs with the same IC as the anchor,
+  such as a motif and its reverse complement, whatever the rounding.
+
 ## 0.1.0 (2026-10-23)
 
 The first release, a port of the universalmotif R/Bioconductor package

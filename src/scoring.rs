@@ -165,31 +165,23 @@ pub fn score_match<S: AsRef<str>>(
     allow_nonfinite: bool,
 ) -> Result<Vec<f64>> {
     let pwm = scoring_pwm(motif, allow_nonfinite)?;
-    let cols: Vec<Vec<f64>> = pwm
-        .matrix
-        .columns()
-        .map(|c| {
-            c.iter()
-                .map(|&v| {
-                    if v.is_finite() {
-                        grid_value(v) as f64 / 1000.0
-                    } else {
-                        v
-                    }
-                })
-                .collect()
-        })
-        .collect();
+    let cols: Vec<Vec<f64>> = pwm.matrix.columns().map(|c| c.to_vec()).collect();
+    // Scores are the sum of the entries on the integer grid, as in scanning,
+    // so that a word scores exactly what scan_sequences() reports for it.
     words
         .iter()
         .map(|w| {
             let rows = word_rows(&pwm, w.as_ref())?;
-            let s: f64 = rows.iter().zip(&cols).map(|(&r, c)| c[r]).sum();
-            Ok(if s.is_finite() {
-                (s * 1000.0).trunc() / 1000.0
-            } else {
-                s
-            })
+            let mut grid: i64 = 0;
+            let mut other = 0.0;
+            for (&r, c) in rows.iter().zip(&cols) {
+                if c[r].is_finite() {
+                    grid += grid_value(c[r]) as i64;
+                } else {
+                    other += c[r];
+                }
+            }
+            Ok(grid as f64 / 1000.0 + other)
         })
         .collect()
 }
