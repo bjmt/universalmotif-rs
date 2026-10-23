@@ -10,9 +10,9 @@ repository = "https://github.com/bjmt/universalmotif-rs"
 documentation = "https://docs.rs/universalmotif"
 authors = ["Benjamin Jean-Marie Tremblay"]
 # The R reference values used by the tests are left out of the package.
-include = ["src/**/*.rs", "examples/**/*.rs", "Cargo.toml", "README.md", "LICENSE", "DIVERGENCES.md"]
+include = ["src/**/*.rs", "examples/**/*.rs", "Cargo.toml", "README.md", "LICENSE", "DIVERGENCES.md", "CHANGELOG.md"]
 keywords = ["bioinformatics", "motif", "pwm", "genomics"]
-categories = ["science"]
+categories = ["science::bioinformatics"]
 
 [dependencies]
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
