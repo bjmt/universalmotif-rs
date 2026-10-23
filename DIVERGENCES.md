@@ -330,6 +330,11 @@ change is listed here so the R package can be fixed to match.
   scored once per
   position and the combinations are built from those scores, which is
   about twice as fast as scanning every combination separately.
+- **Motif match matrices.** `scan::motif_matches` summarises the hits of
+  each motif in each sequence as a sparse matrix of matches, hit counts or
+  best scores without keeping the hits, for annotating the peaks of
+  single-cell ATAC data; the Python package returns it as a SciPy matrix
+  or AnnData object with `match_motifs()` and `add_motif_matches()`.
 - **P-values on a log scale.** `motif_finder()` and `enrich_motifs()` also
   report `log10_pvalue` and `log10_qvalue`, which stay finite where the
   P-values themselves are too small for a double and come out as 0.

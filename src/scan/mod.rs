@@ -762,6 +762,34 @@ fn scan_raw(
         })
 }
 
+/// Drop overlapping hits if asked, from hits sorted by motif, sequence and
+/// start.
+fn drop_overlaps(raw: &mut Vec<RawHit>, shapes: &[Option<Shape>], opts: &ScanOptions) {
+    let Some(no) = opts.no_overlaps else {
+        return;
+    };
+    let intervals: Vec<Interval> = raw
+        .iter()
+        .map(|r| {
+            let w = shapes[r.motif as usize].as_ref().unwrap().span(r.combo) as i64;
+            Interval {
+                sequence: r.sequence as usize,
+                motif: r.motif as usize,
+                strand: r.minus as i32,
+                start: r.start as i64 + 1,
+                end: r.start as i64 + w,
+                priority: match no.by {
+                    OverlapPriority::Pvalue => -r.pvalue,
+                    OverlapPriority::Score => r.score as f64,
+                },
+            }
+        })
+        .collect();
+    let keep = dedup(&intervals, no.ignore_strand, no.ignore_motif);
+    let mut k = keep.iter();
+    raw.retain(|_| *k.next().unwrap());
+}
+
 /// Order the hits, drop overlapping ones if asked and build the table,
 /// returning with it each row's [`RawHit::id`]. `shapes` holds each motif's
 /// width and best possible score.
@@ -772,28 +800,7 @@ fn finish(
     alphabet: &Alphabet,
 ) -> (HitTable, Vec<u32>) {
     raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
-    if let Some(no) = opts.no_overlaps {
-        let intervals: Vec<Interval> = raw
-            .iter()
-            .map(|r| {
-                let w = shapes[r.motif as usize].as_ref().unwrap().span(r.combo) as i64;
-                Interval {
-                    sequence: r.sequence as usize,
-                    motif: r.motif as usize,
-                    strand: r.minus as i32,
-                    start: r.start as i64 + 1,
-                    end: r.start as i64 + w,
-                    priority: match no.by {
-                        OverlapPriority::Pvalue => -r.pvalue,
-                        OverlapPriority::Score => r.score as f64,
-                    },
-                }
-            })
-            .collect();
-        let keep = dedup(&intervals, no.ignore_strand, no.ignore_motif);
-        let mut k = keep.iter();
-        raw.retain(|_| *k.next().unwrap());
-    }
+    drop_overlaps(&mut raw, shapes, opts);
 
     let n = raw.len();
     let mut t = HitTable {
@@ -929,6 +936,149 @@ pub fn scan_encoded(
         Ok(())
     })??;
     Ok(finish(raw, &shapes, opts, &alphabet).0)
+}
+
+/// What [`motif_matches`] records for each sequence and motif.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MatchValue {
+    /// 1 if the motif has a hit in the sequence.
+    #[default]
+    Matches,
+    /// The number of hits.
+    Counts,
+    /// The best score of any hit.
+    Scores,
+}
+
+impl MatchValue {
+    pub fn parse(s: &str) -> Result<MatchValue> {
+        match s {
+            "matches" => Ok(MatchValue::Matches),
+            "counts" => Ok(MatchValue::Counts),
+            "scores" => Ok(MatchValue::Scores),
+            _ => arg_err(format!(
+                "unknown value '{s}'; use one of matches, counts and scores"
+            )),
+        }
+    }
+}
+
+/// A sparse sequences by motifs matrix from [`motif_matches`], in coordinate
+/// form, ordered by sequence and then motif. Pairs without hits are left out.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MotifMatches {
+    pub n_sequences: usize,
+    pub n_motifs: usize,
+    pub sequence: Vec<u32>,
+    pub motif: Vec<u32>,
+    pub value: Vec<f64>,
+}
+
+/// Sequences are scanned in blocks of about this many positions, so the hits
+/// held at once stay few however many sequences there are.
+const MATCH_BLOCK: usize = 1 << 22;
+
+/// Which motifs hit which sequences, as a sparse matrix of hits, hit counts
+/// or best scores, without keeping the hits themselves.
+///
+/// Scanning is as in [`scan_encoded`], with `opts.no_overlaps` applied before
+/// counting. Only the score thresholds are needed, so P-values are computed
+/// only to choose among overlapping hits. Sequences are scanned a block at a time and each block's hits
+/// are summarised straight away, which keeps memory to that of the matrix
+/// even for hundreds of thousands of sequences.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::Alphabet;
+/// use universalmotif::create::{CreateOptions, from_strings};
+/// use universalmotif::packed::EncodedSequences;
+/// use universalmotif::scan::{MatchValue, ScanOptions, motif_matches};
+///
+/// let m = from_strings(&["TGACTCA"], None, &CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() })?;
+/// let seqs = EncodedSequences::new(&["CCTGACTCACC", "CCCCCCCCCCC"], &Alphabet::Dna, 1)?;
+/// let opts = ScanOptions { pvalue: 1e-3, ..Default::default() };
+/// let hits = motif_matches(&[m], &seqs, &opts, MatchValue::Matches)?;
+/// assert_eq!((hits.sequence.clone(), hits.value.clone()), (vec![0], vec![1.0]));
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
+pub fn motif_matches(
+    motifs: &[Motif],
+    seqs: &EncodedSequences,
+    opts: &ScanOptions,
+    value: MatchValue,
+) -> Result<MotifMatches> {
+    let alphabet = check_scan(motifs, opts)?;
+    if *seqs.alphabet() != alphabet {
+        return arg_err(format!(
+            "the sequences were encoded as {} but the motifs are {alphabet}",
+            seqs.alphabet()
+        ));
+    }
+    let mut out = MotifMatches {
+        n_sequences: seqs.len(),
+        n_motifs: motifs.len(),
+        ..Default::default()
+    };
+    with_threads(opts.nthreads, || -> Result<()> {
+        // P-values are only needed to choose among overlapping hits.
+        let by_pvalue = opts
+            .no_overlaps
+            .is_some_and(|n| n.by == OverlapPriority::Pvalue);
+        let prepared = motifs
+            .par_iter()
+            .map(|m| prepare_motif(m, opts, by_pvalue))
+            .collect::<Result<Vec<Option<Prepared>>>>()?;
+        let shapes: Vec<Option<Shape>> =
+            prepared.iter().map(|p| p.as_ref().map(Shape::of)).collect();
+        let work = work_items(seqs);
+        let mut lo = 0;
+        while lo < work.len() {
+            // A block ends with a whole sequence, so each sequence's hits are
+            // summarised together.
+            let (mut hi, mut size) = (lo, 0);
+            while hi < work.len() && (size < MATCH_BLOCK || work[hi].0 == work[hi - 1].0) {
+                size += work[hi].1.1 - work[hi].1.0;
+                hi += 1;
+            }
+            let mut raw = scan_raw(&prepared, seqs, &work[lo..hi]);
+            if by_pvalue {
+                raw.par_iter_mut().for_each(|r| {
+                    let p = prepared[r.motif as usize].as_ref().unwrap();
+                    let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
+                    r.pvalue = (raw * p.pvalue_scale).min(1.0);
+                });
+            }
+            raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
+            drop_overlaps(&mut raw, &shapes, opts);
+            raw.sort_unstable_by_key(|r| (r.sequence, r.motif));
+            for r in &raw {
+                // Blocks hold whole sequences in order, so a sequence and
+                // motif pair can only continue the last entry.
+                let same =
+                    out.sequence.last() == Some(&r.sequence) && out.motif.last() == Some(&r.motif);
+                let v = r.score as f64 / 1000.0;
+                if same {
+                    let last = out.value.last_mut().unwrap();
+                    match value {
+                        MatchValue::Matches => {}
+                        MatchValue::Counts => *last += 1.0,
+                        MatchValue::Scores => *last = last.max(v),
+                    }
+                } else {
+                    out.sequence.push(r.sequence);
+                    out.motif.push(r.motif);
+                    out.value.push(match value {
+                        MatchValue::Matches | MatchValue::Counts => 1.0,
+                        MatchValue::Scores => v,
+                    });
+                }
+            }
+            lo = hi;
+        }
+        Ok(())
+    })??;
+    Ok(out)
 }
 
 /// Hits from [`scan_fasta`], with the letters each one matched, since the
