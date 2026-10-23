@@ -354,6 +354,13 @@ change is listed here so the R package can be fixed to match.
   bigWig signal over ranges, and `match_bkg()` can match the windows it
   draws from a genome to the targets on that signal, such as chromatin
   accessibility, as well as on GC content and length.
+- **Genomic intervals.** The Python package's functions that take ranges
+  also accept PyRanges objects and polars-bio frames, converting their
+  0-based positions where needed, and `to_pyranges()` and
+  `to_polars_bio()` hand tables back. `genomic_hits()` moves hits found in
+  sequences extracted from a genome back to genomic coordinates, flipping
+  the strand of hits in reverse complemented ranges; the R package works
+  with GenomicRanges instead.
 - **P-values on a log scale.** `motif_finder()` and `enrich_motifs()` also
   report `log10_pvalue` and `log10_qvalue`, which stay finite where the
   P-values themselves are too small for a double and come out as 0.
