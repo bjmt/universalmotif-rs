@@ -88,7 +88,7 @@ fn parse_header(lines: &[&str]) -> Result<Header> {
             if s.contains(&"+") && s.contains(&"-") {
                 Strand::Both
             } else {
-                Strand::parse(s.first().copied().unwrap_or("+"))?
+                (s.first().copied().unwrap_or("+")).parse::<Strand>()?
             }
         }
         None => Strand::Plus,
@@ -357,7 +357,8 @@ pub struct SitePvalue {
     pub sequence: String,
     /// `'+'` or `'-'`, when the table has a strand column.
     pub strand: Option<char>,
-    /// The position of the site in the sequence, counting from 1.
+    /// The position of the site in the sequence, counting from 0. MEME's
+    /// files count from 1.
     pub position: f64,
     /// The site's P-value.
     pub pvalue: f64,
@@ -417,7 +418,7 @@ pub fn read_site_pvalues(text: &str) -> Result<Vec<MotifSitePvalues>> {
                 } else {
                     None
                 },
-                position: num(t[k], "a site position")?,
+                position: num(t[k], "a site position")? - 1.0,
                 pvalue: num(t[k + 1], "a site P-value")?,
                 site: site.to_string(),
             });

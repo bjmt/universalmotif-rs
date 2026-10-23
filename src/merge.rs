@@ -50,8 +50,8 @@ fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
 /// Merge motifs into one.
 ///
 /// The motif with the highest total IC is the anchor. Every other motif is
-/// aligned to it with [`crate::compare::align`] and, for DNA and RNA, reverse
-/// complemented if that fits better, and the aligned probabilities are averaged
+/// aligned to it as [`crate::compare::compare_motifs`] aligns motifs and, for
+/// DNA and RNA, reverse complemented if that fits better, and the aligned probabilities are averaged
 /// position by position. Positions covered by no motif are uniform. The result
 /// is a PPM whose `nsites` is the sum of the motifs', counting 1 for motifs
 /// without one, with the average background and the anchor's pseudocount.
@@ -70,13 +70,23 @@ fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
 /// # Ok::<(), universalmotif::Error>(())
 /// ```
 pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
-    merge_motifs_used(motifs, opts).map(|(m, _)| m)
+    merge_motifs_detailed(motifs, opts).map(|m| m.motif)
 }
 
-/// [`merge_motifs`], also returning the indices of the motifs that went into
-/// the merge; the others could not overlap the anchor by `min_overlap`
-/// columns.
-pub fn merge_motifs_used(motifs: &[Motif], opts: &MergeOptions) -> Result<(Motif, Vec<usize>)> {
+/// A merged motif and the motifs that went into it, from
+/// [`merge_motifs_detailed`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct MergedMotif {
+    /// The merged motif.
+    pub motif: Motif,
+    /// Indices of the motifs that went into the merge; the others could not
+    /// overlap the anchor by `min_overlap` columns.
+    pub used: Vec<usize>,
+}
+
+/// [`merge_motifs`], also reporting which motifs went into the merge.
+pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<MergedMotif> {
     let alphabet = shared_alphabet(motifs)?;
     let nl = alphabet.len();
     if motifs.len() == 1 {
@@ -84,7 +94,10 @@ pub fn merge_motifs_used(motifs: &[Motif], opts: &MergeOptions) -> Result<(Motif
         if let Some(n) = &opts.name {
             p.name = n.clone();
         }
-        return Ok((Motif::from_parts(p)?, vec![0]));
+        return Ok(MergedMotif {
+            motif: Motif::from_parts(p)?,
+            used: vec![0],
+        });
     }
     let ppms: Vec<Motif> = motifs
         .iter()
@@ -181,7 +194,22 @@ pub fn merge_motifs_used(motifs: &[Motif], opts: &MergeOptions) -> Result<(Motif
     let merged = from_matrix(Matrix::from_columns(&cols)?, None, Some(alphabet), &copts)?;
     let mut used_idx: Vec<usize> = used.iter().map(|u| u.0).collect();
     used_idx.sort_unstable();
-    Ok((merged, used_idx))
+    Ok(MergedMotif {
+        motif: merged,
+        used: used_idx,
+    })
+}
+
+/// Clusters of similar motifs and the motif made from each, from
+/// [`merge_similar`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct MergedClusters {
+    /// The cluster of each input motif, numbered from 0 in order of first
+    /// appearance.
+    pub clusters: Vec<usize>,
+    /// One motif per cluster, in cluster order.
+    pub motifs: Vec<Motif>,
 }
 
 /// Options for [`merge_similar`].
@@ -223,17 +251,15 @@ impl Default for MergeSimilarOptions {
 /// Cluster similar motifs and merge each cluster.
 ///
 /// Motifs are linked when their comparison q-value is within `opts.qvalue` in
-/// either direction, and clusters are the connected groups. Returns the cluster
-/// of each input motif, numbered by first appearance, and one motif per
-/// cluster: single motifs as they were, larger clusters merged with
-/// [`merge_motifs`].
+/// either direction, and clusters are the connected groups. Single motifs are
+/// kept as they were, and larger clusters merged with [`merge_motifs`].
 #[allow(clippy::needless_range_loop)]
-pub fn merge_similar(
-    motifs: &[Motif],
-    opts: &MergeSimilarOptions,
-) -> Result<(Vec<usize>, Vec<Motif>)> {
+pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<MergedClusters> {
     if motifs.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(MergedClusters {
+            clusters: Vec::new(),
+            motifs: Vec::new(),
+        });
     }
     shared_alphabet(motifs)?;
     if !(opts.qvalue > 0.0 && opts.qvalue <= 1.0) {
@@ -241,7 +267,10 @@ pub fn merge_similar(
     }
     let n = motifs.len();
     if n == 1 {
-        return Ok((vec![0], motifs.to_vec()));
+        return Ok(MergedClusters {
+            clusters: vec![0],
+            motifs: motifs.to_vec(),
+        });
     }
     let copts = CompareOptions {
         min_overlap: opts.min_overlap,
@@ -311,5 +340,8 @@ pub fn merge_similar(
             }
         })
         .collect::<Result<_>>()?;
-    Ok((clusters, merged))
+    Ok(MergedClusters {
+        clusters,
+        motifs: merged,
+    })
 }

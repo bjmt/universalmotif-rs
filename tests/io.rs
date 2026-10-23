@@ -104,7 +104,8 @@ fn readers_match_r() {
             for (g, w) in got.iter().zip(meta) {
                 let seq: Vec<&str> = g.sites.iter().map(|s| s.sequence.as_str()).collect();
                 let site: Vec<&str> = g.sites.iter().map(|s| s.site.as_str()).collect();
-                let pos: Vec<f64> = g.sites.iter().map(|s| s.position).collect();
+                // R counts positions from 1.
+                let pos: Vec<f64> = g.sites.iter().map(|s| s.position + 1.0).collect();
                 let pv: Vec<f64> = g.sites.iter().map(|s| s.pvalue).collect();
                 assert_eq!(seq, strs(&w["sequence"]), "{ctx}: site table sequences");
                 assert_eq!(site, strs(&w["site"]), "{ctx}: site table sites");

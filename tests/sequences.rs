@@ -5,7 +5,9 @@ mod common;
 
 use common::*;
 use serde_json::Value;
-use universalmotif::complexity::{ComplexityOptions, Method, complexity, sequence_complexity};
+use universalmotif::complexity::{
+    ComplexityMethod, ComplexityOptions, complexity, sequence_complexity,
+};
 use universalmotif::finder::{FinderOptions, motif_finder};
 use universalmotif::kmer::{BkgOptions, WindowOptions, count_kmers, get_bkg, kmers, windows};
 
@@ -65,16 +67,14 @@ fn windows_match_r() {
             continue;
         }
         let got = windows(n, w, o, incomplete);
-        let start: Vec<usize> = got.iter().map(|x| x.0).collect();
+        // R counts positions from 1, with the end included.
+        let start: Vec<usize> = got.iter().map(|x| x.0 + 1).collect();
         let stop: Vec<usize> = got.iter().map(|x| x.1).collect();
         let ctx = format!("n={n} window={w} overlap={o} incomplete={incomplete}");
         assert_eq!(start, usizes(&case["start"]), "{ctx}: start");
         assert_eq!(stop, usizes(&case["stop"]), "{ctx}: stop");
-        let complete: Vec<(usize, usize)> = got
-            .iter()
-            .copied()
-            .filter(|&(a, b)| b - a + 1 == w)
-            .collect();
+        let complete: Vec<(usize, usize)> =
+            got.iter().copied().filter(|&(a, b)| b - a == w).collect();
         assert_eq!(windows(n, w, o, false), complete, "{ctx}: complete only");
     }
 }
@@ -83,7 +83,11 @@ fn windows_match_r() {
 fn complexity_matches_r() {
     for case in load_key("sequences.json", "complexity") {
         let s = case["string"].as_str().unwrap();
-        let method = Method::parse(case["method"].as_str().unwrap()).unwrap();
+        let method = case["method"]
+            .as_str()
+            .unwrap()
+            .parse::<ComplexityMethod>()
+            .unwrap();
         let alph = case["alph"].as_str();
         let max_word = num(&case["max_word"]) as usize;
         let got = complexity(s, method, alph, max_word);
@@ -103,7 +107,7 @@ fn sequence_complexity_matches_r() {
         let a = args(&case["args"]);
         let mut opts = ComplexityOptions::default();
         if let Some(m) = a.get("method") {
-            opts.method = Method::parse(m.as_str().unwrap()).unwrap();
+            opts.method = m.as_str().unwrap().parse::<ComplexityMethod>().unwrap();
         }
         if let Some(w) = a.get("window.size") {
             opts.window = num(w);
@@ -119,8 +123,8 @@ fn sequence_complexity_matches_r() {
         let t = &case["table"];
         let seqnames: Vec<String> = got.iter().map(|r| names[r.sequence].clone()).collect();
         assert_eq!(seqnames, texts(&t["sequence"]), "{ctx}: sequence");
-        let start: Vec<usize> = got.iter().map(|r| r.start).collect();
-        let stop: Vec<usize> = got.iter().map(|r| r.stop).collect();
+        let start: Vec<usize> = got.iter().map(|r| r.start + 1).collect();
+        let stop: Vec<usize> = got.iter().map(|r| r.end).collect();
         assert_eq!(start, usizes(&t["start"]), "{ctx}: start");
         assert_eq!(stop, usizes(&t["stop"]), "{ctx}: stop");
         let cx: Vec<f64> = got.iter().map(|r| r.complexity).collect();
@@ -170,8 +174,8 @@ fn backgrounds_match_r() {
             assert_eq!(sq, texts(&t["sequence"]), "{ctx}: sequence");
         }
         if !t["start"].is_null() {
-            let start: Vec<usize> = got.iter().map(|r| r.start.unwrap()).collect();
-            let stop: Vec<usize> = got.iter().map(|r| r.stop.unwrap()).collect();
+            let start: Vec<usize> = got.iter().map(|r| r.start.unwrap() + 1).collect();
+            let stop: Vec<usize> = got.iter().map(|r| r.end.unwrap()).collect();
             assert_eq!(start, usizes(&t["start"]), "{ctx}: start");
             assert_eq!(stop, usizes(&t["stop"]), "{ctx}: stop");
         }

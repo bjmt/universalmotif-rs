@@ -16,6 +16,7 @@ use flate2::read::MultiGzDecoder;
 use std::io;
 
 use crate::error::{Error, Result, arg_err};
+use crate::ranges::GRange;
 
 /// The names, lengths and records of a FASTA index.
 type FaiIndex = (Vec<String>, Vec<u64>, Vec<FaiRecord>);
@@ -152,15 +153,26 @@ impl Genome {
         self.fetch_at(i, start, end)
     }
 
-    /// Many pieces at once, as (sequence position, start, end) with positions
-    /// as in [`Genome::fetch`], read in parallel on `nthreads` threads (0 for
-    /// all available). The pieces are read in order of position, so pieces
-    /// close together in a bgzip file share the work of decompressing it.
-    pub fn fetch_many(&self, ranges: &[(usize, u64, u64)], nthreads: usize) -> Result<Vec<String>> {
+    /// Many pieces at once, read in parallel on `nthreads` threads (0 for all
+    /// available). Each range's `chrom` is the position of a sequence in the
+    /// genome, and strands are ignored. The pieces are read in order of
+    /// position, so pieces close together in a bgzip file share the work of
+    /// decompressing it.
+    pub fn fetch_many(&self, ranges: &[GRange], nthreads: usize) -> Result<Vec<String>> {
         use rayon::prelude::*;
-        for &(i, s, e) in ranges {
-            self.check(i, s, e)?;
+        let mut tuples = Vec::with_capacity(ranges.len());
+        for r in ranges {
+            if r.start < 0 || r.end < r.start {
+                return arg_err(format!(
+                    "positions {} to {} are not a valid range",
+                    r.start, r.end
+                ));
+            }
+            let (s, e) = (r.start as u64, r.end as u64);
+            self.check(r.chrom, s, e)?;
+            tuples.push((r.chrom, s, e));
         }
+        let ranges = &tuples;
         let mut order: Vec<usize> = (0..ranges.len()).collect();
         order.sort_by_key(|&k| (ranges[k].0, ranges[k].1));
         let pieces = crate::pvalue::with_threads(nthreads, || {

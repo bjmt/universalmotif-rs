@@ -367,6 +367,7 @@ fn best_alignment<C: Col>(
 
 /// Best alignments for `(query, target)` pairs of motif indices. Reverse
 /// complements are only tried for DNA and RNA motifs.
+#[doc(hidden)]
 pub fn align(
     motifs: &[Motif],
     pairs: &[(usize, usize)],
@@ -490,15 +491,20 @@ pub struct Placement {
     pub rc: bool,
 }
 
+/// Motifs laid out in a common column frame by [`anchor_layout`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Layout {
+    /// Where each motif sits, in input order.
+    pub placements: Vec<Placement>,
+    /// The width of the frame, in columns.
+    pub width: usize,
+}
+
 /// Lay motifs out in a common column frame by aligning each one to
-/// `motifs[anchor]`. Motifs that do not overlap the anchor by at least `opts.min_overlap` columns
-/// are placed at the anchor's left edge. Returns the placements and the
-/// frame width.
-pub fn anchor_layout(
-    motifs: &[Motif],
-    anchor: usize,
-    opts: &CompareOptions,
-) -> Result<(Vec<Placement>, usize)> {
+/// `motifs[anchor]`. Motifs that do not overlap the anchor by at least
+/// `opts.min_overlap` columns are placed at the anchor's left edge.
+pub fn anchor_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> Result<Layout> {
     if anchor >= motifs.len() {
         return arg_err("anchor index out of range");
     }
@@ -532,12 +538,15 @@ pub fn anchor_layout(
             rc,
         })
         .collect();
-    Ok((placements, (hi - lo) as usize))
+    Ok(Layout {
+        placements,
+        width: (hi - lo) as usize,
+    })
 }
 
 /// Bonferroni-corrected P-values of alignments. The parametric null is only
 /// available for DNA and RNA motifs.
-pub fn alignment_pvalues(
+pub(crate) fn alignment_pvalues(
     motifs: &[Motif],
     alignments: &[Alignment],
     opts: &CompareOptions,

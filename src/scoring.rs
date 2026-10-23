@@ -64,13 +64,31 @@ pub enum ThresholdType {
 }
 
 impl ThresholdType {
+    /// The name [`str::parse`] reads, such as `"total"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThresholdType::Total => "total",
+            ThresholdType::FromZero => "fromzero",
+        }
+    }
+}
+
+impl std::str::FromStr for ThresholdType {
+    type Err = crate::error::Error;
+
     /// Parse `"total"` or `"fromzero"`.
-    pub fn parse(s: &str) -> Result<ThresholdType> {
+    fn from_str(s: &str) -> Result<ThresholdType> {
         match s {
             "total" => Ok(ThresholdType::Total),
             "fromzero" => Ok(ThresholdType::FromZero),
             _ => arg_err("threshold type must be 'total' or 'fromzero'"),
         }
+    }
+}
+
+impl std::fmt::Display for ThresholdType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

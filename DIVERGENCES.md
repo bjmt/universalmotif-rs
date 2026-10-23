@@ -95,6 +95,14 @@ copied, and are not listed here. The other differences are below.
   Canadian spelling throughout, so `summarise_motifs()` is
   `summarize_motifs()`, and `motif_peaks()` reports `best_centre` and
   `centres` where the R package has `best.center` and `centers`.
+- **Positions.** Positions on sequences and genomes count from 0 and
+  leave the end out, as in BED files, Python slices and Rust ranges, where
+  the R package counts from 1 and includes the end. A hit the R package
+  reports at 11 to 20 starts at 10 and ends at 20 here, and indices such as
+  `motif_i` count from 0 as well. This applies to hits, ranges, windows,
+  implant positions, masked ranges, positional enrichment centres and MEME
+  site positions, which are converted when read. Window tables call their
+  last column `end` rather than `stop`.
 - **k-mers.** The R package calls words of k letters k-lets, and the port
   calls them k-mers, the more common term, so `count_klets()` and
   `get_klets()` are `count_kmers()` and `get_kmers()`, and `get_bkg()`

@@ -62,7 +62,8 @@ fn check_scans(motifs: &[Motif], seqs: &[String], cases: &Value, label: &str) {
             nums(&w["sequence.i"]),
             "{ctx}: sequence"
         );
-        assert_eq!(f(&t.start), nums(&w["start"]), "{ctx}: start");
+        // R counts positions from 1.
+        assert_eq!(plus1(&t.start), nums(&w["start"]), "{ctx}: start");
         assert_eq!(f(&t.end), nums(&w["stop"]), "{ctx}: end");
         assert!(t.minus.iter().all(|m| !m), "{ctx}: only the forward strand");
         assert_close_vec(&t.score, &nums(&w["score"]), &format!("{ctx}: score"));

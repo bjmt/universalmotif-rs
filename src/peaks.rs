@@ -23,13 +23,31 @@ pub enum PeaksMode {
 }
 
 impl PeaksMode {
+    /// The name [`str::parse`] reads, such as `"central"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PeaksMode::Central => "central",
+            PeaksMode::Local => "local",
+        }
+    }
+}
+
+impl std::str::FromStr for PeaksMode {
+    type Err = crate::error::Error;
+
     /// Parse `"central"` or `"local"`.
-    pub fn parse(s: &str) -> Result<PeaksMode> {
+    fn from_str(s: &str) -> Result<PeaksMode> {
         match s {
             "central" => Ok(PeaksMode::Central),
             "local" => Ok(PeaksMode::Local),
             _ => arg_err(format!("unknown mode '{s}'; expected 'central' or 'local'")),
         }
+    }
+}
+
+impl std::fmt::Display for PeaksMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -70,7 +88,9 @@ pub struct PeakHit {
     pub motif: usize,
     /// Sequence identifier, of any value.
     pub sequence: usize,
-    /// Centre of the hit, `(start + end) / 2` in 1-based coordinates.
+    /// Centre of the hit, `(start + end - 1) / 2` for a hit covering
+    /// `start..end`, which on a sequence read on the minus strand is
+    /// reflected to `length - 1 - centre`.
     pub centre: f64,
     /// The hit's score; only the best hit of a motif in each sequence is used.
     pub score: f64,
@@ -116,7 +136,9 @@ fn test_motif(
 ) -> MotifPeak {
     let n = centres.len();
     let lenf = len as f64;
-    let mid = lenf / 2.0;
+    // Positions count from 0, so the middle of the sequence, taken as half
+    // its length when counting from 1, sits one position lower.
+    let mid = lenf / 2.0 - 1.0;
     let (mut best_p, mut best_w, mut best_c, mut best_k) = (1.0, None, None, 0);
     let mut n_tests = 0usize;
     let count = |c: f64, half: f64| centres.iter().filter(|&&x| (x - c).abs() <= half).count();
@@ -132,7 +154,7 @@ fn test_motif(
                 }
                 (lo..=hi)
                     .step_by(opts.position_step)
-                    .map(|c| c as f64)
+                    .map(|c| c as f64 - 1.0)
                     .collect()
             }
         };
@@ -160,7 +182,12 @@ fn test_motif(
         log2_enrichment: enrichment.filter(|&e| e > 0.0).map(f64::log2),
         pvalue,
         qvalue: 0.0,
-        centres: centres.iter().map(|c| c.round_ties_even() as i64).collect(),
+        // Rounded as the positions would be when counting from 1, with ties
+        // going to the even one.
+        centres: centres
+            .iter()
+            .map(|c| (c + 1.0).round_ties_even() as i64 - 1)
+            .collect(),
     }
 }
 

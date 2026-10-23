@@ -168,7 +168,7 @@ fn meme_files_are_tidy() {
 fn custom_alphabet_columns_are_numbered() {
     let m = from_strings(
         &["XYZ", "XYY"],
-        Some(Alphabet::parse("XYZ").unwrap()),
+        Some("XYZ".parse::<Alphabet>().unwrap()),
         &opts(),
     )
     .unwrap();

@@ -62,8 +62,21 @@ pub enum ShuffleMethod {
 }
 
 impl ShuffleMethod {
+    /// The name [`str::parse`] reads, such as `"euler"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ShuffleMethod::Euler => "euler",
+            ShuffleMethod::Markov => "markov",
+            ShuffleMethod::Linear => "linear",
+        }
+    }
+}
+
+impl std::str::FromStr for ShuffleMethod {
+    type Err = crate::error::Error;
+
     /// Parse `"euler"`, `"markov"` or `"linear"`.
-    pub fn parse(s: &str) -> Result<ShuffleMethod> {
+    fn from_str(s: &str) -> Result<ShuffleMethod> {
         match s {
             "euler" => Ok(ShuffleMethod::Euler),
             "markov" => Ok(ShuffleMethod::Markov),
@@ -72,6 +85,12 @@ impl ShuffleMethod {
                 "unknown shuffling method '{s}' (use euler, markov or linear)"
             )),
         }
+    }
+}
+
+impl std::fmt::Display for ShuffleMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -296,7 +315,7 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
                         opts.k
                     ));
                 }
-                plans.push(vec![(1, len)]);
+                plans.push(vec![(0, len)]);
             }
             Some(w) => {
                 if w.size.is_nan() || w.size <= 0.0 || w.overlap < 0.0 {
@@ -330,9 +349,9 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
         opts: &ShuffleOptions,
         rng: &mut StdRng,
     ) -> Vec<T> {
-        for &(start, stop) in plan {
-            let part = shuffle_one(&out[start - 1..stop], opts.k, opts.method, rng);
-            out[start - 1..stop].copy_from_slice(&part);
+        for &(start, end) in plan {
+            let part = shuffle_one(&out[start..end], opts.k, opts.method, rng);
+            out[start..end].copy_from_slice(&part);
         }
         out
     }

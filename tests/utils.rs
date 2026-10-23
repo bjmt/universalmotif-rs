@@ -8,7 +8,7 @@ use serde_json::Value;
 use universalmotif::Motif;
 use universalmotif::io::meme::{AlphabetDefinition, write_alphabet};
 use universalmotif::mask::{mask_ranges, mask_seqs};
-use universalmotif::metrics::{Average, ColumnMetric, average_ic, compare_columns};
+use universalmotif::metrics::{Average, Column, ColumnMetric, average_ic, compare_columns};
 use universalmotif::ops::{add_gap, switch_alph, ungap};
 use universalmotif::pvalue::log_pvalue_text;
 use universalmotif::scoring::{
@@ -61,7 +61,11 @@ fn scoring_helpers_match_r() {
                 assert_close_vec(&[lo, hi], &nums(want), &ctx);
             }
             "motif_score" => {
-                let t = ThresholdType::parse(a["threshold_type"].as_str().unwrap()).unwrap();
+                let t = a["threshold_type"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<ThresholdType>()
+                    .unwrap();
                 let got = motif_score(&m, &nums(&a["threshold"]), t, af).unwrap();
                 assert_close_vec(&got, &nums(want), &ctx);
             }
@@ -113,15 +117,21 @@ fn scoring_helpers_match_r() {
 fn column_metrics_and_averages_match_r() {
     let r = reference();
     for case in r["compare_columns"].as_array().unwrap() {
-        let metric = ColumnMetric::parse(case["method"].as_str().unwrap()).unwrap();
+        let metric = case["method"]
+            .as_str()
+            .unwrap()
+            .parse::<ColumnMetric>()
+            .unwrap();
+        let (x, y) = (nums(&case["x"]), nums(&case["y"]));
+        let (bkg1, bkg2) = (nums(&case["bkg1"]), nums(&case["bkg2"]));
         let got = compare_columns(
-            &nums(&case["x"]),
-            &nums(&case["y"]),
+            &Column::new(&x)
+                .with_bkg(&bkg1)
+                .with_nsites(num(&case["nsites1"])),
+            &Column::new(&y)
+                .with_bkg(&bkg2)
+                .with_nsites(num(&case["nsites2"])),
             metric,
-            &nums(&case["bkg1"]),
-            &nums(&case["bkg2"]),
-            num(&case["nsites1"]),
-            num(&case["nsites2"]),
         );
         let ctx = format!("{} {} {}", case["method"], case["x"], case["y"]);
         match case.get("value") {
@@ -143,29 +153,18 @@ fn column_metrics_and_averages_match_r() {
     let x = [0.5, 0.1, 0.1, 0.3];
     let y = [0.7, 0.1, 0.1, 0.1];
     let u = [0.25; 4];
-    let pcc = compare_columns(&x, &y, ColumnMetric::Pcc, &u, &u, 100.0, 100.0).unwrap();
-    let wpcc = compare_columns(&x, &y, ColumnMetric::Wpcc, &u, &u, 100.0, 100.0).unwrap();
+    let (cx, cy) = (Column::new(&x).with_bkg(&u), Column::new(&y).with_bkg(&u));
+    let pcc = compare_columns(&cx, &cy, ColumnMetric::Pcc).unwrap();
+    let wpcc = compare_columns(&cx, &cy, ColumnMetric::Wpcc).unwrap();
     assert!(close(pcc, wpcc), "WPCC with a uniform background is PCC");
-    let kl = compare_columns(
-        &[0.5, 0.5, 0.0, 0.0],
-        &[0.5, 0.5, 0.0, 0.0],
-        ColumnMetric::Kl,
-        &u,
-        &u,
-        100.0,
-        100.0,
-    )
-    .unwrap();
+    let half = [0.5, 0.5, 0.0, 0.0];
+    let kl = compare_columns(&Column::new(&half), &Column::new(&half), ColumnMetric::Kl).unwrap();
     assert_eq!(kl, 0.0, "zeros in both columns add nothing to KL");
     assert!(
         compare_columns(
-            &[0.5, 0.5],
-            &[1.0],
-            ColumnMetric::Pcc,
-            &[],
-            &[],
-            100.0,
-            100.0
+            &Column::new(&[0.5, 0.5]),
+            &Column::new(&[1.0]),
+            ColumnMetric::Pcc
         )
         .is_err()
     );
@@ -177,7 +176,11 @@ fn column_metrics_and_averages_match_r() {
         .map(motif_from_record)
         .collect();
     for case in avg["cases"].as_array().unwrap() {
-        let how = Average::parse(case["average"].as_str().unwrap()).unwrap();
+        let how = case["average"]
+            .as_str()
+            .unwrap()
+            .parse::<Average>()
+            .unwrap();
         let got = average_ic(&motifs, how).unwrap();
         assert_close_vec(&got, &nums(&case["value"]), &format!("average_ic {how:?}"));
     }
@@ -255,7 +258,7 @@ fn masking_matches_r() {
                 .map(|(n, s)| {
                     let ranges: Vec<(i64, i64)> = (0..chroms.len())
                         .filter(|&i| chroms[i] == *n)
-                        .map(|i| (starts[i] as i64, ends[i] as i64))
+                        .map(|i| (starts[i] as i64 - 1, ends[i] as i64))
                         .collect();
                     mask_ranges(s, &ranges, letter).map_err(|e| e.to_string())
                 })

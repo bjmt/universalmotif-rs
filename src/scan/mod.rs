@@ -94,9 +94,10 @@ pub struct Hit {
     pub motif: usize,
     /// Index of the sequence.
     pub sequence: usize,
-    /// 1-based first position of the hit on the forward strand.
+    /// First position of the hit on the forward strand, counting from 0.
     pub start: usize,
-    /// Last position of the hit on the forward strand, 1-based and inclusive.
+    /// Position just past the hit on the forward strand, so that the hit
+    /// covers `start..end`.
     pub end: usize,
     /// The strand of the hit.
     pub strand: Strand,
@@ -121,9 +122,9 @@ pub struct HitTable {
     pub motif: Vec<i64>,
     /// Index of the sequence.
     pub sequence: Vec<i64>,
-    /// 1-based first position on the forward strand.
+    /// First position on the forward strand, counting from 0.
     pub start: Vec<i64>,
-    /// Last position on the forward strand, 1-based and inclusive.
+    /// Position just past the hit on the forward strand.
     pub end: Vec<i64>,
     /// Whether the hit is on the `-` strand.
     pub minus: Vec<bool>,
@@ -173,7 +174,7 @@ impl HitTable {
     /// with dots in the gaps of gapped motifs.
     pub fn matched_into<S: AsRef<str>>(&self, i: usize, sequences: &[S], out: &mut Vec<u8>) {
         let seq = sequences[self.sequence[i] as usize].as_ref().as_bytes();
-        let bytes = &seq[self.start[i] as usize - 1..self.end[i] as usize];
+        let bytes = &seq[self.start[i] as usize..self.end[i] as usize];
         out.clear();
         if self.minus[i] {
             out.extend(
@@ -194,7 +195,7 @@ impl HitTable {
     /// reading the letters from the encoded sequences.
     pub fn matched_encoded_into(&self, i: usize, seqs: &EncodedSequences, out: &mut Vec<u8>) {
         out.clear();
-        let (a, b) = (self.start[i] as usize - 1, self.end[i] as usize);
+        let (a, b) = (self.start[i] as usize, self.end[i] as usize);
         seqs.decode_into(self.sequence[i] as usize, a, b, out);
         if self.minus[i] {
             out.reverse();
@@ -267,7 +268,7 @@ fn complement(c: u8, rna: bool) -> u8 {
 
 /// Reverse complement a DNA or RNA sequence, IUPAC codes included. The
 /// result is upper case.
-pub fn reverse_complement_seq(seq: &str, rna: bool) -> String {
+pub(crate) fn reverse_complement_seq(seq: &str, rna: bool) -> String {
     rc_bytes(seq.as_bytes(), rna)
 }
 
@@ -785,8 +786,8 @@ fn drop_overlaps(raw: &mut Vec<RawHit>, shapes: &[Option<Shape>], opts: &ScanOpt
             Interval {
                 sequence: r.sequence as usize,
                 motif: r.motif as usize,
-                strand: r.minus as i32,
-                start: r.start as i64 + 1,
+                strand: if r.minus { Strand::Minus } else { Strand::Plus },
+                start: r.start as i64,
                 end: r.start as i64 + w,
                 priority: match no.by {
                     OverlapPriority::Pvalue => -r.pvalue,
@@ -836,7 +837,7 @@ fn finish(
         let score = r.score as f64 / 1000.0;
         t.motif.push(r.motif as i64);
         t.sequence.push(r.sequence as i64);
-        t.start.push(r.start as i64 + 1);
+        t.start.push(r.start as i64);
         t.end.push((r.start as usize + width) as i64);
         t.combo.push(r.combo);
         t.minus.push(r.minus);
@@ -961,8 +962,21 @@ pub enum MatchValue {
 }
 
 impl MatchValue {
+    /// The name [`str::parse`] reads, such as `"matches"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MatchValue::Matches => "matches",
+            MatchValue::Counts => "counts",
+            MatchValue::Scores => "scores",
+        }
+    }
+}
+
+impl std::str::FromStr for MatchValue {
+    type Err = crate::error::Error;
+
     /// Parse `"matches"`, `"counts"` or `"scores"`.
-    pub fn parse(s: &str) -> Result<MatchValue> {
+    fn from_str(s: &str) -> Result<MatchValue> {
         match s {
             "matches" => Ok(MatchValue::Matches),
             "counts" => Ok(MatchValue::Counts),
@@ -971,6 +985,12 @@ impl MatchValue {
                 "unknown value '{s}'; use one of matches, counts and scores"
             )),
         }
+    }
+}
+
+impl std::fmt::Display for MatchValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -1127,7 +1147,7 @@ impl FastaHits {
     /// The letters matched by hit `i`, as with [`HitTable::matched_into`].
     pub fn matched(&self, i: usize) -> &str {
         let t = &self.table;
-        let w = (t.end[i] - t.start[i] + 1) as usize;
+        let w = (t.end[i] - t.start[i]) as usize;
         std::str::from_utf8(&self.letters[self.offsets[i]..self.offsets[i] + w]).unwrap()
     }
 }
@@ -1302,7 +1322,7 @@ fn scan_fasta_with(
     let mut kept = Vec::new();
     let mut offsets = Vec::with_capacity(ids.len());
     for (i, &id) in ids.iter().enumerate() {
-        let w = (table.end[i] - table.start[i] + 1) as usize;
+        let w = (table.end[i] - table.start[i]) as usize;
         let a = letter_starts[id as usize];
         offsets.push(kept.len());
         kept.extend_from_slice(&letters[a..a + w]);
@@ -1348,7 +1368,7 @@ mod tests {
                     .map(|j| index(seq.as_bytes()[i + j]).map(|l| grid_value(m.get(l, j))))
                     .sum();
                 if let Some(s) = s.filter(|&s| s >= min) {
-                    out.push((i + 1, minus, s));
+                    out.push((i, minus, s));
                 }
             }
         }
@@ -1382,7 +1402,7 @@ mod tests {
                 .map(|j| index(chars[i + j]).map(|l| grid_value(sm.pwm.get(l, j))))
                 .sum();
             if let Some(s) = s.filter(|&s| s >= min) {
-                out.push((i + 1, s));
+                out.push((i, s));
             }
         }
         out
@@ -1435,7 +1455,7 @@ mod tests {
                 .collect();
             assert_eq!(got, naive_any(m, &seq, 0.001, false), "protein motif {mi}");
         }
-        let planted = (0..hits.len()).find(|&i| hits.start[i] == 7_001).unwrap();
+        let planted = (0..hits.len()).find(|&i| hits.start[i] == 7_000).unwrap();
         assert_eq!(hits.matched(planted, &[&seq]), "MKVLAWHE");
 
         // A custom alphabet matches letters exactly, including case.
@@ -1459,7 +1479,7 @@ mod tests {
             })
             .collect();
         assert_eq!(got, naive_any(&m, &cseq, 0.001, true));
-        let planted = (0..hits.len()).find(|&i| hits.start[i] == 61).unwrap();
+        let planted = (0..hits.len()).find(|&i| hits.start[i] == 60).unwrap();
         assert_eq!(hits.matched(planted, &[&cseq]), "abcDe");
     }
 
@@ -1529,7 +1549,7 @@ mod tests {
                     if s >= min {
                         let mut m = oriented.clone();
                         shape.mark_gaps(combo, &mut m);
-                        out.push((i + 1, minus, gaps.clone(), s, String::from_utf8(m).unwrap()));
+                        out.push((i, minus, gaps.clone(), s, String::from_utf8(m).unwrap()));
                     }
                 }
             }
@@ -1600,7 +1620,7 @@ mod tests {
                 let mut got: Vec<_> = (0..t.len())
                     .filter(|&i| t.motif[i] == mi as i64)
                     .map(|i| {
-                        let w = (t.end[i] - t.start[i] + 1) as usize;
+                        let w = (t.end[i] - t.start[i]) as usize;
                         assert_eq!(w, GapShape::from_motif(m).unwrap().width(t.combo[i]));
                         (
                             t.start[i] as usize,

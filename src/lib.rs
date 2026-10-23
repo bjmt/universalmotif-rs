@@ -104,6 +104,7 @@ pub mod sample;
 pub mod scan;
 pub mod scoring;
 pub mod shuffle;
+#[doc(hidden)]
 pub mod stats;
 
 pub use alphabet::Alphabet;

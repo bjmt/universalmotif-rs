@@ -20,7 +20,7 @@ use crate::pvalue::with_threads;
 
 /// A run of positions `start..end` holding the byte `letter`, which is not
 /// in the alphabet.
-pub type UnknownRun = (usize, usize, u8);
+pub(crate) type UnknownRun = (usize, usize, u8);
 
 /// Record `b` at position `i` as unknown, extending the last run if it
 /// holds the same byte and ends at `i`.
@@ -74,7 +74,7 @@ fn code_table(letters: &[u8], case_insensitive: bool) -> [u8; 256] {
 
 /// A packed DNA or RNA sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackedSeq {
+pub(crate) struct PackedSeq {
     /// Packed letters, followed by two zero bytes so that [`PackedSeq::quad`]
     /// can read past the end.
     bytes: Vec<u8>,
@@ -83,6 +83,7 @@ pub struct PackedSeq {
 }
 
 impl PackedSeq {
+    #[cfg(test)]
     /// Pack a sequence of the four letters `letters`, matched in either case.
     pub fn new(seq: &[u8], letters: [u8; 4]) -> PackedSeq {
         let mut b = PackedSeqBuilder::with_capacity(letters, seq.len());
@@ -95,11 +96,7 @@ impl PackedSeq {
         self.len
     }
 
-    /// Whether there are no letters.
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
+    #[cfg(test)]
     /// Runs of positions that are not one of the four letters.
     pub fn unknown_runs(&self) -> &[UnknownRun] {
         &self.unknown
@@ -140,7 +137,7 @@ impl PackedSeq {
 
 /// Builds a [`PackedSeq`] from pieces of a sequence.
 #[derive(Debug, Clone)]
-pub struct PackedSeqBuilder {
+pub(crate) struct PackedSeqBuilder {
     code: [u8; 256],
     bytes: Vec<u8>,
     len: usize,
@@ -148,12 +145,14 @@ pub struct PackedSeqBuilder {
 }
 
 impl PackedSeqBuilder {
+    #[cfg(test)]
     /// A builder for sequences of the four letters `letters`, matched in either
     /// case.
     pub fn new(letters: [u8; 4]) -> PackedSeqBuilder {
         PackedSeqBuilder::with_capacity(letters, 0)
     }
 
+    #[cfg(test)]
     /// As [`PackedSeqBuilder::new`], with room for `len` letters.
     pub fn with_capacity(letters: [u8; 4], len: usize) -> PackedSeqBuilder {
         PackedSeqBuilder {
@@ -167,11 +166,6 @@ impl PackedSeqBuilder {
     /// The number of letters added so far.
     pub fn len(&self) -> usize {
         self.len
-    }
-
-    /// Whether no letters have been added.
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
     }
 
     #[inline]
@@ -229,13 +223,14 @@ impl PackedSeqBuilder {
 /// letter: its index in the alphabet. Letters outside it are coded as 0 and
 /// recorded as runs, as for [`PackedSeq`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodedSeq {
+pub(crate) struct CodedSeq {
     /// Letter codes, followed by one zero so pairs can be read to the end.
     codes: Vec<u8>,
     unknown: Vec<UnknownRun>,
 }
 
 impl CodedSeq {
+    #[cfg(test)]
     /// Code a sequence over `letters`, of which there can be at most 255. With
     /// `case_insensitive`, letters match in either case.
     pub fn new(seq: &[u8], letters: &[u8], case_insensitive: bool) -> CodedSeq {
@@ -249,11 +244,6 @@ impl CodedSeq {
         self.codes.len() - 1
     }
 
-    /// Whether there are no letters.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     /// The letter code at `i`. Unknown letters read as 0, as does the position
     /// just past the end.
     #[inline(always)]
@@ -261,6 +251,7 @@ impl CodedSeq {
         self.codes[i]
     }
 
+    #[cfg(test)]
     /// Runs of positions that are not letters of the alphabet.
     pub fn unknown_runs(&self) -> &[UnknownRun] {
         &self.unknown
@@ -287,19 +278,21 @@ impl CodedSeq {
 
 /// Builds a [`CodedSeq`] from pieces of a sequence.
 #[derive(Debug, Clone)]
-pub struct CodedSeqBuilder {
+pub(crate) struct CodedSeqBuilder {
     code: [u8; 256],
     codes: Vec<u8>,
     unknown: Vec<UnknownRun>,
 }
 
 impl CodedSeqBuilder {
+    #[cfg(test)]
     /// A builder for sequences over `letters`, of which there can be at most
     /// 255. With `case_insensitive`, letters match in either case.
     pub fn new(letters: &[u8], case_insensitive: bool) -> CodedSeqBuilder {
         CodedSeqBuilder::with_capacity(letters, case_insensitive, 0)
     }
 
+    #[cfg(test)]
     /// As [`CodedSeqBuilder::new`], with room for `len` letters.
     pub fn with_capacity(letters: &[u8], case_insensitive: bool, len: usize) -> CodedSeqBuilder {
         CodedSeqBuilder {
@@ -312,11 +305,6 @@ impl CodedSeqBuilder {
     /// The number of letters added so far.
     pub fn len(&self) -> usize {
         self.codes.len()
-    }
-
-    /// Whether no letters have been added.
-    pub fn is_empty(&self) -> bool {
-        self.codes.is_empty()
     }
 
     /// Add the letters of `piece` to the end of the sequence.

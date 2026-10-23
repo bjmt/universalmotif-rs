@@ -36,8 +36,21 @@ pub enum ProximityMethod {
 }
 
 impl ProximityMethod {
+    /// The name [`str::parse`] reads, such as `"binomial"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProximityMethod::Binomial => "binomial",
+            ProximityMethod::Permutation => "permutation",
+            ProximityMethod::Ks => "ks",
+        }
+    }
+}
+
+impl std::str::FromStr for ProximityMethod {
+    type Err = crate::error::Error;
+
     /// Parse `"binomial"`, `"permutation"` or `"ks"`.
-    pub fn parse(s: &str) -> Result<ProximityMethod> {
+    fn from_str(s: &str) -> Result<ProximityMethod> {
         match s {
             "binomial" => Ok(ProximityMethod::Binomial),
             "permutation" => Ok(ProximityMethod::Permutation),
@@ -46,6 +59,12 @@ impl ProximityMethod {
                 "unknown method '{s}'; expected 'binomial', 'permutation' or 'ks'"
             )),
         }
+    }
+}
+
+impl std::fmt::Display for ProximityMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -59,13 +78,31 @@ pub enum ProximityCount {
 }
 
 impl ProximityCount {
+    /// The name [`str::parse`] reads, such as `"hits"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProximityCount::Hits => "hits",
+            ProximityCount::Anchors => "anchors",
+        }
+    }
+}
+
+impl std::str::FromStr for ProximityCount {
+    type Err = crate::error::Error;
+
     /// Parse `"hits"` or `"anchors"`.
-    pub fn parse(s: &str) -> Result<ProximityCount> {
+    fn from_str(s: &str) -> Result<ProximityCount> {
         match s {
             "hits" => Ok(ProximityCount::Hits),
             "anchors" => Ok(ProximityCount::Anchors),
             _ => arg_err(format!("unknown count '{s}'; expected 'hits' or 'anchors'")),
         }
+    }
+}
+
+impl std::fmt::Display for ProximityCount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -171,10 +208,10 @@ impl Universe {
 
 /// The middle position of a range, taking the lower one for even widths.
 fn middle(r: &GRange) -> GRange {
-    let m = (r.start + r.end).div_euclid(2);
+    let m = (r.start + r.end - 1).div_euclid(2);
     GRange {
         start: m,
-        end: m,
+        end: m + 1,
         ..*r
     }
 }
@@ -206,7 +243,7 @@ fn collapse(hits: &[ProximityHit], ignore_strand: bool) -> Vec<ProximityHit> {
             let mut j = k + 1;
             while j < order.len()
                 && hits[order[j]].range.chrom == chrom
-                && hits[order[j]].range.start <= end
+                && hits[order[j]].range.start < end
             {
                 end = end.max(hits[order[j]].range.end);
                 j += 1;
@@ -364,7 +401,7 @@ fn signed_distances(hits: &[GRange], anchors: &[GRange], index: &AnchorIndex) ->
         .map(|h| {
             let (i, d) = index.nearest_position(h.chrom, h.start)?;
             let a = &anchors[i];
-            let raw = h.start as f64 - (a.start + a.end) as f64 / 2.0;
+            let raw = h.start as f64 - (a.start + a.end - 1) as f64 / 2.0;
             let off = if raw < 0.0 { -1.0 } else { 1.0 };
             let strand = if a.strand == GStrand::Minus {
                 -1.0
@@ -504,7 +541,7 @@ fn permute_anchors(
         out.push(GRange {
             chrom: segs[pick].chrom,
             start,
-            end: start + w - 1,
+            end: start + w,
             strand: a.strand,
         });
     }

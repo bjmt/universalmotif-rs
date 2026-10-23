@@ -39,8 +39,37 @@ pub enum ColumnMetric {
 }
 
 impl ColumnMetric {
+    fn needs_bkg(self) -> bool {
+        matches!(
+            self,
+            ColumnMetric::Weucl | ColumnMetric::Wpcc | ColumnMetric::Allr | ColumnMetric::AllrLl
+        )
+    }
+
+    /// The name [`str::parse`] reads, such as `"PCC"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ColumnMetric::Pcc => "PCC",
+            ColumnMetric::Eucl => "EUCL",
+            ColumnMetric::Sw => "SW",
+            ColumnMetric::Kl => "KL",
+            ColumnMetric::Weucl => "WEUCL",
+            ColumnMetric::Allr => "ALLR",
+            ColumnMetric::Bhat => "BHAT",
+            ColumnMetric::Hell => "HELL",
+            ColumnMetric::Wpcc => "WPCC",
+            ColumnMetric::Seucl => "SEUCL",
+            ColumnMetric::Man => "MAN",
+            ColumnMetric::AllrLl => "ALLR_LL",
+        }
+    }
+}
+
+impl std::str::FromStr for ColumnMetric {
+    type Err = crate::error::Error;
+
     /// Parse a metric's short name, such as `"PCC"` or `"EUCL"`.
-    pub fn parse(s: &str) -> Result<ColumnMetric> {
+    fn from_str(s: &str) -> Result<ColumnMetric> {
         Ok(match s {
             "PCC" => ColumnMetric::Pcc,
             "EUCL" => ColumnMetric::Eucl,
@@ -62,12 +91,11 @@ impl ColumnMetric {
             }
         })
     }
+}
 
-    fn needs_bkg(self) -> bool {
-        matches!(
-            self,
-            ColumnMetric::Weucl | ColumnMetric::Wpcc | ColumnMetric::Allr | ColumnMetric::AllrLl
-        )
+impl std::fmt::Display for ColumnMetric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -81,18 +109,45 @@ fn total(v: impl Iterator<Item = f64>) -> f64 {
     v.fold(0.0, |a, b| a + b)
 }
 
+/// A motif column to compare with [`compare_columns`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Column<'a> {
+    /// The probability of each letter.
+    pub probs: &'a [f64],
+    /// Background frequencies of the letters, needed by the weighted metrics
+    /// and ALLR.
+    pub bkg: &'a [f64],
+    /// The number of sites the column was built from, needed by ALLR.
+    pub nsites: f64,
+}
+
+impl<'a> Column<'a> {
+    /// A column of probabilities, with no background and 100 sites.
+    pub fn new(probs: &'a [f64]) -> Column<'a> {
+        Column {
+            probs,
+            bkg: &[],
+            nsites: 100.0,
+        }
+    }
+
+    /// The column with background frequencies.
+    pub fn with_bkg(self, bkg: &'a [f64]) -> Column<'a> {
+        Column { bkg, ..self }
+    }
+
+    /// The column with a number of sites.
+    pub fn with_nsites(self, nsites: f64) -> Column<'a> {
+        Column { nsites, ..self }
+    }
+}
+
 /// Compare two columns of probabilities over the same letters with `metric`.
 /// The backgrounds are used by the weighted metrics and ALLR, which also uses
 /// the site counts. A column whose first value is negative scores 0.
-pub fn compare_columns(
-    x: &[f64],
-    y: &[f64],
-    metric: ColumnMetric,
-    bkg1: &[f64],
-    bkg2: &[f64],
-    nsites1: f64,
-    nsites2: f64,
-) -> Result<f64> {
+pub fn compare_columns(x: &Column, y: &Column, metric: ColumnMetric) -> Result<f64> {
+    let (bkg1, bkg2, nsites1, nsites2) = (x.bkg, y.bkg, x.nsites, y.nsites);
+    let (x, y) = (x.probs, y.probs);
     if x.len() != y.len() {
         return arg_err(format!(
             "x and y must have the same length, not {} and {}",
@@ -198,8 +253,22 @@ pub enum Average {
 }
 
 impl Average {
+    /// The name [`str::parse`] reads, such as `"a.mean"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Average::ArithmeticMean => "a.mean",
+            Average::GeometricMean => "g.mean",
+            Average::Median => "median",
+            Average::FisherZ => "fzt",
+        }
+    }
+}
+
+impl std::str::FromStr for Average {
+    type Err = crate::error::Error;
+
     /// Parse `"a.mean"`, `"g.mean"`, `"median"` or `"fzt"`.
-    pub fn parse(s: &str) -> Result<Average> {
+    fn from_str(s: &str) -> Result<Average> {
         match s {
             "a.mean" => Ok(Average::ArithmeticMean),
             "g.mean" => Ok(Average::GeometricMean),
@@ -207,6 +276,12 @@ impl Average {
             "fzt" => Ok(Average::FisherZ),
             _ => arg_err("average must be one of a.mean, g.mean, median, fzt"),
         }
+    }
+}
+
+impl std::fmt::Display for Average {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

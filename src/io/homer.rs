@@ -126,7 +126,7 @@ impl Default for Threshold {
 /// HOMER's scoring matrix for a PPM as it would be written to a file:
 /// `ln(max(p, 0.001) / 0.25)` with `p` rounded to three decimals, as in
 /// `Motif::logxform()` in HOMER's `cpp/Motif2.cpp`.
-pub fn homer_score_matrix(ppm: &Matrix) -> Matrix {
+pub(crate) fn homer_score_matrix(ppm: &Matrix) -> Matrix {
     ppm.map_columns(|c| {
         c.iter()
             .map(|&p| {

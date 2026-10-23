@@ -13,7 +13,7 @@ use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType};
 use crate::ops::normalize;
 
-/// Options for [`motif_pvalue`] and [`motif_score`].
+/// Options for [`motif_pvalue`] and [`pvalue_to_score`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PvalueOptions {
     /// Background frequencies: none to use each motif's own, one set for all
@@ -190,12 +190,12 @@ fn per_motif(
 ///
 /// ```
 /// use universalmotif::create::{CreateOptions, from_strings};
-/// use universalmotif::pvalue::{PvalueOptions, motif_pvalue, motif_score};
+/// use universalmotif::pvalue::{PvalueOptions, motif_pvalue, pvalue_to_score};
 ///
 /// let opts = CreateOptions { nsites: Some(20.0), pseudocount: 1.0, ..Default::default() };
 /// let m = from_strings(&["TGACTCA"], None, &opts)?;
 /// // The score a random site reaches with probability 1e-4, and back again.
-/// let score = motif_score(std::slice::from_ref(&m), &[(0, 1e-4)], &PvalueOptions::default())?[0];
+/// let score = pvalue_to_score(std::slice::from_ref(&m), &[(0, 1e-4)], &PvalueOptions::default())?[0];
 /// let p = motif_pvalue(&[m], &[(0, score)], &PvalueOptions::default())?[0];
 /// assert!(p <= 1e-4);
 /// # Ok::<(), universalmotif::Error>(())
@@ -212,7 +212,7 @@ pub fn motif_pvalue(
 /// Score thresholds for `(motif index, P-value)` pairs: the lowest score a
 /// random site reaches with at most that probability, or infinity if no
 /// score is that unlikely.
-pub fn motif_score(
+pub fn pvalue_to_score(
     motifs: &[Motif],
     queries: &[(usize, f64)],
     opts: &PvalueOptions,

@@ -14,12 +14,10 @@
 
 use std::time::Instant;
 
-use rand::SeedableRng;
-use rand::rngs::StdRng;
 use universalmotif::background::{MatchOptions, match_bkg};
-use universalmotif::cluster::{Method, TreeOptions, hclust, motif_tree};
+use universalmotif::cluster::{Linkage, TreeOptions, hclust, motif_tree};
 use universalmotif::compare::{CompareOptions, compare_matrix};
-use universalmotif::complexity::{ComplexityOptions, Method as Cx, sequence_complexity};
+use universalmotif::complexity::{ComplexityMethod as Cx, ComplexityOptions, sequence_complexity};
 use universalmotif::convert::convert_type;
 use universalmotif::coocc::{CooccHit, CooccOptions, motif_coocc};
 use universalmotif::create::{CreateOptions, random};
@@ -48,14 +46,13 @@ fn bench_motifs() -> (String, Vec<Motif>) {
             meme::read(&text, &meme::ReadOptions::default()).unwrap()
         }
         Err(_) => {
-            let mut rng = StdRng::seed_from_u64(1);
             let opts = CreateOptions {
                 nsites: Some(50.0),
                 pseudocount: 1.0,
                 ..Default::default()
             };
             (0..400)
-                .map(|i| random(8 + i % 18, bench_alphabet(), &opts, &mut rng).unwrap())
+                .map(|i| random(8 + i % 18, bench_alphabet(), &opts, i as u64).unwrap())
                 .collect()
         }
     };
@@ -192,7 +189,7 @@ fn main() {
             let opts = TreeOptions {
                 min_overlap: 6,
                 rc: true,
-                method: Method::Complete,
+                method: Linkage::Complete,
                 nthreads: threads,
             };
             format!("{} merges", motif_tree(&motifs, &opts).unwrap().merge.len())
@@ -202,7 +199,10 @@ fn main() {
                 nthreads: threads,
                 ..Default::default()
             };
-            format!("{} merged", merge_similar(&motifs, &opts).unwrap().1.len())
+            format!(
+                "{} merged",
+                merge_similar(&motifs, &opts).unwrap().motifs.len()
+            )
         }),
         "hclust" => {
             let n = 3000;
@@ -216,7 +216,7 @@ fn main() {
             timed("hclust 3000 complete", setup, &mut || {
                 format!(
                     "{} merges",
-                    hclust(&d, Method::Complete).unwrap().merge.len()
+                    hclust(&d, Linkage::Complete).unwrap().merge.len()
                 )
             })
         }

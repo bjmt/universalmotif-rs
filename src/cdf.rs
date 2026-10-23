@@ -9,7 +9,7 @@
 use crate::matrix::{Matrix, sum};
 
 /// A PWM value on the integer score grid: `x * 1000`, truncated toward zero.
-pub fn grid_value(x: f64) -> i32 {
+pub(crate) fn grid_value(x: f64) -> i32 {
     (x * 1000.0) as i32
 }
 
@@ -17,7 +17,7 @@ pub fn grid_value(x: f64) -> i32 {
 /// least this score". Values within floating-point round-trip error of a
 /// grid point are snapped to it first, so that for example `1.001` maps to
 /// 1001 rather than 1002.
-pub fn score_grid_ceiling(score: f64) -> f64 {
+pub(crate) fn score_grid_ceiling(score: f64) -> f64 {
     let scaled = score * 1000.0;
     if !scaled.is_finite() {
         return scaled;

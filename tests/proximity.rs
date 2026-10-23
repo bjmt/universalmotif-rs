@@ -33,6 +33,7 @@ fn opt(x: Option<f64>) -> f64 {
     x.unwrap_or(f64::NAN)
 }
 
+/// Ranges from R, moved from 1-based inclusive to 0-based half-open positions.
 fn ranges(t: &Value, chroms: &[String]) -> Vec<GRange> {
     let names = texts(&t["seqnames"]);
     let (s, e) = (nums(&t["start"]), nums(&t["end"]));
@@ -40,9 +41,9 @@ fn ranges(t: &Value, chroms: &[String]) -> Vec<GRange> {
     (0..names.len())
         .map(|i| GRange {
             chrom: chroms.iter().position(|c| *c == names[i]).unwrap(),
-            start: s[i] as i64,
+            start: s[i] as i64 - 1,
             end: e[i] as i64,
-            strand: GStrand::parse(&strand[i]).unwrap(),
+            strand: strand[i].parse::<GStrand>().unwrap(),
         })
         .collect()
 }
@@ -78,16 +79,18 @@ fn proximity_matches_r() {
                     lengths
                         .iter()
                         .enumerate()
-                        .map(|(c, &l)| GRange::new(c, 1, l))
+                        .map(|(c, &l)| GRange::new(c, 0, l))
                         .collect(),
                     lengths.iter().map(|&l| Some(l)).collect(),
                 )
             };
         let s = |k: &str, d: &str| a.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
         let opts = ProximityOptions {
-            method: ProximityMethod::parse(&s("method", "binomial")).unwrap(),
-            count: ProximityCount::parse(&s("count", "hits")).unwrap(),
-            orientation: Orientation::parse(&s("orientation", "undirected")).unwrap(),
+            method: s("method", "binomial").parse::<ProximityMethod>().unwrap(),
+            count: s("count", "hits").parse::<ProximityCount>().unwrap(),
+            orientation: s("orientation", "undirected")
+                .parse::<Orientation>()
+                .unwrap(),
             dist_thresholds: a
                 .get("dist.thresholds")
                 .map(|v| nums(v).iter().map(|&x| x as i64).collect()),
@@ -158,7 +161,7 @@ fn permutation_test_behaves() {
     let universe: Vec<GRange> = lengths
         .iter()
         .enumerate()
-        .map(|(c, &l)| GRange::new(c, 1, l))
+        .map(|(c, &l)| GRange::new(c, 0, l))
         .collect();
     let cl: Vec<Option<i64>> = lengths.iter().map(|&l| Some(l)).collect();
     let mut opts = ProximityOptions {
@@ -196,7 +199,7 @@ fn match_axes_match_r() {
             let v = nums(&c["range"]);
             (v[0], v[1])
         });
-        let bt = BinType::parse(c["type"].as_str().unwrap()).unwrap();
+        let bt = c["type"].as_str().unwrap().parse::<BinType>().unwrap();
         let ax = match_axis(
             &nums(&c["targets"]),
             &nums(&c["universe"]),
@@ -263,12 +266,12 @@ fn matched_backgrounds_follow_composition() {
         &[5000, 200, 3000],
         &[150],
         500,
-        &[GRange::new(0, 1, 2500)],
+        &[GRange::new(0, 0, 2500)],
         2,
     )
     .unwrap();
     assert_eq!(w.len(), 500);
     assert!(w.iter().all(|g| g.width() == 150));
-    assert!(w.iter().all(|g| g.chrom != 0 || g.start > 2500));
+    assert!(w.iter().all(|g| g.chrom != 0 || g.start >= 2500));
     assert!(w.iter().all(|g| g.end <= [5000, 200, 3000][g.chrom]));
 }

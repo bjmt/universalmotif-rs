@@ -33,8 +33,20 @@ pub enum BinType {
 }
 
 impl BinType {
+    /// The name [`str::parse`] reads, such as `"quantile"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BinType::Quantile => "quantile",
+            BinType::EqualWidth => "equalwidth",
+        }
+    }
+}
+
+impl std::str::FromStr for BinType {
+    type Err = crate::error::Error;
+
     /// Parse `"quantile"` or `"equalwidth"`.
-    pub fn parse(s: &str) -> Result<BinType> {
+    fn from_str(s: &str) -> Result<BinType> {
         match s {
             "quantile" => Ok(BinType::Quantile),
             "equalwidth" => Ok(BinType::EqualWidth),
@@ -42,6 +54,12 @@ impl BinType {
                 "unknown bin type '{s}'; expected 'quantile' or 'equalwidth'"
             )),
         }
+    }
+}
+
+impl std::fmt::Display for BinType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -61,6 +79,7 @@ pub struct Covariate {
 }
 
 /// Per-target and per-universe 0-based bins on one axis.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Axis {
@@ -129,6 +148,7 @@ fn bin_of(x: f64, breaks: &[f64]) -> usize {
 /// Bin targets and universe on one axis. Equal-width breaks span `range`, which
 /// defaults to all the values, while quantile breaks come from the universe. A
 /// constant axis collapses to one bin.
+#[doc(hidden)]
 pub fn match_axis(
     targets: &[f64],
     universe: &[f64],
@@ -460,12 +480,12 @@ pub fn genome_windows(
             r -= l.max(0) as f64;
         }
         let w = target_widths[rng.random_range(0..target_widths.len())];
-        let max_start = chrom_lengths[chrom] - w + 1;
-        if max_start < 1 {
+        let n_starts = chrom_lengths[chrom] - w + 1;
+        if n_starts < 1 {
             continue;
         }
-        let start = (rng.random::<f64>() * max_start as f64).floor() as i64 + 1;
-        let g = GRange::new(chrom, start, start + w - 1);
+        let start = (rng.random::<f64>() * n_starts as f64).floor() as i64;
+        let g = GRange::new(chrom, start, start + w);
         if !overlaps_any(&g, &exclude) {
             out.push(g);
         }

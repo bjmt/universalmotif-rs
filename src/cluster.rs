@@ -7,10 +7,10 @@
 
 use crate::error::{Result, arg_err};
 
-/// Agglomeration method.
+/// Agglomeration method, or linkage, for hierarchical clustering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum Method {
+pub enum Linkage {
     /// Ward's criterion applied to the distances as they are, written `ward.D`.
     WardD,
     /// Single linkage: the closest pair of members.
@@ -30,19 +30,50 @@ pub enum Method {
     WardD2,
 }
 
-impl Method {
+impl Linkage {
+    fn code(self) -> u8 {
+        match self {
+            Linkage::WardD => 1,
+            Linkage::Single => 2,
+            Linkage::Complete => 3,
+            Linkage::Average => 4,
+            Linkage::Mcquitty => 5,
+            Linkage::Median => 6,
+            Linkage::Centroid => 7,
+            Linkage::WardD2 => 8,
+        }
+    }
+
+    /// The name [`str::parse`] reads, such as `"ward.D"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Linkage::WardD => "ward.D",
+            Linkage::Single => "single",
+            Linkage::Complete => "complete",
+            Linkage::Average => "average",
+            Linkage::Mcquitty => "mcquitty",
+            Linkage::Median => "median",
+            Linkage::Centroid => "centroid",
+            Linkage::WardD2 => "ward.D2",
+        }
+    }
+}
+
+impl std::str::FromStr for Linkage {
+    type Err = crate::error::Error;
+
     /// Parse a method name: `"ward.D"`, `"single"`, `"complete"`, `"average"`,
     /// `"mcquitty"`, `"median"`, `"centroid"` or `"ward.D2"`.
-    pub fn parse(s: &str) -> Result<Method> {
+    fn from_str(s: &str) -> Result<Linkage> {
         Ok(match s {
-            "ward.D" => Method::WardD,
-            "single" => Method::Single,
-            "complete" => Method::Complete,
-            "average" => Method::Average,
-            "mcquitty" => Method::Mcquitty,
-            "median" => Method::Median,
-            "centroid" => Method::Centroid,
-            "ward.D2" => Method::WardD2,
+            "ward.D" => Linkage::WardD,
+            "single" => Linkage::Single,
+            "complete" => Linkage::Complete,
+            "average" => Linkage::Average,
+            "mcquitty" => Linkage::Mcquitty,
+            "median" => Linkage::Median,
+            "centroid" => Linkage::Centroid,
+            "ward.D2" => Linkage::WardD2,
             _ => {
                 return arg_err(format!(
                     "unknown clustering method '{s}' (use ward.D, single, complete, average, \
@@ -51,18 +82,11 @@ impl Method {
             }
         })
     }
+}
 
-    fn code(self) -> u8 {
-        match self {
-            Method::WardD => 1,
-            Method::Single => 2,
-            Method::Complete => 3,
-            Method::Average => 4,
-            Method::Mcquitty => 5,
-            Method::Median => 6,
-            Method::Centroid => 7,
-            Method::WardD2 => 8,
-        }
+impl std::fmt::Display for Linkage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -80,7 +104,7 @@ pub struct Tree {
 
 /// Cluster `n` objects from a distance matrix. Only the lower triangle is used,
 /// that is `dist[i][j]` with `i > j`.
-pub fn hclust(dist: &[Vec<f64>], method: Method) -> Result<Tree> {
+pub fn hclust(dist: &[Vec<f64>], method: Linkage) -> Result<Tree> {
     let n = dist.len();
     if n < 2 {
         return arg_err("need at least 2 objects to cluster");
@@ -467,7 +491,7 @@ pub struct TreeOptions {
     /// Also try reverse complements when comparing motifs.
     pub rc: bool,
     /// The agglomeration method; complete linkage by default.
-    pub method: Method,
+    pub method: Linkage,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
@@ -477,7 +501,7 @@ impl Default for TreeOptions {
         TreeOptions {
             min_overlap: 6,
             rc: true,
-            method: Method::Complete,
+            method: Linkage::Complete,
             nthreads: 1,
         }
     }

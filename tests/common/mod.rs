@@ -84,11 +84,11 @@ pub fn assert_close_vec(got: &[f64], want: &[f64], ctx: &str) {
 }
 
 pub fn alphabet(name: &str) -> Alphabet {
-    Alphabet::parse(name).unwrap()
+    name.parse::<Alphabet>().unwrap()
 }
 
 pub fn motif_type(name: &str) -> MotifType {
-    MotifType::parse(name).unwrap()
+    name.parse::<MotifType>().unwrap()
 }
 
 /// Rebuild a motif exactly as recorded, without recomputing anything.
@@ -114,7 +114,7 @@ pub fn motif_from_record(r: &Value) -> Motif {
         bkg: nums(&r["bkg"]),
         bkgsites: opt_num(&r["bkgsites"]),
         consensus: opt_str(&r["consensus"]),
-        strand: Strand::parse(r["strand"].as_str().unwrap()).unwrap(),
+        strand: r["strand"].as_str().unwrap().parse::<Strand>().unwrap(),
         pval: opt_num(&r["pval"]),
         qval: opt_num(&r["qval"]),
         eval: opt_num(&r["eval"]),

@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use universalmotif::pvalue::{PvalueOptions, motif_pvalue, motif_score};
+use universalmotif::pvalue::{PvalueOptions, motif_pvalue, pvalue_to_score};
 
 #[test]
 fn pvalues_and_scores_match_r() {
@@ -25,7 +25,7 @@ fn pvalues_and_scores_match_r() {
             .into_iter()
             .map(|p| (0, p))
             .collect();
-        let got = motif_score(&motifs, &q, &opts).unwrap();
+        let got = pvalue_to_score(&motifs, &q, &opts).unwrap();
         assert_close_vec(&got, &nums(&case["score_out"]), &format!("{ctx}: scores"));
     }
 }
@@ -57,8 +57,8 @@ fn scores_are_thresholds_on_the_integer_grid() {
     }
     // Two sites score 1.5 and the next best score is 0.5, so the lowest grid
     // score reached with probability 2/16 is just above 0.5.
-    let s = motif_score(std::slice::from_ref(&m), &[(0, 2.0 / 16.0)], &opts).unwrap()[0];
+    let s = pvalue_to_score(std::slice::from_ref(&m), &[(0, 2.0 / 16.0)], &opts).unwrap()[0];
     assert_eq!(s, 0.501);
-    let s = motif_score(std::slice::from_ref(&m), &[(0, 1e-9)], &opts).unwrap()[0];
+    let s = pvalue_to_score(std::slice::from_ref(&m), &[(0, 1e-9)], &opts).unwrap()[0];
     assert_eq!(s, f64::INFINITY);
 }

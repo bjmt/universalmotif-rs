@@ -34,7 +34,7 @@ pub enum ImplantMode {
     Count(usize),
     /// A Poisson number with mean `rate * sequence length`.
     Rate(f64),
-    /// Given 1-based start positions for each sequence.
+    /// Given start positions for each sequence, counting from 0.
     Positions(Vec<Vec<usize>>),
 }
 
@@ -76,7 +76,7 @@ pub struct Implant {
     pub sequence: usize,
     /// Index of the motif.
     pub motif: usize,
-    /// 1-based start.
+    /// Where the site starts, counting from 0.
     pub start: usize,
     /// Width of the site.
     pub width: usize,
@@ -191,7 +191,7 @@ pub fn implant_motifs<S: AsRef<str>>(
             let minus = opts.both_strands && rng.random_range(0..2) == 1;
             let start = if let ImplantMode::Positions(p) = &opts.mode {
                 let start = p[i][j];
-                if start < 1 || start + w - 1 > len {
+                if start + w > len {
                     out.warnings.push(format!(
                         "dropping out-of-bounds position for sequence {} (start={start}, \
                          width={w}, sequence length={len})",
@@ -213,8 +213,7 @@ pub fn implant_motifs<S: AsRef<str>>(
                         .map(|_| rng.random::<f64>())
                         .sum::<f64>()
                         / opts.centre_bias as f64;
-                    let start =
-                        (1 + (u * (len - w + 1) as f64).floor() as usize).clamp(1, len - w + 1);
+                    let start = ((u * (len - w + 1) as f64).floor() as usize).min(len - w);
                     if !collides(start, start + w - 1, &placed, opts.min_spacing) {
                         found = Some(start);
                         break;
@@ -232,7 +231,7 @@ pub fn implant_motifs<S: AsRef<str>>(
             if minus {
                 site = reverse_complement_seq(&site, rna);
             }
-            chars.splice(start - 1..start - 1 + w, site.chars());
+            chars.splice(start..start + w, site.chars());
             placed.push((start, start + w - 1));
             out.implants.push(Implant {
                 sequence: i,

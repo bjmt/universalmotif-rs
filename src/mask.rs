@@ -65,23 +65,23 @@ pub fn mask_seqs<S: AsRef<str>>(
         .collect())
 }
 
-/// Replace the positions in `ranges` of `seq` with `letter`, where ranges are
-/// 1-based and inclusive. Ranges may overlap; one reaching outside the sequence
-/// is an error.
+/// Replace the positions in `ranges` of `seq` with `letter`, where each range
+/// covers `start..end`, counting from 0. Ranges may overlap; one reaching
+/// outside the sequence is an error.
 pub fn mask_ranges(seq: &str, ranges: &[(i64, i64)], letter: char) -> Result<String> {
     let letter = check_letter(letter)?;
     let mut bytes = seq.as_bytes().to_vec();
     let n = bytes.len() as i64;
     for &(start, end) in ranges {
-        if end < start {
+        if end <= start {
             continue;
         }
-        if start < 1 || end > n {
+        if start < 0 || end > n {
             return arg_err(format!(
                 "the range {start}-{end} is outside the sequence (length {n})"
             ));
         }
-        bytes[start as usize - 1..end as usize].fill(letter);
+        bytes[start as usize..end as usize].fill(letter);
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
@@ -101,9 +101,9 @@ mod tests {
         assert_eq!(m[0], "ANNNANNNTNNN");
         assert!(mask_seqs(&seqs, "KV", true, 'X', &Alphabet::Aa).is_err());
         assert_eq!(
-            mask_ranges("ACGTACGT", &[(1, 2), (2, 3), (8, 8)], 'N').unwrap(),
+            mask_ranges("ACGTACGT", &[(0, 2), (1, 3), (7, 8)], 'N').unwrap(),
             "NNNTACGN"
         );
-        assert!(mask_ranges("ACGT", &[(3, 5)], 'N').is_err());
+        assert!(mask_ranges("ACGT", &[(2, 5)], 'N').is_err());
     }
 }

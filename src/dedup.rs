@@ -5,7 +5,9 @@
 //! hits are taken in order of priority, with ties going to the earlier hit, and
 //! kept unless they overlap a hit already kept.
 
-/// A hit as seen by [`dedup`]. Coordinates are inclusive, and a higher
+use crate::motif::Strand;
+
+/// A hit as seen by [`dedup`]. Positions are half-open, and a higher
 /// priority is better.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Interval {
@@ -13,12 +15,13 @@ pub struct Interval {
     pub sequence: usize,
     /// Index of the motif.
     pub motif: usize,
-    /// A code for the strand. Hits only overlap others with the same code,
-    /// unless strands are ignored.
-    pub strand: i32,
-    /// First position.
+    /// The strand of the hit, with [`Strand::Both`] for hits on neither.
+    /// Hits only overlap others on the same strand, unless strands are
+    /// ignored.
+    pub strand: Strand,
+    /// First position, counting from 0.
     pub start: i64,
-    /// Last position, inclusive.
+    /// Position just past the hit, so that it covers `start..end`.
     pub end: i64,
     /// How good the hit is; higher is better.
     pub priority: f64,
@@ -33,7 +36,7 @@ pub fn dedup(hits: &[Interval], ignore_strand: bool, ignore_motif: bool) -> Vec<
         (
             h.sequence,
             if ignore_motif { 0 } else { h.motif },
-            if ignore_strand { 0 } else { h.strand },
+            if ignore_strand { 0 } else { h.strand as u8 },
         )
     };
     let mut ord: Vec<usize> = (0..n).collect();
@@ -54,7 +57,7 @@ pub fn dedup(hits: &[Interval], ignore_strand: bool, ignore_motif: bool) -> Vec<
         let mut kept: Vec<(i64, i64)> = Vec::new();
         for i in by_priority {
             let (s, e) = (hits[i].start, hits[i].end);
-            if !kept.iter().any(|&(ks, ke)| s <= ke && ks <= e) {
+            if !kept.iter().any(|&(ks, ke)| s < ke && ks < e) {
                 keep[i] = true;
                 kept.push((s, e));
             }
@@ -71,7 +74,7 @@ pub fn dedup(hits: &[Interval], ignore_strand: bool, ignore_motif: bool) -> Vec<
         let mut max_end = hits[ord[g]].end;
         for k in g + 1..g_end {
             let h = &hits[ord[k]];
-            if h.start > max_end {
+            if h.start >= max_end {
                 flush(&ord[lo..k]);
                 lo = k;
                 max_end = h.end;

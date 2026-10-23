@@ -19,7 +19,7 @@ pub struct CooccHit {
     pub motif: usize,
     /// Index of the sequence.
     pub sequence: usize,
-    /// Start position, used only for distances.
+    /// Start position, counting from 0, used only for distances.
     pub start: i64,
 }
 

@@ -247,7 +247,7 @@ fn implants_are_placed_and_spaced() {
         }
         for x in &here {
             // Both strands of GGGGGGGG are G or C runs.
-            let site = &s[x.start - 1..x.start - 1 + x.width];
+            let site = &s[x.start..x.start + x.width];
             assert_eq!(site, x.planted);
             assert!(site == "GGGGGGGG" || site == "CCCCCCCC");
         }
@@ -258,7 +258,7 @@ fn implants_are_placed_and_spaced() {
 
     // Fixed positions, forward strand only.
     let o = ImplantOptions {
-        mode: ImplantMode::Positions(vec![vec![1, 50], vec![193], vec![300]]),
+        mode: ImplantMode::Positions(vec![vec![0, 49], vec![192], vec![300]]),
         both_strands: false,
         ..Default::default()
     };

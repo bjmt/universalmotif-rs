@@ -34,8 +34,23 @@ impl MotifType {
         MotifType::Cwm,
     ];
 
+    /// The type's name in upper case, such as `"PPM"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MotifType::Pcm => "PCM",
+            MotifType::Ppm => "PPM",
+            MotifType::Pwm => "PWM",
+            MotifType::Icm => "ICM",
+            MotifType::Cwm => "CWM",
+        }
+    }
+}
+
+impl std::str::FromStr for MotifType {
+    type Err = crate::error::Error;
+
     /// Parse a type name: `"PCM"`, `"PPM"`, `"PWM"`, `"ICM"` or `"CWM"`.
-    pub fn parse(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> Result<MotifType> {
         match s {
             "PCM" => Ok(MotifType::Pcm),
             "PPM" => Ok(MotifType::Ppm),
@@ -45,17 +60,6 @@ impl MotifType {
             _ => arg_err(format!(
                 "incorrect type '{s}' (must be one of PCM, PPM, PWM, ICM, CWM)"
             )),
-        }
-    }
-
-    /// The type's name in upper case, such as `"PPM"`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            MotifType::Pcm => "PCM",
-            MotifType::Ppm => "PPM",
-            MotifType::Pwm => "PWM",
-            MotifType::Icm => "ICM",
-            MotifType::Cwm => "CWM",
         }
     }
 }
@@ -79,16 +83,6 @@ pub enum Strand {
 }
 
 impl Strand {
-    /// Parse `"+"`, `"-"` or `"+-"`; `"-+"` and `"*"` also mean both strands.
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "+" => Ok(Strand::Plus),
-            "-" => Ok(Strand::Minus),
-            "+-" | "-+" | "*" => Ok(Strand::Both),
-            _ => arg_err(format!("incorrect strand '{s}' (must be one of +, -, +-)")),
-        }
-    }
-
     /// `"+"`, `"-"` or `"+-"`.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -99,19 +93,34 @@ impl Strand {
     }
 }
 
+impl std::str::FromStr for Strand {
+    type Err = crate::error::Error;
+
+    /// Parse `"+"`, `"-"` or `"+-"`; `"-+"` and `"*"` also mean both strands.
+    fn from_str(s: &str) -> Result<Strand> {
+        match s {
+            "+" => Ok(Strand::Plus),
+            "-" => Ok(Strand::Minus),
+            "+-" | "-+" | "*" => Ok(Strand::Both),
+            _ => arg_err(format!("incorrect strand '{s}' (must be one of +, -, +-)")),
+        }
+    }
+}
+
 impl fmt::Display for Strand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-/// Gaps inside a motif. Gap `i` sits after column `gaploc[i]`, counting from 1,
-/// and spans `mingap[i]` to `maxgap[i]` positions.
+/// Gaps inside a motif. Gap `i` comes after the first `gaploc[i]` columns,
+/// between columns `gaploc[i] - 1` and `gaploc[i]` counting from 0, and spans
+/// `mingap[i]` to `maxgap[i]` positions.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GapInfo {
     /// Whether the motif has any gaps.
     pub isgapped: bool,
-    /// The column after which each gap sits, counting from 1.
+    /// How many columns come before each gap.
     pub gaploc: Vec<usize>,
     /// The fewest positions each gap can span.
     pub mingap: Vec<usize>,

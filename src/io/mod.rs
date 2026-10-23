@@ -40,7 +40,7 @@ pub(crate) fn fmt_err<T>(msg: impl Into<String>) -> Result<T> {
 
 /// Format a number with at most 15 significant digits, with scientific notation used when it is
 /// shorter than fixed notation.
-pub fn format_r_number(x: f64) -> String {
+pub(crate) fn format_r_number(x: f64) -> String {
     let target = format!("{x:.14e}").parse().unwrap_or(x);
     format_significant(x, 15, target)
 }
@@ -48,7 +48,7 @@ pub fn format_r_number(x: f64) -> String {
 /// Format a number with the fewest digits that read back as exactly the
 /// same value, in scientific notation only when it is shorter than fixed
 /// notation.
-pub fn format_shortest(x: f64) -> String {
+pub(crate) fn format_shortest(x: f64) -> String {
     format_significant(x, 17, x)
 }
 

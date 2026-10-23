@@ -23,13 +23,31 @@ pub enum EnrichTest {
 }
 
 impl EnrichTest {
+    /// The name [`str::parse`] reads, such as `"seqs"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EnrichTest::Seqs => "seqs",
+            EnrichTest::Sites => "sites",
+        }
+    }
+}
+
+impl std::str::FromStr for EnrichTest {
+    type Err = crate::error::Error;
+
     /// Parse `"seqs"` or `"sites"`.
-    pub fn parse(s: &str) -> Result<EnrichTest> {
+    fn from_str(s: &str) -> Result<EnrichTest> {
         match s {
             "seqs" => Ok(EnrichTest::Seqs),
             "sites" => Ok(EnrichTest::Sites),
             _ => arg_err(format!("unknown test '{s}'; expected 'seqs' or 'sites'")),
         }
+    }
+}
+
+impl std::fmt::Display for EnrichTest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

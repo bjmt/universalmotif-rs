@@ -8,6 +8,7 @@ use flate2::write::DeflateEncoder;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use universalmotif::genome::Genome;
+use universalmotif::ranges::GRange;
 
 fn random_chroms(rng: &mut StdRng) -> Vec<(String, String)> {
     [("chr1", 5000), ("chr2", 777), ("chrM", 61), ("tiny", 3)]
@@ -50,7 +51,11 @@ fn check_fetches(genome: &Genome, chroms: &[(String, String)], rng: &mut StdRng)
         let seq = &chroms[i].1;
         let a = rng.random_range(0..seq.len());
         let b = rng.random_range(a..=seq.len().min(a + 300));
-        ranges.push((genome.position(&chroms[i].0).unwrap(), a as u64, b as u64));
+        ranges.push(GRange::new(
+            genome.position(&chroms[i].0).unwrap(),
+            a as i64,
+            b as i64,
+        ));
         want.push(seq[a..b].to_string());
     }
     assert_eq!(genome.fetch_many(&ranges, 2).unwrap(), want);

@@ -44,20 +44,6 @@ impl Alphabet {
         Ok(Alphabet::Custom(letters))
     }
 
-    /// Parse an alphabet name: `"DNA"`, `"RNA"`, `"AA"`, or a string of
-    /// letters making up a custom alphabet.
-    pub fn parse(name: &str) -> Result<Self> {
-        match name {
-            "DNA" => Ok(Alphabet::Dna),
-            "RNA" => Ok(Alphabet::Rna),
-            "AA" => Ok(Alphabet::Aa),
-            "custom" => {
-                arg_err("alphabet 'custom' is not accepted; please provide the actual letters")
-            }
-            _ => Alphabet::custom(name.chars()),
-        }
-    }
-
     /// The letters of the alphabet, in row order.
     pub fn letters(&self) -> &[char] {
         match self {
@@ -97,6 +83,24 @@ impl Alphabet {
     /// Row index of a letter, if it belongs to the alphabet.
     pub fn index_of(&self, letter: char) -> Option<usize> {
         self.letters().iter().position(|&l| l == letter)
+    }
+}
+
+impl std::str::FromStr for Alphabet {
+    type Err = crate::error::Error;
+
+    /// Parse an alphabet name: `"DNA"`, `"RNA"`, `"AA"`, or a string of
+    /// letters making up a custom alphabet.
+    fn from_str(name: &str) -> Result<Alphabet> {
+        match name {
+            "DNA" => Ok(Alphabet::Dna),
+            "RNA" => Ok(Alphabet::Rna),
+            "AA" => Ok(Alphabet::Aa),
+            "custom" => {
+                arg_err("alphabet 'custom' is not accepted; please provide the actual letters")
+            }
+            _ => Alphabet::custom(name.chars()),
+        }
     }
 }
 

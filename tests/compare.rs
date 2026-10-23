@@ -5,7 +5,7 @@ mod common;
 use common::*;
 use serde_json::Value;
 use universalmotif::Motif;
-use universalmotif::cluster::{Method, TreeOptions, hclust, motif_tree};
+use universalmotif::cluster::{Linkage, TreeOptions, hclust, motif_tree};
 use universalmotif::compare::{CompareOptions, NullModel, compare_matrix, compare_motifs};
 use universalmotif::merge::{MergeOptions, MergeSimilarOptions, merge_motifs, merge_similar};
 
@@ -212,7 +212,8 @@ fn merge_similar_matches_r() {
             weighted: a.get("weighted").and_then(Value::as_bool).unwrap_or(false),
             nthreads: 1,
         };
-        let (clusters, merged) = merge_similar(&motifs, &opts).unwrap();
+        let res = merge_similar(&motifs, &opts).unwrap();
+        let (clusters, merged) = (res.clusters, res.motifs);
         let want: Vec<usize> = nums(&case["clusters"])
             .iter()
             .map(|&x| x as usize - 1)
@@ -230,7 +231,7 @@ fn merge_similar_matches_r() {
 fn trees_match_r() {
     let motifs = set("dna");
     for (i, case) in load_key("compare.json", "tree").iter().enumerate() {
-        let method = Method::parse(case["method"].as_str().unwrap()).unwrap();
+        let method = case["method"].as_str().unwrap().parse::<Linkage>().unwrap();
         let ctx = format!("tree case {i} ({} {:?})", case["source"], method);
         let dist: Vec<Vec<f64>> = case["dist"].as_array().unwrap().iter().map(nums).collect();
         let tree = hclust(&dist, method).unwrap();
@@ -284,7 +285,7 @@ fn linkage_matrix() {
         vec![4.0, 3.0, 0.0, 2.0],
         vec![5.0, 4.5, 2.0, 0.0],
     ];
-    let t = hclust(&dist, Method::Complete).unwrap();
+    let t = hclust(&dist, Linkage::Complete).unwrap();
     assert_eq!(
         t.linkage(),
         vec![

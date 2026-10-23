@@ -57,8 +57,29 @@ pub enum TrimFrom {
 }
 
 impl TrimFrom {
+    fn left(self) -> bool {
+        matches!(self, TrimFrom::Both | TrimFrom::Left)
+    }
+
+    fn right(self) -> bool {
+        matches!(self, TrimFrom::Both | TrimFrom::Right)
+    }
+
+    /// The name [`str::parse`] reads, such as `"both"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TrimFrom::Both => "both",
+            TrimFrom::Left => "left",
+            TrimFrom::Right => "right",
+        }
+    }
+}
+
+impl std::str::FromStr for TrimFrom {
+    type Err = crate::error::Error;
+
     /// Parse `"both"`, `"left"` or `"right"`.
-    pub fn parse(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> Result<TrimFrom> {
         match s {
             "both" => Ok(TrimFrom::Both),
             "left" => Ok(TrimFrom::Left),
@@ -68,13 +89,11 @@ impl TrimFrom {
             )),
         }
     }
+}
 
-    fn left(self) -> bool {
-        matches!(self, TrimFrom::Both | TrimFrom::Left)
-    }
-
-    fn right(self) -> bool {
-        matches!(self, TrimFrom::Both | TrimFrom::Right)
+impl std::fmt::Display for TrimFrom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -245,7 +264,7 @@ pub fn normalize(motif: &Motif) -> Result<Motif> {
     Motif::from_parts(out)
 }
 
-/// Add gaps to a motif: gap `i` follows column `gaploc[i]`, counting from 1,
+/// Add gaps to a motif: gap `i` comes after the first `gaploc[i]` columns,
 /// and spans `mingap[i]` to `maxgap[i]` positions. Without `gaploc`, the gap
 /// goes in the middle of the motif. Shorter lists are recycled to the length of
 /// the longest.

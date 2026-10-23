@@ -20,6 +20,7 @@ pub fn kmers(letters: &[char], k: usize) -> Vec<String> {
 }
 
 /// Sorted, unique letters of some sequences.
+#[doc(hidden)]
 pub fn sequence_letters<S: AsRef<str>>(seqs: &[S]) -> Vec<char> {
     let mut ascii = [false; 128];
     let mut other = std::collections::BTreeSet::new();
@@ -83,20 +84,19 @@ pub fn count_kmers(seq: &str, k: usize, alphabet: &[char]) -> Vec<u64> {
     counts
 }
 
-/// The part of `s` from 1-based letter `start` to `stop`, inclusive. For
-/// non-ASCII strings, `bounds` holds the byte offset of every letter and of the
-/// end.
-fn letters<'a>(s: &'a str, bounds: Option<&[usize]>, start: usize, stop: usize) -> &'a str {
+/// Letters `start..end` of `s`, counting from 0. For non-ASCII strings,
+/// `bounds` holds the byte offset of every letter and of the end.
+fn letters<'a>(s: &'a str, bounds: Option<&[usize]>, start: usize, end: usize) -> &'a str {
     match bounds {
-        None => &s[start - 1..stop],
-        Some(b) => &s[b[start - 1]..b[stop]],
+        None => &s[start..end],
+        Some(b) => &s[b[start]..b[end]],
     }
 }
 
-/// 1-based start and stop coordinates of sliding windows over a sequence of
-/// length `len`. The last window may be shorter than `window`, unless
-/// `incomplete` is false. Returns no windows
-/// if `window` exceeds `len` or `overlap` is not below `window`.
+/// Sliding windows over a sequence of length `len`, as `(start, end)` with
+/// 0-based, half-open positions. The last window may be shorter than
+/// `window`, unless `incomplete` is false. Returns no windows if `window`
+/// exceeds `len` or `overlap` is not below `window`.
 pub fn windows(len: usize, window: usize, overlap: usize, incomplete: bool) -> Vec<(usize, usize)> {
     if window > len || overlap >= window || window == 0 {
         return Vec::new();
@@ -125,7 +125,7 @@ pub fn windows(len: usize, window: usize, overlap: usize, incomplete: bool) -> V
             out.pop();
         }
     }
-    out
+    out.into_iter().map(|(s, e)| (s - 1, e)).collect()
 }
 
 /// Windowing for [`get_bkg`].
@@ -171,17 +171,17 @@ impl Default for BkgOptions {
     }
 }
 
-/// One row of [`get_bkg`] output. `sequence`, `start` and `stop` are set only
+/// One row of [`get_bkg`] output. `sequence`, `start` and `end` are set only
 /// for per-sequence or windowed counts.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct BkgRow {
     /// Index of the sequence, for per-sequence counts.
     pub sequence: Option<usize>,
-    /// First position of the window, for windowed counts.
+    /// First position of the window, counting from 0, for windowed counts.
     pub start: Option<usize>,
-    /// Last position of the window, for windowed counts.
-    pub stop: Option<usize>,
+    /// Position just past the window, for windowed counts.
+    pub end: Option<usize>,
     /// The k-mer.
     pub kmer: String,
     /// The number of times it occurs.
@@ -279,7 +279,7 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     rows.push(BkgRow {
                         sequence: None,
                         start: None,
-                        stop: None,
+                        end: None,
                         kmer,
                         count: counts[j],
                         probability: probs[j],
@@ -296,7 +296,7 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                         rows.push(BkgRow {
                             sequence: Some(si),
                             start: None,
-                            stop: None,
+                            end: None,
                             kmer: kmer.clone(),
                             count: c[j],
                             probability: probs[si][j],
@@ -354,7 +354,7 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
     if wins
         .iter()
         .flatten()
-        .any(|&(start, stop)| stop - start + 1 < kmax)
+        .any(|&(start, end)| end - start < kmax)
     {
         return arg_err("k must not be greater than the smallest window");
     }
@@ -369,8 +369,8 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                 .zip(&wins)
                 .map(|((s, b), ws)| {
                     ws.iter()
-                        .map(|&(start, stop)| {
-                            count_kmers(letters(s, b.as_deref(), start, stop), k, &alphabet)
+                        .map(|&(start, end)| {
+                            count_kmers(letters(s, b.as_deref(), start, end), k, &alphabet)
                         })
                         .collect()
                 })
@@ -387,11 +387,11 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                 .collect();
             let probs: Vec<Vec<f64>> = summed.iter().map(|c| probabilities(c)).collect();
             for (j, kmer) in kl.iter().enumerate() {
-                for (w, &(start, stop)) in ws.iter().enumerate() {
+                for (w, &(start, end)) in ws.iter().enumerate() {
                     rows.push(BkgRow {
                         sequence: None,
                         start: Some(start),
-                        stop: Some(stop),
+                        end: Some(end),
                         kmer: kmer.clone(),
                         count: summed[w][j],
                         probability: probs[w][j],
@@ -408,11 +408,11 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     .collect();
                 let probs: Vec<Vec<f64>> = c.iter().map(|w| probabilities(w)).collect();
                 for (j, kmer) in kl.iter().enumerate() {
-                    for (w, &(start, stop)) in wins[si].iter().enumerate() {
+                    for (w, &(start, end)) in wins[si].iter().enumerate() {
                         rows.push(BkgRow {
                             sequence: Some(si),
                             start: Some(start),
-                            stop: Some(stop),
+                            end: Some(end),
                             kmer: kmer.clone(),
                             count: c[w][j],
                             probability: probs[w][j],
@@ -448,6 +448,6 @@ mod tests {
         let greek = count_kmers("αβαNββ", 2, &['α', 'β']);
         assert_eq!(greek, [0, 1, 1, 1]);
         let bounds: Vec<usize> = "αβγ".char_indices().map(|(i, _)| i).chain([6]).collect();
-        assert_eq!(letters("αβγ", Some(&bounds), 2, 3), "βγ");
+        assert_eq!(letters("αβγ", Some(&bounds), 1, 3), "βγ");
     }
 }

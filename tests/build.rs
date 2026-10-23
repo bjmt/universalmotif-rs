@@ -32,7 +32,7 @@ fn builder_matches_r() {
             b = b.name(n);
         }
         if let Some(s) = inp["strand"].as_str() {
-            b = b.strand(Strand::parse(s).unwrap());
+            b = b.strand(s.parse::<Strand>().unwrap());
         }
         if inp["isgapped"].as_bool() == Some(true) {
             let u = |k: &str| nums(&inp[k]).iter().map(|&x| x as usize).collect();

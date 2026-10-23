@@ -91,7 +91,8 @@ fn scans_match_r() {
             "{ctx}: sequence"
         );
         assert_eq!(
-            hits.iter().map(|h| h.start).collect::<Vec<_>>(),
+            // R counts positions from 1.
+            hits.iter().map(|h| h.start + 1).collect::<Vec<_>>(),
             ints(&w["start"]),
             "{ctx}: start"
         );
@@ -149,5 +150,5 @@ fn short_sequences_and_lower_case() {
     let hits = scan_sequences(std::slice::from_ref(&m), &["ACG", "aattgactaa"], &opts).unwrap();
     assert!(hits.iter().all(|h| h.sequence == 1));
     let fwd = hits.iter().find(|h| h.strand == Strand::Plus).unwrap();
-    assert_eq!((fwd.start, fwd.end, fwd.matched.as_str()), (3, 8, "TTGACT"));
+    assert_eq!((fwd.start, fwd.end, fwd.matched.as_str()), (2, 8, "TTGACT"));
 }

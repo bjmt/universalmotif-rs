@@ -14,7 +14,13 @@ fn ops_match_r() {
         let input = motif_from_record(&case["input"]);
         let a = &case["args"];
         let ctx = format!("case {i} ({op} on {}, args {a})", input.name);
-        let trim_from = || TrimFrom::parse(a["trim_from"].as_str().unwrap()).unwrap();
+        let trim_from = || {
+            a["trim_from"]
+                .as_str()
+                .unwrap()
+                .parse::<TrimFrom>()
+                .unwrap()
+        };
         let mut skip = Skip::default();
         let got = match op {
             "motif_rc" => reverse_complement(&input, false).map(Some),

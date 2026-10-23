@@ -6,7 +6,7 @@ mod common;
 use common::*;
 use serde_json::Value;
 use universalmotif::Motif;
-use universalmotif::cluster::{Method, hclust};
+use universalmotif::cluster::{Linkage, hclust};
 use universalmotif::coocc::{CooccHit, CooccOptions, motif_coocc};
 use universalmotif::enrich::{EnrichOptions, EnrichTest, enrich_motifs};
 use universalmotif::peaks::{PeakHit, PeaksMode, PeaksOptions, motif_peaks};
@@ -112,7 +112,7 @@ fn distributions_match_r() {
 fn cutree_matches_r() {
     let r = reference();
     for c in r["cutree"].as_array().unwrap() {
-        let method = Method::parse(c["method"].as_str().unwrap()).unwrap();
+        let method = c["method"].as_str().unwrap().parse::<Linkage>().unwrap();
         let dist: Vec<Vec<f64>> = c["dist"].as_array().unwrap().iter().map(nums).collect();
         let tree = hclust(&dist, method).unwrap();
         let ids = |v: &Vec<usize>| v.iter().map(|&x| x as f64 + 1.0).collect::<Vec<_>>();
@@ -140,7 +140,11 @@ fn enrichment_matches_r() {
         let ctx = format!("enrich {a:?}");
         let opts = EnrichOptions {
             pvalue: a.get("pvalue").map(num).unwrap_or(1e-4),
-            test: EnrichTest::parse(a.get("test").and_then(Value::as_str).unwrap_or("seqs"))
+            test: a
+                .get("test")
+                .and_then(Value::as_str)
+                .unwrap_or("seqs")
+                .parse::<EnrichTest>()
                 .unwrap(),
             rc: a.get("RC").and_then(Value::as_bool).unwrap_or(true),
             pseudocount: a.get("pseudocount").map(num).unwrap_or(1.0) as u64,
@@ -348,9 +352,10 @@ fn peaks_match_r() {
         let strand = a.get("seq.strand").and_then(Value::as_object);
         let hits: Vec<PeakHit> = (0..motif_names.len())
             .map(|i| {
-                let mut centre = (start[i] + end[i]) / 2.0;
+                // R counts positions from 1.
+                let mut centre = (start[i] - 1.0 + end[i] - 1.0) / 2.0;
                 if strand.is_some_and(|s| s[&seq_names[i]] == "-") {
-                    centre = 300.0 + 1.0 - centre;
+                    centre = 300.0 - 1.0 - centre;
                 }
                 PeakHit {
                     motif: sorted.iter().position(|m| *m == motif_names[i]).unwrap(),
@@ -361,7 +366,11 @@ fn peaks_match_r() {
             })
             .collect();
         let opts = PeaksOptions {
-            mode: PeaksMode::parse(a.get("mode").and_then(Value::as_str).unwrap_or("central"))
+            mode: a
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("central")
+                .parse::<PeaksMode>()
                 .unwrap(),
             min_window: a.get("min.window").map(num).unwrap_or(10.0) as usize,
             max_window: a.get("max.window").map(|v| num(v) as usize),
@@ -396,7 +405,7 @@ fn peaks_match_r() {
             &format!("{ctx}: best.window"),
         );
         assert_close_vec(
-            &o(|p| p.best_centre),
+            &o(|p| p.best_centre.map(|c| c + 1.0)),
             &nums(&t["best.center"]),
             &format!("{ctx}: centre"),
         );
@@ -428,7 +437,7 @@ fn peaks_match_r() {
             &format!("{ctx}: qvalue"),
         );
         for (p, w) in got.iter().zip(t["centers"].as_array().unwrap()) {
-            let c: Vec<f64> = p.centres.iter().map(|&x| x as f64).collect();
+            let c: Vec<f64> = p.centres.iter().map(|&x| x as f64 + 1.0).collect();
             assert_eq!(c, nums(w), "{ctx}: centres");
         }
     }

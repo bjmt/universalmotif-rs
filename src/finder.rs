@@ -693,7 +693,7 @@ pub struct FoundMotif {
 
 /// The background used by [`motif_finder`]: A, C, G and T or U frequencies over
 /// all sequences, floored at 0.001.
-pub fn finder_background<S: AsRef<str>>(pos: &[S], neg: &[S]) -> [f64; 4] {
+pub(crate) fn finder_background<S: AsRef<str>>(pos: &[S], neg: &[S]) -> [f64; 4] {
     let mut counts = [0f64; 4];
     for s in pos.iter().chain(neg) {
         for b in s.as_ref().bytes() {

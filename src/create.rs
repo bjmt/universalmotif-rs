@@ -1,7 +1,8 @@
 //! Creating motifs from matrices, consensus strings, sets of sites, or at
 //! random.
 
-use rand::{Rng, RngExt};
+use rand::rngs::StdRng;
+use rand::{Rng, RngExt, SeedableRng};
 use rand_distr::{Distribution, Gamma, Poisson};
 
 use crate::alphabet::{AA_IUPAC, AMINO_ACIDS, Alphabet, DNA_IUPAC};
@@ -352,8 +353,12 @@ pub fn from_strings(
 /// Each column is drawn from a Dirichlet distribution whose parameters are the
 /// background frequencies. Without a background, one is drawn too. If
 /// `nsites` is not given, a PPM gets a random value between 50 and 250, and a
-/// PCM gets 100.
-pub fn random<R: Rng + ?Sized>(
+/// PCM gets 100. The same `seed` always gives the same motif.
+pub fn random(width: usize, alphabet: Alphabet, opts: &CreateOptions, seed: u64) -> Result<Motif> {
+    random_with(width, alphabet, opts, &mut StdRng::seed_from_u64(seed))
+}
+
+fn random_with<R: Rng + ?Sized>(
     width: usize,
     alphabet: Alphabet,
     opts: &CreateOptions,
