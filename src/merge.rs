@@ -243,6 +243,7 @@ pub fn merge_similar(
         null: opts.null,
         bkg: opts.bkg,
         nthreads: opts.nthreads,
+        ..Default::default()
     };
     let q = compare_matrix(motifs, &copts, true)?.qvalues;
 

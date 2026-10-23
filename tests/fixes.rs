@@ -197,3 +197,47 @@ fn log_pvalues_survive_underflow() {
         assert!((q.ln() - l).abs() < 1e-12);
     }
 }
+
+#[test]
+fn complete_scores_cover_the_whole_query() {
+    use universalmotif::compare::compare_motifs;
+    let o = CreateOptions {
+        nsites: Some(20.0),
+        pseudocount: 1.0,
+        ..Default::default()
+    };
+    let make = |s: &str| from_strings(&[s], None, &o).unwrap();
+    // A long query, a copy of it, and a short motif matching only its middle.
+    let mut motifs = vec![
+        make("TTGACGTCAGCCATG"),
+        make("TTGACGTCAGCCATG"),
+        make("TGACGTCA"),
+    ];
+    for s in [
+        "CACGTGAA", "GATAAGCT", "CCAATCAG", "AAACCCTA", "TATAAAAG", "GGGGCGGG",
+    ] {
+        motifs.push(make(s));
+    }
+    let partial = compare_motifs(&motifs, &[0], &CompareOptions::default()).unwrap();
+    let complete = compare_motifs(
+        &motifs,
+        &[0],
+        &CompareOptions {
+            complete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let p = |rows: &[universalmotif::compare::Comparison], t: usize| {
+        rows.iter().find(|c| c.target == t).unwrap().pvalue
+    };
+    // Scoring the whole query sets the full copy much further apart from the
+    // short motif that matches only part of it than scoring the overlap does.
+    let gap = |rows: &[universalmotif::compare::Comparison]| p(rows, 2) / p(rows, 1);
+    assert!(gap(&complete) > 5.0 * gap(&partial));
+    assert!(p(&complete, 1) * 1e4 < p(&complete, 2));
+    // The overlap and its mean score are reported either way.
+    let short = complete.iter().find(|c| c.target == 2).unwrap();
+    assert_eq!(short.overlap, 8);
+    assert!(short.score > 0.9);
+}

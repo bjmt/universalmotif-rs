@@ -330,6 +330,14 @@ change is listed here so the R package can be fixed to match.
   scored once per
   position and the combinations are built from those scores, which is
   about twice as fast as scanning every combination separately.
+- **Complete comparison scores.** With `CompareOptions::complete`,
+  comparisons score whole queries rather than overlaps, as TOMTOM does by
+  default: each query column is scored against the median of its
+  correlations with the null columns, so that columns hanging over the end
+  of the target count as typical ones, and the P-value is that of the best
+  of all the alignments tried rather than a Bonferroni correction. The
+  Python package's `compare_motifs(complete=True)` agrees with TOMTOM's
+  P-values to a correlation of 0.999.
 - **Motif match matrices.** `scan::motif_matches` summarises the hits of
   each motif in each sequence as a sparse matrix of matches, hit counts or
   best scores without keeping the hits, for annotating the peaks of
