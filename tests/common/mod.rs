@@ -103,7 +103,7 @@ pub fn motif_from_record(r: &Value) -> Motif {
         matrix: Matrix::from_columns(&cols).unwrap(),
         alphabet: alphabet(r["alphabet"].as_str().unwrap()),
         motif_type: motif_type(r["type"].as_str().unwrap()),
-        // The port gives CWMs no total IC (see DIVERGENCES.md).
+        // The port gives CWMs no total IC.
         icscore: if r["type"] == "CWM" {
             f64::NAN
         } else {
@@ -156,10 +156,10 @@ pub fn assert_opt_close(got: Option<f64>, want: Option<f64>, ctx: &str) {
 pub struct Skip {
     pub nsites: bool,
     /// The R package leaves the total IC and consensus as they were after
-    /// some operations where the port recomputes them (see DIVERGENCES.md).
+    /// some operations where the port recomputes them.
     pub derived: bool,
-    /// The R package rounds some columns to counts differently (see
-    /// DIVERGENCES.md), so the matrix is checked by the caller.
+    /// The R package rounds some columns to counts differently, so the
+    /// matrix is checked by the caller.
     pub matrix: bool,
 }
 
@@ -183,7 +183,7 @@ pub fn own_icscore(m: &Motif) -> f64 {
 
 /// Whether R's rounding of a column of probabilities to `nsites` counts
 /// overshoots by more than one count, in which case the port rounds
-/// differently (see DIVERGENCES.md).
+/// differently.
 pub fn r_rounding_differs(pos: &[f64], nsites: f64) -> bool {
     let nsites = if nsites.is_nan() || nsites <= 1.0 {
         100.0

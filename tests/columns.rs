@@ -51,7 +51,7 @@ fn column_functions_match_r() {
             "ppm_to_icm" => {
                 let pos = nums(&a["pos"]);
                 // The R package gives NaN for relative entropy where a
-                // probability is 0; the port gives 0 (see DIVERGENCES.md).
+                // probability is 0; the port gives 0.
                 let want: Vec<f64> = nums(&case["out"])
                     .iter()
                     .zip(&pos)
@@ -81,8 +81,8 @@ fn column_functions_match_r() {
                 );
                 let want = num(&case["out"]);
                 if want.is_nan() && a["relative_entropy"].as_bool().unwrap() {
-                    // The R package's NaN for a zero probability (see
-                    // DIVERGENCES.md); the port's value is finite.
+                    // The R package's NaN for a zero probability; the port's
+                    // value is finite.
                     assert!(got.is_finite(), "{ctx}: got {got}");
                 } else {
                     assert!(close(got, want), "{ctx}: got {got}, want {want}");

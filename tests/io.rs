@@ -123,8 +123,8 @@ fn readers_match_r() {
                 &nums(&w["pvalue"]),
                 &format!("{ctx}: combined P-values"),
             );
-            // universalmotif drops the third and later lines of a diagram
-            // (see DIVERGENCES.md), so its diagrams can be truncated.
+            // universalmotif drops the third and later lines of a diagram,
+            // so its diagrams can be truncated.
             for (g, d) in got.iter().zip(strs(&w["diagram"])) {
                 assert!(
                     g.diagram == d || (g.diagram.starts_with(&d) && d.ends_with('_')),
@@ -222,7 +222,7 @@ fn writers_match_r() {
                 let got = got.unwrap_or_else(|e| panic!("{ctx}: {e}"));
                 if case["format"] == "homer" {
                     // Thresholds follow HOMER's own scoring rather than the
-                    // R package's (see DIVERGENCES.md and homer_thresholds()).
+                    // R package's (see homer_thresholds()).
                     let strip = |t: &str| {
                         t.lines()
                             .map(|l| match l.strip_prefix('>') {
@@ -235,8 +235,7 @@ fn writers_match_r() {
                     continue;
                 }
                 // The R package leaves trailing spaces in MEME files and writes
-                // E= 0 for motifs without an E-value; the port does neither
-                // (see DIVERGENCES.md).
+                // E= 0 for motifs without an E-value; the port does neither.
                 let tidied;
                 let want = if case["format"] == "meme" {
                     tidied = want

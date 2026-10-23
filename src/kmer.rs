@@ -1,4 +1,4 @@
-//! k-lets, k-let counts and background frequencies of sequences.
+//! k-mers, k-mer counts and background frequencies of sequences.
 
 use rayon::prelude::*;
 
@@ -6,9 +6,9 @@ use crate::error::{Result, arg_err};
 use crate::pvalue::with_threads;
 use crate::scan::reverse_complement_seq;
 
-/// All k-lets of `letters`, in lexicographic order of the letters given, so the
+/// All k-mers of `letters`, in lexicographic order of the letters given, so the
 /// first position varies slowest.
-pub fn klets(letters: &[char], k: usize) -> Vec<String> {
+pub fn kmers(letters: &[char], k: usize) -> Vec<String> {
     let mut out = vec![String::new()];
     for _ in 0..k {
         out = out
@@ -44,9 +44,9 @@ pub fn sequence_letters<S: AsRef<str>>(seqs: &[S]) -> Vec<char> {
         .collect()
 }
 
-/// Counts in a sequence of each k-let of `alphabet`, in [`klets`] order. k-lets
+/// Counts in a sequence of each k-mer of `alphabet`, in [`kmers`] order. k-mers
 /// containing letters outside the alphabet are not counted.
-pub fn count_klets(seq: &str, k: usize, alphabet: &[char]) -> Vec<u64> {
+pub fn count_kmers(seq: &str, k: usize, alphabet: &[char]) -> Vec<u64> {
     let n = alphabet.len();
     let mut counts = vec![0u64; n.pow(k as u32)];
     if k == 0 {
@@ -119,8 +119,7 @@ pub fn windows(len: usize, window: usize, overlap: usize, incomplete: bool) -> V
         out.push((next_start, next_stop));
     }
     if !incomplete {
-        // Only a last window shorter than `window` is dropped (see
-        // DIVERGENCES.md).
+        // Only a last window shorter than `window` is dropped.
         let (start, stop) = *out.last().unwrap();
         if stop - start + 1 < window {
             out.pop();
@@ -142,7 +141,7 @@ pub struct WindowOptions {
 /// Options for [`get_bkg`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct BkgOptions {
-    /// k-let sizes to count.
+    /// k-mer sizes to count.
     pub k: Vec<usize>,
     /// Added to every count.
     pub pseudocount: u64,
@@ -179,7 +178,7 @@ pub struct BkgRow {
     pub sequence: Option<usize>,
     pub start: Option<usize>,
     pub stop: Option<usize>,
-    pub klet: String,
+    pub kmer: String,
     pub count: u64,
     pub probability: f64,
 }
@@ -198,11 +197,11 @@ fn probabilities(counts: &[u64]) -> Vec<f64> {
         .collect()
 }
 
-/// k-let counts and frequencies of sequences.
+/// k-mer counts and frequencies of sequences.
 ///
-/// Rows are ordered by k, k-let and sequence for per-sequence counts; by k-let
+/// Rows are ordered by k, k-mer and sequence for per-sequence counts; by k-mer
 /// across all k and then window start for merged windows; and by sequence name,
-/// k-let and window start for per-sequence windows. Names and k-lets are
+/// k-mer and window start for per-sequence windows. Names and k-mers are
 /// compared bytewise, and `names` gives the sequence names to order by.
 pub fn get_bkg<S: AsRef<str> + Sync>(
     seqs: &[S],
@@ -258,10 +257,10 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
     let Some(win) = opts.window else {
         let mut rows = Vec::new();
         for &k in &ks {
-            let kl = klets(&alphabet, k);
+            let kl = kmers(&alphabet, k);
             let per_seq: Vec<Vec<u64>> = with_threads(opts.nthreads, || {
                 seqs.par_iter()
-                    .map(|s| count_klets(s, k, &alphabet))
+                    .map(|s| count_kmers(s, k, &alphabet))
                     .collect()
             })?;
             if opts.merge {
@@ -269,12 +268,12 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     .map(|j| per_seq.iter().map(|c| c[j]).sum::<u64>() + opts.pseudocount)
                     .collect();
                 let probs = probabilities(&counts);
-                for (j, klet) in kl.into_iter().enumerate() {
+                for (j, kmer) in kl.into_iter().enumerate() {
                     rows.push(BkgRow {
                         sequence: None,
                         start: None,
                         stop: None,
-                        klet,
+                        kmer,
                         count: counts[j],
                         probability: probs[j],
                     });
@@ -285,13 +284,13 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     .map(|c| c.iter().map(|x| x + opts.pseudocount).collect())
                     .collect();
                 let probs: Vec<Vec<f64>> = counts.iter().map(|c| probabilities(c)).collect();
-                for (j, klet) in kl.iter().enumerate() {
+                for (j, kmer) in kl.iter().enumerate() {
                     for (si, c) in counts.iter().enumerate() {
                         rows.push(BkgRow {
                             sequence: Some(si),
                             start: None,
                             stop: None,
-                            klet: klet.clone(),
+                            kmer: kmer.clone(),
                             count: c[j],
                             probability: probs[si][j],
                         });
@@ -355,8 +354,8 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
 
     let mut rows = Vec::new();
     for &k in &ks {
-        let kl = klets(&alphabet, k);
-        // counts[seq][window][klet]
+        let kl = kmers(&alphabet, k);
+        // counts[seq][window][kmer]
         let counts: Vec<Vec<Vec<u64>>> = with_threads(opts.nthreads, || {
             seqs.par_iter()
                 .zip(&bounds)
@@ -364,7 +363,7 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                 .map(|((s, b), ws)| {
                     ws.iter()
                         .map(|&(start, stop)| {
-                            count_klets(letters(s, b.as_deref(), start, stop), k, &alphabet)
+                            count_kmers(letters(s, b.as_deref(), start, stop), k, &alphabet)
                         })
                         .collect()
                 })
@@ -380,13 +379,13 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                 })
                 .collect();
             let probs: Vec<Vec<f64>> = summed.iter().map(|c| probabilities(c)).collect();
-            for (j, klet) in kl.iter().enumerate() {
+            for (j, kmer) in kl.iter().enumerate() {
                 for (w, &(start, stop)) in ws.iter().enumerate() {
                     rows.push(BkgRow {
                         sequence: None,
                         start: Some(start),
                         stop: Some(stop),
-                        klet: klet.clone(),
+                        kmer: kmer.clone(),
                         count: summed[w][j],
                         probability: probs[w][j],
                     });
@@ -401,13 +400,13 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     .map(|w| w.iter().map(|x| x + opts.pseudocount).collect())
                     .collect();
                 let probs: Vec<Vec<f64>> = c.iter().map(|w| probabilities(w)).collect();
-                for (j, klet) in kl.iter().enumerate() {
+                for (j, kmer) in kl.iter().enumerate() {
                     for (w, &(start, stop)) in wins[si].iter().enumerate() {
                         rows.push(BkgRow {
                             sequence: Some(si),
                             start: Some(start),
                             stop: Some(stop),
-                            klet: klet.clone(),
+                            kmer: kmer.clone(),
                             count: c[w][j],
                             probability: probs[w][j],
                         });
@@ -417,14 +416,14 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
         }
     }
     if opts.merge {
-        // Merged windows are ordered by k-let only, across all k.
-        rows.sort_by(|a, b| a.klet.as_bytes().cmp(b.klet.as_bytes()));
+        // Merged windows are ordered by k-mer only, across all k.
+        rows.sort_by(|a, b| a.kmer.as_bytes().cmp(b.kmer.as_bytes()));
     } else {
         rows.sort_by(|a, b| {
             names[a.sequence.unwrap()]
                 .as_bytes()
                 .cmp(names[b.sequence.unwrap()].as_bytes())
-                .then(a.klet.as_bytes().cmp(b.klet.as_bytes()))
+                .then(a.kmer.as_bytes().cmp(b.kmer.as_bytes()))
         });
     }
     Ok(rows)
@@ -435,11 +434,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn klets_counted_for_any_letters() {
-        let ascii = count_klets("AACGNAAC", 2, &['A', 'C', 'G']);
+    fn kmers_counted_for_any_letters() {
+        let ascii = count_kmers("AACGNAAC", 2, &['A', 'C', 'G']);
         // AA, AC, CG, then N breaks the run, then AA, AC.
         assert_eq!(ascii, [2, 2, 0, 0, 0, 1, 0, 0, 0]);
-        let greek = count_klets("αβαNββ", 2, &['α', 'β']);
+        let greek = count_kmers("αβαNββ", 2, &['α', 'β']);
         assert_eq!(greek, [0, 1, 1, 1]);
         let bounds: Vec<usize> = "αβγ".char_indices().map(|(i, _)| i).chain([6]).collect();
         assert_eq!(letters("αβγ", Some(&bounds), 2, 3), "βγ");

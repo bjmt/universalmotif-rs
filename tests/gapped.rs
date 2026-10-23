@@ -1,5 +1,5 @@
 //! Gapped scanning against the R package's `scan_sequences()`, which only
-//! manages the forward strand (see DIVERGENCES.md); both strands are checked
+//! manages the forward strand; both strands are checked
 //! against plain scoring in the crate's unit tests.
 
 mod common;

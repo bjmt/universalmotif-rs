@@ -98,7 +98,7 @@ fn proximity_matches_r() {
             ..Default::default()
         };
         // The R package means to clip zones at chromosome ends but never
-        // does (see DIVERGENCES.md), which matters only when counting
+        // does, which matters only when counting
         // anchors; leaving out the lengths reproduces its arithmetic.
         let chrom_lengths = if opts.count == ProximityCount::Anchors {
             vec![None; chroms.len()]

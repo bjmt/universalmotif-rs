@@ -204,7 +204,7 @@ fn enrichment_matches_r() {
 }
 
 fn check_coocc(got: &[universalmotif::coocc::CooccPair], t: &Value, names: &[String], ctx: &str) {
-    // The port does not test a motif against itself (see DIVERGENCES.md), so
+    // The port does not test a motif against itself, so
     // self pairs are checked on their own and left out of the comparison with
     // R, whose q-values are recomputed without them.
     for p in got.iter().filter(|p| p.a == p.b) {

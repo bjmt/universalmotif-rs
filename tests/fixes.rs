@@ -1,5 +1,5 @@
 //! Behaviour that differs from the R package on purpose, checked directly
-//! rather than against reference values (see DIVERGENCES.md).
+//! rather than against reference values.
 
 mod common;
 

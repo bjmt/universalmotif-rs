@@ -3,7 +3,7 @@
 //! by their properties rather than against R's output.
 
 use universalmotif::create::{CreateOptions, from_strings};
-use universalmotif::kmer::{WindowOptions, count_klets, klets, sequence_letters};
+use universalmotif::kmer::{WindowOptions, count_kmers, kmers, sequence_letters};
 use universalmotif::sample::{ImplantMode, ImplantOptions, implant_motifs, sample_sites};
 use universalmotif::shuffle::{
     ShuffleMethod, ShuffleOptions, create_sequences, shuffle_motifs, shuffle_sequences,
@@ -32,14 +32,14 @@ fn opts(k: usize, method: ShuffleMethod, seed: u64) -> ShuffleOptions {
 }
 
 #[test]
-fn euler_shuffle_keeps_klets() {
+fn euler_shuffle_keeps_kmers() {
     let seqs = random_seqs(20, 120, 3);
     for k in 1..=4 {
         let out = shuffle_sequences(&seqs, &opts(k, ShuffleMethod::Euler, 9)).unwrap();
         assert_ne!(out, seqs, "k={k}: nothing was shuffled");
         for (a, b) in seqs.iter().zip(&out) {
             let alph = sequence_letters(&[a]);
-            assert_eq!(count_klets(a, k, &alph), count_klets(b, k, &alph), "k={k}");
+            assert_eq!(count_kmers(a, k, &alph), count_kmers(b, k, &alph), "k={k}");
             if k > 1 {
                 // The first and last k-1 letters stay put.
                 assert_eq!(a[..k - 1], b[..k - 1], "k={k}");
@@ -91,17 +91,17 @@ fn linear_shuffle_moves_blocks() {
 }
 
 #[test]
-fn markov_shuffle_follows_klet_frequencies() {
+fn markov_shuffle_follows_kmer_frequencies() {
     // A strongly structured sequence: after A always comes C, and so on.
     let seq = "ACGT".repeat(500);
     let out = shuffle_sequences(&[&seq], &opts(2, ShuffleMethod::Markov, 3)).unwrap();
-    let counts = count_klets(&out[0], 2, &DNA);
-    let kl = klets(&DNA, 2);
-    for (klet, c) in kl.iter().zip(&counts) {
-        if ["AC", "CG", "GT", "TA"].contains(&klet.as_str()) {
-            assert!(*c > 400, "{klet}: {c}");
+    let counts = count_kmers(&out[0], 2, &DNA);
+    let kl = kmers(&DNA, 2);
+    for (kmer, c) in kl.iter().zip(&counts) {
+        if ["AC", "CG", "GT", "TA"].contains(&kmer.as_str()) {
+            assert!(*c > 400, "{kmer}: {c}");
         } else {
-            assert_eq!(*c, 0, "{klet}");
+            assert_eq!(*c, 0, "{kmer}");
         }
     }
     assert_eq!(out[0].len(), seq.len());
@@ -131,7 +131,7 @@ fn created_sequences_follow_frequencies() {
     assert!(seqs.iter().all(|s| s.len() == 400));
     let total: Vec<u64> = seqs
         .iter()
-        .map(|s| count_klets(s, 1, &DNA))
+        .map(|s| count_kmers(s, 1, &DNA))
         .fold(vec![0; 4], |a, c| {
             a.iter().zip(&c).map(|(x, y)| x + y).collect()
         });

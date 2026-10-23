@@ -40,7 +40,7 @@ pub struct EnrichOptions {
     pub test: EnrichTest,
     /// Scan both strands.
     pub rc: bool,
-    /// k-lets kept when shuffling the targets into a background.
+    /// k-mers kept when shuffling the targets into a background.
     pub shuffle_k: usize,
     /// Seed for that shuffle.
     pub seed: u64,

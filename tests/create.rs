@@ -41,8 +41,8 @@ fn create_matches_r() {
                 let m = Matrix::from_columns(&cols).unwrap();
                 let got = from_matrix(m, Some(&rows), alph, &opts);
                 // universalmotif drops the row names of single-column
-                // matrices while sorting them and then fails (see
-                // DIVERGENCES.md); this crate handles them.
+                // matrices while sorting them and then fails; this crate
+                // handles them.
                 if cols.len() == 1 && case["motif"].is_null() {
                     let m = got.unwrap_or_else(|e| panic!("{ctx}: {e}"));
                     assert_eq!(m.motif_type, MotifType::Pcm);
@@ -59,7 +59,7 @@ fn create_matches_r() {
                     .collect();
                 // A single consensus string becomes probabilities rounded to
                 // `nsites` counts, which R does unevenly for some ambiguity
-                // letters (see DIVERGENCES.md).
+                // letters.
                 if let ([one], Some(n)) = (s.as_slice(), opts.nsites) {
                     use universalmotif::convert::{consensus_to_ppm, consensus_to_ppm_aa};
                     let dna: Vec<Vec<f64>> = one

@@ -2,8 +2,8 @@
 //! using them to scan, compare, cluster and test sequences.
 //!
 //! This crate is a port of the [universalmotif] R/Bioconductor package and
-//! the engine behind its Python version; [DIVERGENCES.md] lists where the
-//! two differ on purpose.
+//! the engine behind its Python version; besides fixes for bugs in the R
+//! package, [DIVERGENCES.md] lists where the two differ.
 //!
 //! [universalmotif]: https://bioconductor.org/packages/universalmotif
 //! [DIVERGENCES.md]: https://github.com/bjmt/universalmotif-rs/blob/main/DIVERGENCES.md
@@ -58,7 +58,7 @@
 //! | Compare and cluster motifs | [`compare`], [`cluster`], [`metrics`] |
 //! | Enrichment, co-occurrence and positional enrichment | [`enrich`], [`coocc`], [`peaks`] |
 //! | Genomic anchors and matched backgrounds | [`proximity`], [`background`], [`ranges`] |
-//! | Sequences: k-lets, complexity, shuffling, sampling, masking | [`kmer`], [`complexity`], [`shuffle`], [`sample`], [`mask`] |
+//! | Sequences: k-mers, complexity, shuffling, sampling, masking | [`kmer`], [`complexity`], [`shuffle`], [`sample`], [`mask`] |
 //! | De novo motif discovery | [`finder`] |
 //!
 //! Functions that do a lot of work take a thread count, `nthreads`, in their

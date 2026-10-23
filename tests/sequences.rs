@@ -1,4 +1,4 @@
-//! k-lets, backgrounds, complexity and motif discovery against the R
+//! k-mers, backgrounds, complexity and motif discovery against the R
 //! package.
 
 mod common;
@@ -7,7 +7,7 @@ use common::*;
 use serde_json::Value;
 use universalmotif::complexity::{ComplexityOptions, Method, complexity, sequence_complexity};
 use universalmotif::finder::{FinderOptions, motif_finder};
-use universalmotif::kmer::{BkgOptions, WindowOptions, count_klets, get_bkg, klets, windows};
+use universalmotif::kmer::{BkgOptions, WindowOptions, count_kmers, get_bkg, kmers, windows};
 
 fn texts(v: &Value) -> Vec<String> {
     match v {
@@ -26,14 +26,14 @@ fn usizes(v: &Value) -> Vec<usize> {
 }
 
 #[test]
-fn klets_match_r() {
+fn kmers_match_r() {
     for case in load_key("sequences.json", "klets") {
         let letters: Vec<char> = texts(&case["letters"])
             .iter()
             .map(|s| s.chars().next().unwrap())
             .collect();
         let k = num(&case["k"]) as usize;
-        assert_eq!(klets(&letters, k), texts(&case["klets"]));
+        assert_eq!(kmers(&letters, k), texts(&case["klets"]));
     }
     for case in load_key("sequences.json", "count") {
         let s = case["string"].as_str().unwrap();
@@ -44,8 +44,8 @@ fn klets_match_r() {
         };
         alph.sort_unstable();
         alph.dedup();
-        assert_eq!(klets(&alph, k), texts(&case["klets"]), "{s} k={k}");
-        let got: Vec<f64> = count_klets(s, k, &alph).iter().map(|&c| c as f64).collect();
+        assert_eq!(kmers(&alph, k), texts(&case["klets"]), "{s} k={k}");
+        let got: Vec<f64> = count_kmers(s, k, &alph).iter().map(|&c| c as f64).collect();
         assert_eq!(got, nums(&case["counts"]), "{s} k={k}");
     }
 }
@@ -60,9 +60,8 @@ fn windows_match_r() {
         );
         let incomplete = case["incomplete"].as_bool().unwrap();
         if !incomplete {
-            // The R package also drops a complete last window (see
-            // DIVERGENCES.md), so these are checked against the full set of
-            // windows instead.
+            // The R package also drops a complete last window, so these are
+            // checked against the full set of windows instead.
             continue;
         }
         let got = windows(n, w, o, incomplete);
@@ -156,8 +155,8 @@ fn backgrounds_match_r() {
         }
         let t = &case["table"];
         let got = get_bkg(&seqs, &names, &opts).unwrap();
-        let klet: Vec<String> = got.iter().map(|r| r.klet.clone()).collect();
-        assert_eq!(klet, texts(&t["klet"]), "{ctx}: klet");
+        let kmer: Vec<String> = got.iter().map(|r| r.kmer.clone()).collect();
+        assert_eq!(kmer, texts(&t["klet"]), "{ctx}: kmer");
         let count: Vec<f64> = got.iter().map(|r| r.count as f64).collect();
         assert_eq!(count, nums(&t["count"]), "{ctx}: count");
         let prob: Vec<f64> = got.iter().map(|r| r.probability).collect();
@@ -199,9 +198,9 @@ fn motif_finder_matches_r() {
         o.dedup_overlap = a.get("dedup.overlap").map(num).unwrap_or(o.dedup_overlap);
         o.rc = a.get("RC").and_then(Value::as_bool).unwrap_or(true);
         // The port corrects P-values for the words searched and counts every
-        // word in the q-values, where the R package does neither (see
-        // DIVERGENCES.md). The motifs found are the same, so every motif R
-        // reports is looked for among all of the port's, whose P-value must
+        // word in the q-values, where the R package does neither. The motifs
+        // found are the same, so every motif R reports is looked for among
+        // all of the port's, whose P-value must
         // be R's times the words searched, and whose q-value is no smaller.
         let kept = motif_finder(&pos, Some(&neg), &o).unwrap();
         o.qvalue = 1.0;

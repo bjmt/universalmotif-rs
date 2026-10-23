@@ -110,7 +110,7 @@ fn comparisons_match_r() {
             let qc: Vec<String> = rows.iter().map(|c| c.query_consensus.clone()).collect();
             let tc: Vec<String> = rows.iter().map(|c| c.target_consensus.clone()).collect();
             // The R package writes T in RNA consensus strings; the port
-            // writes U (see DIVERGENCES.md).
+            // writes U.
             let rna = case["set"] == "rna";
             let want = |k: &str| -> Vec<String> {
                 texts(&w[k])
@@ -119,7 +119,7 @@ fn comparisons_match_r() {
                     .collect()
             };
             // The R package builds these with its own 75% rule rather than
-            // the motif consensus rule the port uses (see DIVERGENCES.md).
+            // the motif consensus rule the port uses.
             // A single base under the 75% rule is also one under the motif
             // rule, so those letters must agree.
             let agree = |got: &[String], want: &[String], what: &str| {
@@ -158,9 +158,8 @@ fn comparisons_match_r() {
 }
 
 /// The R package gives a P-value of 0 to scores beyond what the parametric
-/// null can reach, where the port gives the null's highest score's (see
-/// DIVERGENCES.md); such values are checked to be small and positive and
-/// then set to R's 0.
+/// null can reach, where the port gives the null's highest score's; such
+/// values are checked to be small and positive and then set to R's 0.
 fn beyond_null(got: &[f64], want: &[f64], null: NullModel) -> Vec<f64> {
     got.iter()
         .zip(want)

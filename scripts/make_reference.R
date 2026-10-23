@@ -1181,7 +1181,7 @@ px_hits <- scan_sequences_lite(px_motifs, px_chrs, pvalue = 1e-3, return.granges
 px_universe <- GRanges(c("chr1", "chr1", "chr2"), IRanges(c(1, 3001, 1), c(2800, 6000, 9000)))
 # R's motif_proximity() counts a hit as near when any of it overlaps the
 # zone, but sizes the null as if hits were single positions, which inflates
-# the counts (see DIVERGENCES.md). The port places each hit at its middle
+# the counts. The port places each hit at its middle
 # position; for 1 bp hits the two agree, so R is run on the hits reduced to
 # their middles (after restricting them to the universe by their middles and
 # collapsing overlapping ones at full width). Distances and the KS test are

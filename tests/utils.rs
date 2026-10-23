@@ -125,9 +125,8 @@ fn column_metrics_and_averages_match_r() {
         );
         let ctx = format!("{} {} {}", case["method"], case["x"], case["y"]);
         match case.get("value") {
-            // The R package does not normalize the WPCC weights (see
-            // DIVERGENCES.md), so the port is checked against a weighted
-            // correlation computed here instead.
+            // The R package does not normalize the WPCC weights, so the port
+            // is checked against a weighted correlation computed here instead.
             Some(_) if metric == ColumnMetric::Wpcc => {
                 let want = weighted_pcc(
                     &nums(&case["x"]),
@@ -236,7 +235,7 @@ fn masking_matches_r() {
     let mr = &r["mask_ranges"];
     let (seqs, names) = (texts(&mr["seqs"]), texts(&mr["names"]));
     // The R package fails on the first and third cases (when every sequence
-    // has exactly one range, or one has none; see DIVERGENCES.md), so those
+    // has exactly one range, or one has none), so those
     // were worked out by hand.
     let fixed: [(usize, [&str; 2]); 2] = [
         (0, ["------GTACGTACGT", "GGGG----AAAATTTT"]),
@@ -302,8 +301,7 @@ fn small_helpers_match_r() {
         match case.get("value") {
             Some(v) => {
                 // The R package declares each complementary pair twice, once
-                // from each letter; the port declares it once (see
-                // DIVERGENCES.md).
+                // from each letter; the port declares it once.
                 let mut seen: Vec<(String, String)> = Vec::new();
                 let want: Vec<&str> = v
                     .as_str()

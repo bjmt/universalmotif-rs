@@ -28,7 +28,7 @@ fn ops_match_r() {
             }
             "trim_motifs" => {
                 // universalmotif stores nsites = 100 in trimmed motifs that had
-                // none (see DIVERGENCES.md); this crate leaves it empty.
+                // none; this crate leaves it empty.
                 skip.nsites = input.nsites.is_none();
                 trim_motif(&input, num(&a["min_ic"]), trim_from())
             }

@@ -6,15 +6,15 @@ of what the R package does: creating motifs and converting between count,
 probability, weight, information content and contribution matrices,
 reading and writing the common motif formats, exact P-values, scanning
 sequences, comparing, merging and clustering motifs, enrichment testing,
-and a fair amount of sequence handling such as k-lets, complexity,
+and a fair amount of sequence handling such as k-mers, complexity,
 shuffling and masking. The supported formats are MEME, JASPAR, HOMER,
 TRANSFAC, CIS-BP, UniPROBE and plain matrices. It is also the engine
 behind the Python version of the package,
 [universalmotif-py](https://github.com/bjmt/universalmotif-py).
 
 Results are checked against the R package itself. Where the two differ, it
-is on purpose, usually because a bug in the R package was fixed here, and
-[DIVERGENCES.md](DIVERGENCES.md) explains each case.
+is on purpose. Bugs found in the R package are fixed here, and
+[DIVERGENCES.md](DIVERGENCES.md) explains the other differences.
 
 ## A quick example
 
@@ -93,6 +93,15 @@ UM_BENCH_MOTIFS=motifs.meme /usr/bin/time -l target/release/examples/bench scan_
 
 Without `UM_BENCH_MOTIFS` it uses 400 random motifs. The tasks are listed
 in the file.
+
+## Citation
+
+If this crate has been useful for your research, please cite the article
+describing universalmotif:
+
+Tremblay BJM (2024). universalmotif: An R package for biological motif
+analysis. *Journal of Open Source Software* **9**, 7012.
+DOI: [10.21105/joss.07012](https://doi.org/10.21105/joss.07012)
 
 ## Licence
 

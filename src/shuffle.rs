@@ -49,11 +49,11 @@ pub(crate) fn shuffle_in_place<T>(rng: &mut StdRng, v: &mut [T]) {
 /// How sequences are shuffled when `k > 1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShuffleMethod {
-    /// Keep the exact k-let counts with Altschul and Erickson's Eulerian walk.
+    /// Keep the exact k-mer counts with Altschul and Erickson's Eulerian walk.
     #[default]
     Euler,
     /// Generate a new sequence from the sequence's own Markov model of order
-    /// `k - 1`; k-let counts are only kept on average.
+    /// `k - 1`; k-mer counts are only kept on average.
     Markov,
     /// Shuffle consecutive blocks of `k` letters; any leftover letters stay at
     /// the end.
@@ -76,7 +76,7 @@ impl ShuffleMethod {
 /// Options for [`shuffle_sequences`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShuffleOptions {
-    /// Size of the k-lets to preserve.
+    /// Size of the k-mers to preserve.
     pub k: usize,
     pub method: ShuffleMethod,
     pub seed: u64,
@@ -109,7 +109,7 @@ fn encode<T: Copy + Ord>(seq: &[T]) -> (Vec<T>, Vec<u32>) {
     (alph, ints)
 }
 
-fn klet_counts(ints: &[u32], k: usize, n: usize) -> Vec<usize> {
+fn kmer_counts(ints: &[u32], k: usize, n: usize) -> Vec<usize> {
     let mut counts = vec![0; n.pow(k as u32)];
     for w in ints.windows(k) {
         counts[w.iter().fold(0, |acc, &i| acc * n + i as usize)] += 1;
@@ -138,8 +138,8 @@ fn shuffle_linear<T: Copy>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T> {
 fn shuffle_markov<T: Copy + Ord>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T> {
     let (alph, ints) = encode(seq);
     let n = alph.len();
-    let counts = klet_counts(&ints, k, n);
-    let letters = klet_counts(&ints, 1, n);
+    let counts = kmer_counts(&ints, k, n);
+    let letters = kmer_counts(&ints, 1, n);
     let weights: Vec<f64> = counts.iter().map(|&c| c as f64).collect();
     let first = weighted_index(rng, &weights).unwrap_or(0);
     let mut out: Vec<u32> = (0..k)
@@ -173,7 +173,7 @@ fn shuffle_euler<T: Copy + Ord>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T>
     }
     let mlets = n.pow(k as u32 - 1);
     let mmlets = n.pow(k as u32 - 2);
-    let counts = klet_counts(&ints, k, n);
+    let counts = kmer_counts(&ints, k, n);
     let mut edges: Vec<Vec<usize>> = (0..mlets)
         .map(|v| counts[v * n..(v + 1) * n].to_vec())
         .collect();
@@ -251,7 +251,7 @@ fn shuffle_one<T: Copy + Ord>(
     }
 }
 
-/// Shuffle sequences while preserving their k-let composition, exactly with the
+/// Shuffle sequences while preserving their k-mer composition, exactly with the
 /// Euler and linear methods and on average with the Markov method. Each
 /// sequence is shuffled with its own alphabet.
 ///
@@ -353,8 +353,8 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
 
 /// Random sequences of `alphabet` letters.
 ///
-/// `freqs` gives the probabilities of every k-let of the alphabet in
-/// [`crate::kmer::klets`] order, and its length decides k. Sequences are drawn
+/// `freqs` gives the probabilities of every k-mer of the alphabet in
+/// [`crate::kmer::kmers`] order, and its length decides k. Sequences are drawn
 /// from the Markov model of order `k - 1` they define. By default letters are
 /// uniform.
 pub fn create_sequences(

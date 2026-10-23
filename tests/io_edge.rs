@@ -1,4 +1,4 @@
-//! Reader cases that universalmotif gets wrong (see DIVERGENCES.md).
+//! Reader cases that universalmotif gets wrong.
 
 use universalmotif::io::{cisbp, homer, jaspar, matrix, meme, transfac};
 use universalmotif::{Alphabet, MotifType};
