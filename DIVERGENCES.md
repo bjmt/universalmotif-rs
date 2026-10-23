@@ -136,9 +136,10 @@ copied, and are not listed here. The other differences are below.
   instead of GRanges.
 - ggplot2 and ggtree. The Python package draws with matplotlib instead:
   `view_motifs()` and `view_logo()` reproduce the R package's letter
-  polygons exactly (they are tested against them), while trees and peak
-  plots follow the R package's layouts without matching them point for
-  point. Tree tips are ordered as `hclust()` orders them rather than
+  polygons exactly (they are tested against them), apart from drawing
+  letters below zero upside down by default (`flip_neg=True`), while trees
+  and peak plots follow the R package's layouts without matching them
+  point for point. Tree tips are ordered as `hclust()` orders them rather than
   ladderized as ggtree does, and the unrooted `radial`, `equal_angle` and
   `daylight` layouts are not available. Plots are not part of the Rust
   crate.
