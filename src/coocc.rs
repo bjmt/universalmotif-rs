@@ -3,7 +3,7 @@
 //! Every pair of motifs is tested for sharing sequences more often than
 //! expected, with a one-sided Fisher's exact test on the 2x2 table of
 //! per-sequence presence. Optionally, the distances between the two motifs'
-//! hits in shared sequences are summarised as well; they do not feed the
+//! hits in shared sequences are summarized as well; they do not feed the
 //! test.
 
 use rayon::prelude::*;

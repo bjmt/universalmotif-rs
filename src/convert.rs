@@ -87,7 +87,7 @@ pub fn ppm_to_pwm(pos: &[f64], bkg: &[f64], pseudocount: f64, nsites: f64) -> Ve
 
 /// Log2 odds back to probabilities. If `2^x` already sums to about 1 it is
 /// returned as is; otherwise it is multiplied by `bkg` and, if needed,
-/// renormalised.
+/// renormalized.
 pub fn pwm_to_ppm(pos: &[f64], bkg: &[f64]) -> Vec<f64> {
     let bkg = bkg_or_uniform(bkg, pos.len());
     let mut out: Vec<f64> = pos.iter().map(|&x| 2f64.powf(x)).collect();

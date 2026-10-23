@@ -65,7 +65,7 @@ pub struct PeakHit {
     pub motif: usize,
     pub sequence: usize,
     /// Centre of the hit, `(start + end) / 2` in 1-based coordinates.
-    pub center: f64,
+    pub centre: f64,
     pub score: f64,
 }
 
@@ -78,7 +78,7 @@ pub struct MotifPeak {
     /// Width and centre of the best window; `None` if no window had a
     /// P-value below 1.
     pub best_window: Option<usize>,
-    pub best_center: Option<f64>,
+    pub best_centre: Option<f64>,
     pub hits_in: usize,
     pub hits_out: usize,
     /// Hits expected in the best window if they were uniform.
@@ -90,22 +90,22 @@ pub struct MotifPeak {
     /// Benjamini-Hochberg q-value across motifs.
     pub qvalue: f64,
     /// Centres of the hits used, rounded half to even, in input order.
-    pub centers: Vec<i64>,
+    pub centres: Vec<i64>,
 }
 
 fn test_motif(
     motif: usize,
-    centers: &[f64],
+    centres: &[f64],
     len: usize,
     widths: &[usize],
     opts: &PeaksOptions,
 ) -> MotifPeak {
-    let n = centers.len();
+    let n = centres.len();
     let lenf = len as f64;
     let mid = lenf / 2.0;
     let (mut best_p, mut best_w, mut best_c, mut best_k) = (1.0, None, None, 0);
     let mut n_tests = 0usize;
-    let count = |c: f64, half: f64| centers.iter().filter(|&&x| (x - c).abs() <= half).count();
+    let count = |c: f64, half: f64| centres.iter().filter(|&&x| (x - c).abs() <= half).count();
     for &w in widths {
         let half = w as f64 / 2.0;
         let p = w as f64 / lenf;
@@ -138,7 +138,7 @@ fn test_motif(
         motif,
         nhits: n,
         best_window: best_w,
-        best_center: best_c,
+        best_centre: best_c,
         hits_in: best_k,
         hits_out: n - best_k,
         expected_in,
@@ -146,7 +146,7 @@ fn test_motif(
         log2_enrichment: enrichment.filter(|&e| e > 0.0).map(f64::log2),
         pvalue,
         qvalue: 0.0,
-        centers: centers.iter().map(|c| c.round_ties_even() as i64).collect(),
+        centres: centres.iter().map(|c| c.round_ties_even() as i64).collect(),
     }
 }
 
@@ -201,7 +201,7 @@ pub fn motif_peaks(
             let c = kept
                 .iter()
                 .filter(|&&i| hits[i].motif == m)
-                .map(|&i| hits[i].center)
+                .map(|&i| hits[i].centre)
                 .collect();
             (m, c)
         })

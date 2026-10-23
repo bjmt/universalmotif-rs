@@ -1,5 +1,5 @@
 //! Operations that transform a motif: reverse complement, trimming,
-//! rounding and renormalisation.
+//! rounding and renormalization.
 
 use crate::alphabet::Alphabet;
 use crate::convert::{convert_type, position_icscore};
@@ -204,7 +204,7 @@ pub fn trim_cwm(
     refresh(motif, matrix, gap, MotifType::Cwm).map(Some)
 }
 
-/// Set probabilities below `pct_tolerance` to zero and renormalise each column.
+/// Set probabilities below `pct_tolerance` to zero and renormalize each column.
 /// The motif is converted to a PPM without a pseudocount for the rounding and
 /// then back to its original type.
 pub fn round_motif(motif: &Motif, pct_tolerance: f64) -> Result<Motif> {

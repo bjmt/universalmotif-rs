@@ -79,7 +79,7 @@ impl ScoreDistribution {
             std::mem::swap(&mut pdf_old, &mut pdf_new);
             pdf_new[..=max_step + max_score].fill(0.0);
             // MEME skips zero entries, but adding their zero products
-            // changes nothing and lets the loop vectorise.
+            // changes nothing and lets the loop vectorize.
             let (lo_k, hi_k) = (lo, hi.min(max_step));
             for (&s, &b) in col.iter().zip(bkg) {
                 let src = &pdf_old[lo_k..=hi_k];

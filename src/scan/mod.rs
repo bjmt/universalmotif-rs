@@ -984,7 +984,7 @@ const MATCH_BLOCK: usize = 1 << 22;
 /// Scanning is as in [`scan_encoded`], with `opts.no_overlaps` applied before
 /// counting. Only the score thresholds are needed, so P-values are computed
 /// only to choose among overlapping hits. Sequences are scanned a block at a time and each block's hits
-/// are summarised straight away, which keeps memory to that of the matrix
+/// are summarized straight away, which keeps memory to that of the matrix
 /// even for hundreds of thousands of sequences.
 ///
 /// # Example
@@ -1035,7 +1035,7 @@ pub fn motif_matches(
         let mut lo = 0;
         while lo < work.len() {
             // A block ends with a whole sequence, so each sequence's hits are
-            // summarised together.
+            // summarized together.
             let (mut hi, mut size) = (lo, 0);
             while hi < work.len() && (size < MATCH_BLOCK || work[hi].0 == work[hi - 1].0) {
                 size += work[hi].1.1 - work[hi].1.0;

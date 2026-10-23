@@ -348,14 +348,14 @@ fn peaks_match_r() {
         let strand = a.get("seq.strand").and_then(Value::as_object);
         let hits: Vec<PeakHit> = (0..motif_names.len())
             .map(|i| {
-                let mut center = (start[i] + end[i]) / 2.0;
+                let mut centre = (start[i] + end[i]) / 2.0;
                 if strand.is_some_and(|s| s[&seq_names[i]] == "-") {
-                    center = 300.0 + 1.0 - center;
+                    centre = 300.0 + 1.0 - centre;
                 }
                 PeakHit {
                     motif: sorted.iter().position(|m| *m == motif_names[i]).unwrap(),
                     sequence: seq_names[i][1..].parse().unwrap(),
-                    center,
+                    centre,
                     score: score[i],
                 }
             })
@@ -396,9 +396,9 @@ fn peaks_match_r() {
             &format!("{ctx}: best.window"),
         );
         assert_close_vec(
-            &o(|p| p.best_center),
+            &o(|p| p.best_centre),
             &nums(&t["best.center"]),
-            &format!("{ctx}: center"),
+            &format!("{ctx}: centre"),
         );
         assert_close_vec(
             &o(|p| p.expected_in),
@@ -428,8 +428,8 @@ fn peaks_match_r() {
             &format!("{ctx}: qvalue"),
         );
         for (p, w) in got.iter().zip(t["centers"].as_array().unwrap()) {
-            let c: Vec<f64> = p.centers.iter().map(|&x| x as f64).collect();
-            assert_eq!(c, nums(w), "{ctx}: centers");
+            let c: Vec<f64> = p.centres.iter().map(|&x| x as f64).collect();
+            assert_eq!(c, nums(w), "{ctx}: centres");
         }
     }
 }

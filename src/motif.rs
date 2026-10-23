@@ -406,7 +406,7 @@ impl Motif {
 ///
 /// - The type is guessed when not given: PCM if every value is 0 or at least
 ///   1, PPM if columns sum to within 0.02 of 1, ICM if nothing is negative,
-///   and PWM otherwise. A PPM whose columns do not sum to 1 is renormalised.
+///   and PWM otherwise. A PPM whose columns do not sum to 1 is renormalized.
 /// - For a PCM, `nsites` defaults to the first column sum; if a different
 ///   `nsites` is given, every column is rescaled to it and rounded.
 /// - The background defaults to uniform.

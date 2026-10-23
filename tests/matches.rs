@@ -1,4 +1,4 @@
-//! motif_matches summarises the same hits scan_table reports.
+//! motif_matches summarizes the same hits scan_table reports.
 
 use std::collections::BTreeMap;
 
@@ -27,7 +27,7 @@ fn matches_agree_with_the_hit_table() {
         )
         .unwrap(),
     ];
-    // More sequence than one block, so blocks are summarised separately.
+    // More sequence than one block, so blocks are summarized separately.
     let seqs = create_sequences(&['A', 'C', 'G', 'T'], 1200, 4000, None, 3, 1).unwrap();
     let enc = EncodedSequences::new(&seqs, &Alphabet::Dna, 1).unwrap();
     for no_overlaps in [

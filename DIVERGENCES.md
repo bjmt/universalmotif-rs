@@ -120,7 +120,7 @@ change is listed here so the R package can be fixed to match.
   0.98 or 1.02, and guessing its type, as `read_matrix()` and
   `create_motif()` do, only accepts sums between 0.99 and 1.01, so such a
   matrix is read as an ICM. The port accepts sums within 0.02 of 1 when
-  guessing and renormalises the columns.
+  guessing and renormalizes the columns.
 - **Numbers are parsed with correct rounding.** R's parser can be one unit
   in the last place off (`as.numeric("5.3e-032")` is not the closest double
   to 5.3e-32), so values read by the two packages can differ in the last
@@ -177,7 +177,7 @@ change is listed here so the R package can be fixed to match.
   strings in `compare_motifs()` results take the most probable letters of
   each column until they reach 75%, which can give a different letter from
   the motif's own consensus. The port uses the motif consensus rule.
-- **WPCC weights are not normalised.** `compare_columns(method = "WPCC")`
+- **WPCC weights are not normalized.** `compare_columns(method = "WPCC")`
   weights each letter by the sum of the two backgrounds, which adds up to
   2, and uses those weights directly as if they summed to 1, so the
   weighted means are doubled and WPCC with a uniform background is not
@@ -338,7 +338,7 @@ change is listed here so the R package can be fixed to match.
   of all the alignments tried rather than a Bonferroni correction. The
   Python package's `compare_motifs(complete=True)` agrees with TOMTOM's
   P-values to a correlation of 0.999.
-- **Motif match matrices.** `scan::motif_matches` summarises the hits of
+- **Motif match matrices.** `scan::motif_matches` summarizes the hits of
   each motif in each sequence as a sparse matrix of matches, hit counts or
   best scores without keeping the hits, for annotating the peaks of
   single-cell ATAC data; the Python package returns it as a SciPy matrix
@@ -350,7 +350,7 @@ change is listed here so the R package can be fixed to match.
   `scan_sequences()`, `motif_proximity()` and `match_bkg(genome=...)` read
   a chromosome or a window at a time, with `extract_ranges()` for the
   sequences of peaks; the R package needs Biostrings and BSgenome for this.
-- **Matching on signal.** The Python package's `signal_stats()` summarises
+- **Matching on signal.** The Python package's `signal_stats()` summarizes
   bigWig signal over ranges, and `match_bkg()` can match the windows it
   draws from a genome to the targets on that signal, such as chromatin
   accessibility, as well as on GC content and length.
@@ -361,6 +361,10 @@ change is listed here so the R package can be fixed to match.
   sequences extracted from a genome back to genomic coordinates, flipping
   the strand of hits in reverse complemented ranges; the R package works
   with GenomicRanges instead.
+- **A command line.** The Python package installs `universalmotif`, also
+  available as `umotif`, with subcommands that run its main functions on
+  motif, FASTA, genome and BED files and write motifs, FASTA or
+  tab-separated tables.
 - **P-values on a log scale.** `motif_finder()` and `enrich_motifs()` also
   report `log10_pvalue` and `log10_qvalue`, which stay finite where the
   P-values themselves are too small for a double and come out as 0.
@@ -375,6 +379,13 @@ change is listed here so the R package can be fixed to match.
 - **Lower case letters.** `score_match()`, `prob_match()` and `mask_seqs()`
   accept lower case DNA, RNA and amino acid letters (Biostrings sequences
   are always upper case); masking keeps the case of the letters it leaves.
+
+## Names
+
+- **Spelling.** Names use underscores where the R package uses dots, and
+  Canadian spelling throughout, so `summarise_motifs()` is
+  `summarize_motifs()`, and `motif_peaks()` reports `best_centre` and
+  `centres` where the R package has `best.center` and `centers`.
 
 ## Not reproducible
 

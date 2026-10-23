@@ -17,7 +17,7 @@ pub enum ColumnMetric {
     Eucl,
     /// Sandelin-Wasserman similarity.
     Sw,
-    /// Symmetrised Kullback-Leibler divergence.
+    /// Symmetrized Kullback-Leibler divergence.
     Kl,
     /// Background-weighted Euclidean distance.
     Weucl,
@@ -179,7 +179,7 @@ pub fn compare_columns(
     })
 }
 
-/// How [`average`] summarises a set of values.
+/// How [`average`] summarizes a set of values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Average {
     /// Arithmetic mean.

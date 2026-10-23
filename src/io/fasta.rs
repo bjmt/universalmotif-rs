@@ -112,7 +112,7 @@ pub(crate) fn read_encoded_batches_reusing<R: BufRead>(
 }
 
 /// Open a FASTA file for reading, decompressing it if it is gzipped or
-/// bgzipped, which is recognised from its first bytes rather than its name.
+/// bgzipped, which is recognized from its first bytes rather than its name.
 pub(crate) fn open(path: impl AsRef<Path>) -> Result<Box<dyn BufRead + Send>> {
     let path = path.as_ref();
     let file = File::open(path)

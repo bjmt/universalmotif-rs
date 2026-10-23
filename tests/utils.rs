@@ -125,7 +125,7 @@ fn column_metrics_and_averages_match_r() {
         );
         let ctx = format!("{} {} {}", case["method"], case["x"], case["y"]);
         match case.get("value") {
-            // The R package does not normalise the WPCC weights (see
+            // The R package does not normalize the WPCC weights (see
             // DIVERGENCES.md), so the port is checked against a weighted
             // correlation computed here instead.
             Some(_) if metric == ColumnMetric::Wpcc => {
