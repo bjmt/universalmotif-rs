@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 (unreleased)
+## 0.1.1 (2026-10-24)
 
 - `create::from_typed_matrix()` builds a motif from a matrix of a known
   type rather than detecting it, such as log-odds filters with no negative
