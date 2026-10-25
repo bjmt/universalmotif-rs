@@ -257,10 +257,31 @@ impl GappedScorer {
                 b.clear();
                 b.extend((c..upto).map(|p| score(piece, p)));
             }
+            // The best that the next piece scores over every size of gap
+            // `j`, from each position of piece `j`, which bounds the hits
+            // starting there more tightly than its best possible score.
+            let mut reach: Vec<Vec<i32>> = Vec::with_capacity(n.saturating_sub(1));
+            for j in 0..n.saturating_sub(1) {
+                let (lo, hi) = lay.sizes[j];
+                let next = &buf[j + 1];
+                let mut r = vec![i32::MIN; buf[j].len()];
+                for g in lo..=hi {
+                    let shift = lay.widths[j] + g;
+                    if shift >= next.len() {
+                        break;
+                    }
+                    let len = r.len().min(next.len() - shift);
+                    for (x, &y) in r[..len].iter_mut().zip(&next[shift..shift + len]) {
+                        *x = (*x).max(y);
+                    }
+                }
+                reach.push(r);
+            }
             let minus = lay.strand == Strand::Minus;
             let mut find = Finder {
                 lay,
                 buf,
+                reach: &reach,
                 c,
                 seg_end,
                 min_score,
@@ -274,7 +295,7 @@ impl GappedScorer {
                     break;
                 }
                 let s = find.buf[0][i - c];
-                if s + lay.best_rest[1] >= min_score {
+                if find.can_reach(0, i, s) {
                     find.extend(i, 0, i, s, 0);
                 }
             }
@@ -286,6 +307,7 @@ impl GappedScorer {
 struct Finder<'a> {
     lay: &'a Layout,
     buf: &'a [Vec<i32>],
+    reach: &'a [Vec<i32>],
     c: usize,
     seg_end: usize,
     min_score: i32,
@@ -296,6 +318,21 @@ struct Finder<'a> {
 }
 
 impl Finder<'_> {
+    /// Whether pieces up to `j`, with piece `j` at `pos` and scoring
+    /// `partial`, can still reach the threshold.
+    fn can_reach(&self, j: usize, pos: usize, partial: i32) -> bool {
+        let lay = self.lay;
+        match self.reach.get(j) {
+            Some(r) => {
+                let next = r[pos - self.c];
+                next != i32::MIN
+                    && i64::from(partial) + i64::from(next) + i64::from(lay.best_rest[j + 2])
+                        >= i64::from(self.min_score)
+            }
+            None => partial >= self.min_score,
+        }
+    }
+
     /// Piece `j` sits at `pos`, and the pieces so far score `partial`;
     /// try every size of the next gap.
     fn extend(&mut self, start: usize, j: usize, pos: usize, partial: i32, combo: u32) {
@@ -315,7 +352,7 @@ impl Finder<'_> {
             }
             return;
         }
-        if partial + lay.best_rest[j + 1] < self.min_score {
+        if !self.can_reach(j, pos, partial) {
             return;
         }
         let (lo, hi) = lay.sizes[j];

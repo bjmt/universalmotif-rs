@@ -39,7 +39,9 @@
   the background, DNA and RNA scans score both strands in one pass, and
   co-occurrence distances only visit the sequences both motifs hit, which
   makes enrichment about 1.6 times faster, DNA scans about 1.35 times
-  faster and co-occurrence up to 1.9 times faster. Results are unchanged.
+  faster and co-occurrence up to 1.9 times faster. Gapped scans skip
+  starts whose next piece cannot reach the threshold over any gap size,
+  which makes them about 1.25 times faster. Results are unchanged.
 
 ## 0.1.1 (2026-10-24)
 
