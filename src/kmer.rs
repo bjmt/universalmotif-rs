@@ -226,7 +226,7 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
     ks.dedup();
     // Borrowed unless reverse complements are added below.
     let mut seqs: Vec<std::borrow::Cow<str>> = seqs.iter().map(|s| s.as_ref().into()).collect();
-    let alphabet = match &opts.alphabet {
+    let mut alphabet = match &opts.alphabet {
         Some(a) => {
             let mut a = a.clone();
             a.sort_unstable();
@@ -241,6 +241,12 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
             .iter()
             .map(|s| reverse_complement_seq(s, rna))
             .collect();
+        // Letters found only on the reverse strands are counted too.
+        if opts.alphabet.is_none() {
+            alphabet.extend(sequence_letters(&rcs));
+            alphabet.sort_unstable();
+            alphabet.dedup();
+        }
         seqs.extend(rcs.into_iter().map(std::borrow::Cow::Owned));
     }
     let names: Vec<String> = if names.len() == seqs.len() {

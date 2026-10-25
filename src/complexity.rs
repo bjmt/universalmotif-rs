@@ -69,23 +69,39 @@ impl std::fmt::Display for ComplexityMethod {
     }
 }
 
-fn letter_counts(seq: &[u8], alph: &[u8]) -> Vec<f64> {
+fn letter_counts<T: PartialEq>(seq: &[T], alph: &[T]) -> Vec<f64> {
     alph.iter()
         .map(|a| seq.iter().filter(|c| *c == a).count() as f64)
         .collect()
 }
 
-fn distinct_words(seq: &[u8], n: usize) -> f64 {
+fn distinct_words<T: Ord>(seq: &[T], n: usize) -> f64 {
     seq.windows(n).collect::<BTreeSet<_>>().len() as f64
 }
 
 /// The complexity of one sequence. `alph` gives the possible letters, by
 /// default those in the sequence, and `max_word` limits Trifonov word sizes.
 pub fn complexity(seq: &str, method: ComplexityMethod, alph: Option<&str>, max_word: usize) -> f64 {
-    let s = seq.as_bytes();
-    let alph: Vec<u8> = match alph {
-        Some(a) if !a.is_empty() => a.bytes().collect(),
-        _ => s
+    let alph = alph.filter(|a| !a.is_empty());
+    if seq.is_ascii() && alph.is_none_or(|a| a.is_ascii()) {
+        let a: Option<Vec<u8>> = alph.map(|a| a.bytes().collect());
+        complexity_of(seq.as_bytes(), a.as_deref(), method, max_word)
+    } else {
+        let s: Vec<char> = seq.chars().collect();
+        let a: Option<Vec<char>> = alph.map(|a| a.chars().collect());
+        complexity_of(&s, a.as_deref(), method, max_word)
+    }
+}
+
+fn complexity_of<T: Ord + Copy>(
+    s: &[T],
+    alph: Option<&[T]>,
+    method: ComplexityMethod,
+    max_word: usize,
+) -> f64 {
+    let alph: Vec<T> = match alph {
+        Some(a) => a.to_vec(),
+        None => s
             .iter()
             .copied()
             .collect::<BTreeSet<_>>()
@@ -124,7 +140,7 @@ pub fn complexity(seq: &str, method: ComplexityMethod, alph: Option<&str>, max_w
         }
         ComplexityMethod::Dust => {
             let l = len - 2.0;
-            let mut counts: std::collections::BTreeMap<&[u8], f64> = Default::default();
+            let mut counts: std::collections::BTreeMap<&[T], f64> = Default::default();
             for w in s.windows(3) {
                 *counts.entry(w).or_default() += 1.0;
             }
@@ -184,20 +200,26 @@ pub fn sequence_complexity<S: AsRef<str> + Sync>(
     seqs: &[S],
     opts: &ComplexityOptions,
 ) -> Result<Vec<WindowComplexity>> {
-    let mut letters: BTreeSet<u8> = seqs.iter().flat_map(|s| s.as_ref().bytes()).collect();
+    let mut letters: BTreeSet<char> = seqs.iter().flat_map(|s| s.as_ref().chars()).collect();
     if let Some(a) = &opts.alphabet {
-        letters.extend(a.bytes());
+        letters.extend(a.chars());
     }
-    let alph: String = letters.into_iter().map(|b| b as char).collect();
-    if alph.len() <= 1 {
+    let alph: String = letters.iter().collect();
+    if letters.len() <= 1 {
         return arg_err(format!(
             "complexity cannot be calculated with a single-letter alphabet ({alph})"
         ));
     }
+    // Sequences with letters outside ASCII are windowed by letter.
+    let wide: Vec<Option<Vec<char>>> = seqs
+        .iter()
+        .map(|s| (!s.as_ref().is_ascii()).then(|| s.as_ref().chars().collect()))
+        .collect();
+    let wide_alph: Vec<char> = letters.into_iter().collect();
     let default_overlap = (opts.window / 2.0).round_ties_even();
     let mut jobs = Vec::new();
     for (si, s) in seqs.iter().enumerate() {
-        let len = s.as_ref().len();
+        let len = wide[si].as_ref().map_or(s.as_ref().len(), Vec::len);
         let (mut size, mut overlap) = (opts.window, opts.overlap.unwrap_or(default_overlap));
         if size > len as f64 {
             overlap = 0.0;
@@ -230,12 +252,17 @@ pub fn sequence_complexity<S: AsRef<str> + Sync>(
                 sequence: si,
                 start,
                 end,
-                complexity: complexity(
-                    &seqs[si].as_ref()[start..end],
-                    opts.method,
-                    Some(&alph),
-                    max_word,
-                ),
+                complexity: match &wide[si] {
+                    Some(c) => {
+                        complexity_of(&c[start..end], Some(&wide_alph), opts.method, max_word)
+                    }
+                    None => complexity(
+                        &seqs[si].as_ref()[start..end],
+                        opts.method,
+                        Some(&alph),
+                        max_word,
+                    ),
+                },
             })
             .collect()
     })

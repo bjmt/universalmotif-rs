@@ -212,9 +212,21 @@ pub fn write<S: AsRef<str>, T: AsRef<str>>(records: &[(S, T)], width: usize) -> 
             out.push_str(seq);
             out.push('\n');
         } else {
-            for chunk in seq.as_bytes().chunks(width) {
-                out.push_str(&String::from_utf8_lossy(chunk));
+            // Line breaks fall between letters, so wide letters are kept whole.
+            let mut breaks: Box<dyn Iterator<Item = usize>> = if seq.is_ascii() {
+                Box::new((width..seq.len()).step_by(width))
+            } else {
+                Box::new(seq.char_indices().map(|(i, _)| i).step_by(width).skip(1))
+            };
+            let mut from = 0;
+            loop {
+                let to = breaks.next().unwrap_or(seq.len());
+                out.push_str(&seq[from..to]);
                 out.push('\n');
+                if to == seq.len() {
+                    break;
+                }
+                from = to;
             }
         }
     }

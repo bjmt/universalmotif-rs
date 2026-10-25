@@ -236,17 +236,17 @@ fn guess_string_alphabet(letters: &[char]) -> Result<Alphabet> {
 
 fn check_string_letters(letters: &[char], alphabet: &Alphabet) -> Result<()> {
     let (allowed, what): (String, &str) = match alphabet {
-        Alphabet::Dna => (DNA_IUPAC.into(), "DNA"),
-        Alphabet::Rna => ("ACGU".into(), "RNA"),
-        Alphabet::Aa => (AA_IUPAC.into(), "AA"),
-        Alphabet::Custom(l) => (l.iter().collect(), "alphabet"),
+        Alphabet::Dna => (DNA_IUPAC.into(), "DNA "),
+        Alphabet::Rna => ("ACGU".into(), "RNA "),
+        Alphabet::Aa => (AA_IUPAC.into(), "AA "),
+        Alphabet::Custom(l) => (l.iter().collect(), ""),
     };
     let bad: String = letters.iter().filter(|&&l| !allowed.contains(l)).collect();
     if bad.is_empty() {
         Ok(())
     } else {
         arg_err(format!(
-            "the input has letters outside the {what} alphabet: {bad}"
+            "the input has letters outside the {what}alphabet: {bad}"
         ))
     }
 }

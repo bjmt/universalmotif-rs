@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- `scoring::get_matches()` rounds a score between grid points up, as
+  scanning and P-values do, rather than returning words scoring below it.
+- `complexity()`, `sequence_complexity()` and `fasta::write()` work by
+  letter rather than by byte, so sequences with letters outside ASCII no
+  longer panic or come out garbled.
+- `get_bkg()` with reverse complements counts letters found only on the
+  reverse strands.
+- Markov shuffles leave a window shorter than k as it is.
+- The median of no values is NaN rather than a panic.
+- Genomes reject `.fai` records with no letters per line and BGZF blocks
+  too small to be valid, rather than panicking.
+- The error for letters outside a custom alphabet no longer says
+  "alphabet alphabet".
+
 ## 0.1.1 (2026-10-24)
 
 - `create::from_typed_matrix()` builds a motif from a matrix of a known

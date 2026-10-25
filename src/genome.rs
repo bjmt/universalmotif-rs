@@ -324,12 +324,16 @@ fn read_fai(path: &Path) -> io::Result<Option<FaiIndex>> {
                 .and_then(|v| v.trim().parse().ok())
                 .ok_or_else(|| bad(format!("bad line in {}: {line}", path.display())))
         };
+        let (length, line_bases, line_width) = (num(1)?, num(3)?, num(4)?);
+        if length > 0 && (line_bases == 0 || line_width < line_bases) {
+            return Err(bad(format!("bad line in {}: {line}", path.display())));
+        }
         names.push(fields[0].to_string());
-        lengths.push(num(1)?);
+        lengths.push(length);
         records.push(FaiRecord {
             offset: num(2)?,
-            line_bases: num(3)?,
-            line_width: num(4)?,
+            line_bases,
+            line_width,
         });
     }
     Ok(Some((names, lengths, records)))
@@ -433,7 +437,8 @@ fn bgzf_blocks(path: &Path) -> io::Result<Vec<(u64, u64)>> {
             }
             k += 4 + slen;
         }
-        let Some(bsize) = bsize else {
+        // A block holds at least its header, extra field and 8-byte footer.
+        let Some(bsize) = bsize.filter(|&b| b >= 20 + xlen as u64) else {
             return Err(bad(NOT_BGZIP));
         };
         let mut isize = [0u8; 4];

@@ -296,8 +296,8 @@ pub fn average(values: &[f64], how: Average) -> f64 {
             if s == 0.0 { 0.0 } else { (s / n).exp() }
         }
         Average::Median => {
-            if values.len() == 1 {
-                return values[0];
+            if values.len() <= 1 {
+                return values.first().copied().unwrap_or(f64::NAN);
             }
             let mut v = values.to_vec();
             v.sort_by(f64::total_cmp);

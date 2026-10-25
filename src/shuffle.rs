@@ -161,6 +161,9 @@ fn shuffle_linear<T: Copy>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T> {
 }
 
 fn shuffle_markov<T: Copy + Ord>(seq: &[T], k: usize, rng: &mut StdRng) -> Vec<T> {
+    if seq.len() < k {
+        return seq.to_vec();
+    }
     let (alph, ints) = encode(seq);
     let n = alph.len();
     let counts = kmer_counts(&ints, k, n);

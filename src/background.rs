@@ -201,8 +201,10 @@ pub struct MatchOptions {
     pub n_bins_gc: usize,
     /// Quantile bins of sequence length; 10 by default.
     pub n_bins_length: usize,
-    /// Draw each universe sequence at most once, falling back to drawing with
-    /// replacement from nearby bins when they run out.
+    /// Draw each universe sequence at most once across all targets. Either
+    /// way, the draws for one target are distinct, coming from nearby bins
+    /// when its own bin holds too few and then with replacement when those
+    /// run out too.
     pub unique: bool,
     /// Seed for the random draws.
     pub seed: u64,

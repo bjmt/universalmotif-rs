@@ -8,7 +8,7 @@
 //! scores `-Inf`.
 
 use crate::alphabet::Alphabet;
-use crate::cdf::grid_value;
+use crate::cdf::{grid_value, score_grid_ceiling};
 use crate::convert::convert_type;
 use crate::error::{Result, arg_err};
 use crate::motif::{Motif, MotifType};
@@ -251,7 +251,7 @@ pub fn get_matches(motif: &Motif, score: f64, allow_nonfinite: bool) -> Result<V
             "the score is below the lowest possible score, {lo}"
         ));
     }
-    let target = (score * 1000.0).trunc() as i64;
+    let target = score_grid_ceiling(score) as i64;
     let width = pwm.width();
     // Non-finite entries take a stand-in for minus infinity, low enough to
     // rule out any word using one but small enough that a whole word of
