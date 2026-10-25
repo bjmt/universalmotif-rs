@@ -35,6 +35,11 @@
   times faster on four for amino acid motifs, and P-value tables are built
   in cache-sized blocks, which makes amino acid P-values about 1.5 times
   faster. Results are unchanged.
+- Enrichment builds each motif's P-value table once for the targets and
+  the background, DNA and RNA scans score both strands in one pass, and
+  co-occurrence distances only visit the sequences both motifs hit, which
+  makes enrichment about 1.6 times faster, DNA scans about 1.35 times
+  faster and co-occurrence up to 1.9 times faster. Results are unchanged.
 
 ## 0.1.1 (2026-10-24)
 

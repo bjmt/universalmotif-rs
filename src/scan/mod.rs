@@ -462,6 +462,35 @@ fn scan_chunk(
         let Scorers::Packed(scorers) = &p.scorers else {
             continue;
         };
+        let hit = |i: usize, minus: bool, score: i32| RawHit {
+            motif: mi as u32,
+            sequence: si as u32,
+            start: i as u32,
+            minus,
+            score,
+            id: 0,
+            combo: 0,
+            pvalue: f64::NAN,
+        };
+        if let [(Strand::Plus, plus), (Strand::Minus, minus)] = scorers.as_slice() {
+            // Both strands from one read of each window's letters.
+            for i in c..last {
+                let q = &quads[i - c..];
+                let (mut sp, mut sm) = (0i32, 0i32);
+                for (g, (tp, tm)) in plus.groups.iter().zip(&minus.groups).enumerate() {
+                    let code = q[4 * g] as usize;
+                    sp += tp[code];
+                    sm += tm[code];
+                }
+                if sp >= p.min_score {
+                    out.push(hit(i, false, sp));
+                }
+                if sm >= p.min_score {
+                    out.push(hit(i, true, sm));
+                }
+            }
+            continue;
+        }
         for (strand, scorer) in scorers {
             for i in c..last {
                 let q = &quads[i - c..];
@@ -470,16 +499,7 @@ fn scan_chunk(
                     s += t[q[4 * g] as usize];
                 }
                 if s >= p.min_score {
-                    out.push(RawHit {
-                        motif: mi as u32,
-                        sequence: si as u32,
-                        start: i as u32,
-                        minus: *strand == Strand::Minus,
-                        score: s,
-                        id: 0,
-                        combo: 0,
-                        pvalue: f64::NAN,
-                    });
+                    out.push(hit(i, *strand == Strand::Minus, s));
                 }
             }
         }

@@ -92,6 +92,9 @@ struct MotifHits {
     /// (sequence, first, end) for each sequence hit, in sequence order.
     runs: Vec<(usize, usize, usize)>,
     present: Vec<u64>,
+    /// Sequences with hits before each word of `present`, which is the index
+    /// in `runs` of the first sequence in that word.
+    rank: Vec<u32>,
 }
 
 impl MotifHits {
@@ -111,10 +114,17 @@ impl MotifHits {
                 }
             }
         }
+        let mut rank = Vec::with_capacity(words);
+        let mut before = 0u32;
+        for w in &present {
+            rank.push(before);
+            before += w.count_ones();
+        }
         MotifHits {
             starts: hits.into_iter().map(|h| h.1).collect(),
             runs,
             present,
+            rank,
         }
     }
 
@@ -124,41 +134,45 @@ impl MotifHits {
 }
 
 /// The smallest distance between start positions of the two motifs' hits in
-/// each sequence they share. For a motif paired with itself, it is the distance
-/// between two of its hits.
-fn nearest_distances(a: &MotifHits, b: &MotifHits, same: bool) -> Vec<f64> {
+/// each sequence they share, keeping those of at most `max`. For a motif
+/// paired with itself, it is the distance between two of its hits.
+fn nearest_distances(a: &MotifHits, b: &MotifHits, same: bool, max: i64) -> Vec<f64> {
     let mut out = Vec::new();
     if same {
         for &(_, lo, hi) in &a.runs {
-            if let Some(d) = a.starts[lo..hi].windows(2).map(|w| w[1] - w[0]).min() {
+            if let Some(d) = a.starts[lo..hi].windows(2).map(|w| w[1] - w[0]).min()
+                && d <= max
+            {
                 out.push(d as f64);
             }
         }
         return out;
     }
-    let (mut i, mut j) = (0, 0);
-    while i < a.runs.len() && j < b.runs.len() {
-        let (sa, la, ha) = a.runs[i];
-        let (sb, lb, hb) = b.runs[j];
-        if sa < sb {
-            i += 1;
-        } else if sb < sa {
-            j += 1;
-        } else {
+    // Only the sequences both motifs hit are visited, in order. Each one's
+    // run is found by counting the sequences with hits before it.
+    fn run_of(m: &MotifHits, w: usize, below: u64) -> &[i64] {
+        let (_, lo, hi) = m.runs[(m.rank[w] + (m.present[w] & below).count_ones()) as usize];
+        &m.starts[lo..hi]
+    }
+    for (w, (&pa, &pb)) in a.present.iter().zip(&b.present).enumerate() {
+        let mut shared = pa & pb;
+        while shared != 0 {
+            let bit = shared.trailing_zeros();
+            shared &= shared - 1;
+            let below = (1u64 << bit) - 1;
+            let (x, y) = (run_of(a, w, below), run_of(b, w, below));
             // Merge the two sorted lists, tracking the closest pair.
-            let (x, y) = (&a.starts[la..ha], &b.starts[lb..hb]);
             let (mut p, mut q, mut best) = (0, 0, i64::MAX);
-            while p < x.len() && q < y.len() {
-                best = best.min((x[p] - y[q]).abs());
-                if x[p] < y[q] {
-                    p += 1;
-                } else {
-                    q += 1;
-                }
+            while p < x.len() && q < y.len() && best > 0 {
+                let d = x[p] - y[q];
+                best = best.min(d.abs());
+                let step = (d < 0) as usize;
+                p += step;
+                q += 1 - step;
             }
-            out.push(best as f64);
-            i += 1;
-            j += 1;
+            if best <= max {
+                out.push(best as f64);
+            }
         }
     }
     out
@@ -204,6 +218,9 @@ pub fn motif_coocc(
         }
     }
     let pc = opts.pseudocount;
+    // Distances are whole numbers, so comparing them with the cutoff as an
+    // integer keeps the same ones as comparing as floats.
+    let max_d = |m: u64| i64::try_from(m).unwrap_or(i64::MAX);
     let mut out: Vec<CooccPair> = with_threads(opts.nthreads, || {
         pairs
             .par_iter()
@@ -225,8 +242,7 @@ pub fn motif_coocc(
                         median_distance: None,
                     };
                     if let Some(maxd) = opts.max_distance {
-                        let mut close = nearest_distances(mi, mi, true);
-                        close.retain(|&d| d <= maxd as f64);
+                        let close = nearest_distances(mi, mi, true, max_d(maxd));
                         p.both_clustered = Some(close.len() as u64);
                         p.median_distance = median(&close);
                     }
@@ -257,12 +273,11 @@ pub fn motif_coocc(
                     median_distance: None,
                 };
                 if let Some(maxd) = opts.max_distance {
-                    let mut close = if both > 0 {
-                        nearest_distances(mi, mj, false)
+                    let close = if both > 0 {
+                        nearest_distances(mi, mj, false, max_d(maxd))
                     } else {
                         Vec::new()
                     };
-                    close.retain(|&d| d <= maxd as f64);
                     p.both_clustered = Some(close.len() as u64);
                     p.median_distance = median(&close);
                 }

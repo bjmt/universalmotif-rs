@@ -124,25 +124,37 @@ struct Counts {
     sites: Vec<usize>,
 }
 
-fn count_hits<S: AsRef<str> + Sync>(
+/// Hit counts in the targets and in the background, from one scan of both
+/// so that each motif's scoring tables are built once. The first `n_tgt`
+/// sequences are the targets.
+fn count_hits(
     motifs: &[Motif],
-    seqs: &[S],
+    seqs: &[&str],
+    n_tgt: usize,
     opts: &ScanOptions,
-) -> Result<Counts> {
+) -> Result<(Counts, Counts)> {
     let hits = scan_table(motifs, seqs, opts)?;
-    let mut sites = vec![0; motifs.len()];
-    let mut nseqs = vec![0; motifs.len()];
+    let empty = || Counts {
+        seqs: vec![0; motifs.len()],
+        sites: vec![0; motifs.len()],
+    };
+    let (mut tgt, mut neg) = (empty(), empty());
     // Hits come ordered by motif and sequence, so a new sequence for a motif
     // shows up as a change from the previous row.
     let mut last: Option<(i64, i64)> = None;
     for (&m, &s) in hits.motif.iter().zip(&hits.sequence) {
-        sites[m as usize] += 1;
+        let c = if (s as usize) < n_tgt {
+            &mut tgt
+        } else {
+            &mut neg
+        };
+        c.sites[m as usize] += 1;
         if last != Some((m, s)) {
-            nseqs[m as usize] += 1;
+            c.seqs[m as usize] += 1;
             last = Some((m, s));
         }
     }
-    Ok(Counts { seqs: nseqs, sites })
+    Ok((tgt, neg))
 }
 
 /// Test motifs for enrichment in `sequences` relative to `background`, which by
@@ -194,8 +206,12 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
         nthreads: opts.nthreads,
         ..Default::default()
     };
-    let tgt = count_hits(motifs, sequences, &scan)?;
-    let neg = count_hits(motifs, &bkg, &scan)?;
+    let both: Vec<&str> = sequences
+        .iter()
+        .map(|s| s.as_ref())
+        .chain(bkg.iter().copied())
+        .collect();
+    let (tgt, neg) = count_hits(motifs, &both, sequences.len(), &scan)?;
     let (n_tgt, n_bkg) = (sequences.len(), bkg.len());
     let tgt_lens: Vec<usize> = sequences.iter().map(|s| s.as_ref().len()).collect();
     let bkg_lens: Vec<usize> = bkg.iter().map(|s| s.len()).collect();
