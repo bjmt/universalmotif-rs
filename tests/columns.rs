@@ -3,6 +3,7 @@
 mod common;
 
 use common::*;
+use universalmotif::MotifType;
 use universalmotif::convert::*;
 
 #[test]
@@ -68,7 +69,15 @@ fn column_functions_match_r() {
                 )
             }
             "icm_to_ppm" => {
-                assert_close_vec(&icm_to_ppm(&nums(&a["pos"])), &nums(&case["out"]), &ctx)
+                // The R package gives NaN for a column of zeros; the port
+                // gives a uniform column.
+                let pos = nums(&a["pos"]);
+                let want = if pos.iter().all(|&p| p == 0.0) {
+                    vec![1.0 / pos.len() as f64; pos.len()]
+                } else {
+                    nums(&case["out"])
+                };
+                assert_close_vec(&icm_to_ppm(&pos), &want, &ctx)
             }
             "position_icscore" => {
                 let got = position_icscore(
@@ -98,12 +107,17 @@ fn column_functions_match_r() {
                 assert_eq!(got.to_string(), case["out"].as_str().unwrap(), "{ctx}");
             }
             "get_consensus_aa" => {
-                let got = consensus_letter_aa(
-                    &nums(&a["pos"]),
-                    motif_type(a["type"].as_str().unwrap()),
-                    num(&a["pseudocount"]),
-                );
-                assert_eq!(got.to_string(), case["out"].as_str().unwrap(), "{ctx}");
+                let pos = nums(&a["pos"]);
+                let kind = motif_type(a["type"].as_str().unwrap());
+                let got = consensus_letter_aa(&pos, kind, num(&a["pseudocount"]));
+                // An ICM column of zeros is uniform in the port, so unclear,
+                // where the R package's NaN column falls through to A.
+                let want = if kind == MotifType::Icm && pos.iter().all(|&p| p == 0.0) {
+                    "X"
+                } else {
+                    case["out"].as_str().unwrap()
+                };
+                assert_eq!(got.to_string(), want, "{ctx}");
             }
             "consensus_to_ppm" => {
                 let l = a["letter"].as_str().unwrap().chars().next().unwrap();

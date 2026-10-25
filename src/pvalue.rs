@@ -11,7 +11,7 @@ use crate::convert::convert_type;
 use crate::error::{Error, Result, arg_err};
 use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType};
-use crate::ops::normalize;
+use crate::ops::with_pseudocount;
 
 /// Options for [`motif_pvalue`] and [`pvalue_to_score`].
 #[derive(Debug, Clone, PartialEq)]
@@ -57,11 +57,12 @@ pub struct ScoringMatrix {
 
 /// Prepare the PWM a motif is scored with, as `motif_pvalue()` does.
 ///
-/// A finite PWM is used as it is when the background is its own, because
-/// converting back and forth can move entries across integer score boundaries.
-/// Otherwise the motif is converted to a PPM and then to a PWM against `bkg`,
-/// which defaults to its own background. If that PWM would have infinite values
-/// the pseudocount is first reapplied with [`normalize`].
+/// Against its own background, which is the default, the motif's PWM is used
+/// as scanning uses it, because converting back and forth can move entries
+/// across integer score boundaries. Otherwise the motif is converted to a PPM
+/// and then to a PWM against `bkg`. Either way, if the motif's PWM would have
+/// infinite values the pseudocount is first reapplied with
+/// [`normalize`](crate::ops::normalize) (through the probabilities of a CWM).
 pub fn scoring_matrix(motif: &Motif, bkg: Option<&[f64]>) -> Result<ScoringMatrix> {
     let bkg = match bkg {
         Some(b) => {
@@ -75,23 +76,30 @@ pub fn scoring_matrix(motif: &Motif, bkg: Option<&[f64]>) -> Result<ScoringMatri
         }
         None => motif.bkg.clone(),
     };
-    if motif.motif_type == MotifType::Pwm
-        && motif.matrix.as_slice().iter().all(|v| v.is_finite())
-        && bkg == motif.bkg
-    {
+    // Against its own background the motif's PWM is used as scanning uses
+    // it, since converting back and forth can move entries across integer
+    // score boundaries.
+    let pwm = convert_type(motif, MotifType::Pwm, None, false)?;
+    let infinite = pwm.matrix.as_slice().iter().any(|v| v.is_infinite());
+    if bkg == motif.bkg {
+        let pwm = if infinite {
+            convert_type(&with_pseudocount(motif)?, MotifType::Pwm, None, false)?
+        } else {
+            pwm
+        };
         return Ok(ScoringMatrix {
-            pwm: motif.matrix.clone(),
+            pwm: pwm.into_parts().matrix,
             bkg,
-            pseudocount_added: false,
+            pseudocount_added: infinite,
         });
     }
-    let mut ppm = convert_type(motif, MotifType::Ppm, None, false)?;
-    let pwm = convert_type(&ppm, MotifType::Pwm, None, false)?;
-    let mut pseudocount_added = false;
-    if pwm.matrix.as_slice().iter().any(|v| v.is_infinite()) {
-        ppm = normalize(&ppm)?;
-        pseudocount_added = true;
-    }
+    let base = if infinite {
+        with_pseudocount(motif)?
+    } else {
+        motif.clone()
+    };
+    let ppm = convert_type(&base, MotifType::Ppm, None, false)?;
+    let pseudocount_added = infinite;
     let mut parts = ppm.into_parts();
     parts.bkg = bkg.clone();
     let ppm = Motif::from_parts(parts)?;

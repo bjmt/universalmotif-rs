@@ -500,6 +500,7 @@ pub fn shuffle_motifs(motifs: &[Motif], k: usize, seed: u64) -> Result<Vec<Motif
         let new: Vec<&[f64]> = order[next..next + w].iter().map(|&i| cols[i]).collect();
         next += w;
         let m = Motif::builder(Matrix::from_columns(&new)?, ppm.alphabet.clone())
+            .motif_type(Some(MotifType::Ppm))
             .name(format!("{} [shuffled]", ppm.name))
             .bkg(Some(ppm.bkg.clone()))
             .bkgsites(ppm.bkgsites)
@@ -507,13 +508,11 @@ pub fn shuffle_motifs(motifs: &[Motif], k: usize, seed: u64) -> Result<Vec<Motif
             .strand(ppm.strand)
             .pseudocount(ppm.pseudocount)
             .build()?;
-        out.push(
-            if orig.motif_type != MotifType::Ppm && m.motif_type != orig.motif_type {
-                convert_type(&m, orig.motif_type, None, false)?
-            } else {
-                m
-            },
-        );
+        out.push(if orig.motif_type != MotifType::Ppm {
+            convert_type(&m, orig.motif_type, None, false)?
+        } else {
+            m
+        });
     }
     Ok(out)
 }

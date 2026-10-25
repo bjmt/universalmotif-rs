@@ -130,7 +130,18 @@ fn read_record(lines: &[&str]) -> Result<Option<Motif>> {
         .motif_type(Some(MotifType::Ppm))
         .nsites(Some(nsites))
         .build()?;
-    convert_type(&ppm, MotifType::Pcm, None, false).map(Some)
+    let pcm = convert_type(&ppm, MotifType::Pcm, None, false)?;
+    // Whole counts with the same sum in every column are kept exactly, since
+    // converting back from probabilities takes an nsites of 1 for 100.
+    let even = counts
+        .iter()
+        .all(|c| c.iter().all(|v| v.fract() == 0.0) && c.iter().sum::<f64>() == nsites);
+    if !even {
+        return Ok(Some(pcm));
+    }
+    let mut parts = pcm.into_parts();
+    parts.matrix = Matrix::from_vec(4, counts.len(), counts.concat())?;
+    Motif::from_parts(parts).map(Some)
 }
 
 /// Options for [`write()`].

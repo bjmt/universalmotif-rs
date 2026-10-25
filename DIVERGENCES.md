@@ -108,6 +108,14 @@ copied, and are not listed here. The other differences are below.
   `get_klets()` are `count_kmers()` and `get_kmers()`, and `get_bkg()`
   names its first column `kmer` rather than `klet`.
 
+## Conventions
+
+- **Total IC after a new pseudocount.** Converting a motif to another type
+  with a new pseudocount gives the total IC of the input with that
+  pseudocount, so that converting never changes it. The R package
+  recomputes it from the new matrix as its new type, which differs for
+  ICM outputs and for PWMs converted to PPMs.
+
 ## Not reproducible
 
 - **Random sequences, shuffles and samples.** `shuffle_sequences()`,

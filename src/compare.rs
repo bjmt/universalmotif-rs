@@ -839,9 +839,14 @@ fn finish_comparisons<C: Col>(
 ) -> Result<Vec<Comparison>> {
     let cols: Vec<Vec<C>> = columns(motifs)?;
 
+    // The alignments of each query, gathered in one pass.
+    let mut by_query: Vec<Vec<usize>> = vec![Vec::new(); motifs.len()];
+    for (k, a) in al.iter().enumerate() {
+        by_query[a.query].push(k);
+    }
     let mut qvals = vec![f64::NAN; al.len()];
     for &q in queries {
-        let rows: Vec<usize> = (0..al.len()).filter(|&k| al[k].query == q).collect();
+        let rows = std::mem::take(&mut by_query[q]);
         let adj = crate::stats::p_adjust_bh(&rows.iter().map(|&k| pvals[k]).collect::<Vec<_>>());
         for (k, v) in rows.into_iter().zip(adj) {
             qvals[k] = v;

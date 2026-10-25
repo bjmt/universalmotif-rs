@@ -141,14 +141,19 @@ pub fn ppm_to_icm(pos: &[f64], bkg: &[f64], relative_entropy: bool) -> Vec<f64> 
         let height_after = pos.iter().fold(0.0, |acc, &p| {
             acc + if p > 0.0 { -p * p.log2() } else { 0.0 }
         });
-        let total_ic = (n as f64).log2() - height_after;
+        // Rounding can take a uniform column just below zero.
+        let total_ic = ((n as f64).log2() - height_after).max(0.0);
         pos.iter().map(|&p| p * total_ic).collect()
     }
 }
 
-/// Information content heights back to probabilities.
+/// Information content heights back to probabilities. A column without
+/// information content becomes uniform.
 pub fn icm_to_ppm(pos: &[f64]) -> Vec<f64> {
     let total = sum(pos);
+    if total == 0.0 {
+        return vec![1.0 / pos.len() as f64; pos.len()];
+    }
     pos.iter().map(|&p| p / total).collect()
 }
 
@@ -444,6 +449,16 @@ pub fn convert_type(
             .collect()
     });
 
+    // A new pseudocount changes the probabilities, and with them the
+    // consensus. PWMs go back to probabilities with their own background.
+    if pseudocount.is_some_and(|p| p != motif.pseudocount) {
+        let (probs, kind) = if to == MotifType::Pwm {
+            (out.map_columns(|c| pwm_to_ppm(c, &bkg)), MotifType::Ppm)
+        } else {
+            (out.clone(), to)
+        };
+        parts.consensus = Motif::compute_consensus(&probs, &parts.alphabet, kind, pseudo);
+    }
     parts.matrix = out;
     parts.motif_type = to;
     if from == MotifType::Cwm {

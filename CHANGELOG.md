@@ -15,6 +15,21 @@
   too small to be valid, rather than panicking.
 - The error for letters outside a custom alphabet no longer says
   "alphabet alphabet".
+- `score_match()`, `motif_range()`, `get_matches()` and P-values add a
+  missing pseudocount the way scanning does, so a word always scores what
+  a scan reports, and `normalize()` gives a PCM without one a pseudocount
+  of 1. A CWM goes through its probabilities.
+- Converting with a new pseudocount updates the consensus.
+- A uniform column converts to an IC column of zeros, rather than one just
+  below zero that fails validation, and back to a uniform column.
+- Merging and `shuffle_motifs()` keep probability matrices whose columns
+  each hold one letter as probabilities, rather than taking them for
+  counts.
+- TRANSFAC counts from a single site are read as they are.
+- `compare_motifs()` and `compare_matrix()` with P-values gather each
+  query's q-values in one pass, which makes thousands of motifs several
+  times faster, and scanning prepares one motif per thread at a time, so
+  that long P-value tables stay within its memory budget.
 
 ## 0.1.1 (2026-10-24)
 

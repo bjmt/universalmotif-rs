@@ -43,8 +43,9 @@ fn convert_type_matches_r() {
                     let mut parts = input.clone().into_parts();
                     parts.pseudocount = p;
                     let want_ic = own_icscore(&universalmotif::Motif::from_parts(parts).unwrap());
+                    // The consensus follows the new pseudocount, which
+                    // random_reference.rs checks against the R package.
                     assert!(close(m.icscore, want_ic), "{ctx}: icscore");
-                    assert_eq!(m.consensus, input.consensus, "{ctx}: consensus");
                 }
             }
             (_, Err(e)) => panic!("{ctx}: {e}"),

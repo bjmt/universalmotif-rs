@@ -1865,10 +1865,16 @@ fn normalize_reapplies_the_pseudocount() {
     let again = normalize(&n).unwrap();
     assert_eq!(again.pseudocount, 1.0);
 
+    // A PCM keeps its counts and takes the pseudocount.
     let pcm = as_pcm();
     let n = normalize(&pcm).unwrap();
     assert_eq!(n.matrix, pcm.matrix);
-    assert_eq!(n.pseudocount, pcm.pseudocount);
+    let want = if pcm.pseudocount == 0.0 {
+        1.0
+    } else {
+        pcm.pseudocount
+    };
+    assert_eq!(n.pseudocount, want);
 }
 
 #[test]

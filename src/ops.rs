@@ -251,17 +251,36 @@ pub fn round_motif(motif: &Motif, pct_tolerance: f64) -> Result<Motif> {
 }
 
 /// Re-apply the pseudocount by converting to counts and back. A pseudocount of
-/// zero is replaced by 1. PCM motifs are returned unchanged.
+/// zero is replaced by 1. PCM motifs keep their counts and only take the new
+/// pseudocount, which applies when they are converted.
 pub fn normalize(motif: &Motif) -> Result<Motif> {
     let pseudo = if motif.pseudocount == 0.0 {
         1.0
     } else {
         motif.pseudocount
     };
+    if motif.motif_type == MotifType::Pcm {
+        let mut out = motif.clone().into_parts();
+        out.pseudocount = pseudo;
+        out.recompute_derived();
+        return Motif::from_parts(out);
+    }
     let pcm = convert_type(motif, MotifType::Pcm, None, false)?;
     let mut out = convert_type(&pcm, motif.motif_type, Some(pseudo), false)?.into_parts();
     out.recompute_derived();
     Motif::from_parts(out)
+}
+
+/// The motif with its pseudocount re-applied by [`normalize`], ready to give
+/// finite weights. A CWM, which cannot be converted back to, goes through its
+/// probabilities. Scanning, match scores and P-values all use this, so that
+/// they agree on every score.
+pub(crate) fn with_pseudocount(motif: &Motif) -> Result<Motif> {
+    if motif.motif_type == MotifType::Cwm {
+        normalize(&convert_type(motif, MotifType::Ppm, None, false)?)
+    } else {
+        normalize(motif)
+    }
 }
 
 /// Add gaps to a motif: gap `i` comes after the first `gaploc[i]` columns,

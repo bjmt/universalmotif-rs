@@ -161,6 +161,8 @@ pub struct Skip {
     /// The R package rounds some columns to counts differently, so the
     /// matrix is checked by the caller.
     pub matrix: bool,
+    /// The R package leaves a PCM's zero pseudocount when normalizing.
+    pub pseudocount: bool,
 }
 
 /// The total IC computed afresh from a motif's own matrix and settings.
@@ -233,7 +235,9 @@ pub fn assert_motif_eq_skip(got: &Motif, want: &Value, ctx: &str, skip: Skip) {
     if !skip.nsites {
         assert_opt_close(got.nsites, w.nsites, &format!("{ctx}: nsites"));
     }
-    assert!(close(got.pseudocount, w.pseudocount), "{ctx}: pseudocount");
+    if !skip.pseudocount {
+        assert!(close(got.pseudocount, w.pseudocount), "{ctx}: pseudocount");
+    }
     assert_close_vec(&got.bkg, &w.bkg, &format!("{ctx}: bkg"));
     assert_opt_close(got.bkgsites, w.bkgsites, &format!("{ctx}: bkgsites"));
     if !skip.derived && !skip.matrix {

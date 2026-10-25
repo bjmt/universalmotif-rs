@@ -3,6 +3,7 @@
 mod common;
 
 use common::*;
+use universalmotif::MotifType;
 use universalmotif::ops::{
     TrimFrom, normalize, reverse_complement, round_motif, trim_cwm, trim_motif,
 };
@@ -30,6 +31,11 @@ fn ops_match_r() {
             }
             "normalize" => {
                 skip.derived = true;
+                // The R package leaves a PCM's pseudocount at zero, so its
+                // weights stay infinite; the port sets it to 1.
+                if input.motif_type == MotifType::Pcm && input.pseudocount == 0.0 {
+                    skip.pseudocount = true;
+                }
                 normalize(&input).map(Some)
             }
             "trim_motifs" => {

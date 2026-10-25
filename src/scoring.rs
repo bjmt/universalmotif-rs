@@ -12,14 +12,16 @@ use crate::cdf::{grid_value, score_grid_ceiling};
 use crate::convert::convert_type;
 use crate::error::{Result, arg_err};
 use crate::motif::{Motif, MotifType};
-use crate::ops::normalize;
+use crate::ops::with_pseudocount;
 
 /// The motif as a PWM for scoring, with a pseudocount added to remove
 /// `-Inf` entries unless `allow_nonfinite`.
 fn scoring_pwm(motif: &Motif, allow_nonfinite: bool) -> Result<Motif> {
     let pwm = convert_type(motif, MotifType::Pwm, None, false)?;
     if !allow_nonfinite && pwm.matrix.as_slice().iter().any(|v| v.is_infinite()) {
-        normalize(&pwm)
+        // The pseudocount goes on the motif as given, as in scanning, since
+        // adding it to the PWM can round counts differently.
+        convert_type(&with_pseudocount(motif)?, MotifType::Pwm, None, false)
     } else {
         Ok(pwm)
     }

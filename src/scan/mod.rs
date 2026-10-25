@@ -23,7 +23,7 @@ use crate::convert::convert_type;
 use crate::dedup::{Interval, dedup};
 use crate::error::{Error, Result, arg_err};
 use crate::motif::{Motif, MotifType, Strand};
-use crate::ops::normalize;
+use crate::ops::with_pseudocount;
 use crate::packed::{CodedSeq, EncodedSequences, PackedSeq, Seqs};
 use crate::pvalue::{scoring_matrix, with_threads};
 
@@ -360,8 +360,12 @@ const CHUNK: usize = 1 << 16;
 /// Grid points of P-value tails held at once while scanning, 32 MB worth.
 const TAIL_BUDGET: usize = 1 << 22;
 
-/// Motifs prepared in parallel at a time while filling a batch.
-const PREPARE_GROUP: usize = 32;
+/// Motifs prepared in parallel at a time while filling a batch: one per
+/// thread, so that the tails held beyond [`TAIL_BUDGET`] are at most one per
+/// thread.
+fn prepare_group() -> usize {
+    rayon::current_num_threads().max(1)
+}
 
 /// Letters of sequence read at a time by [`scan_fasta`], a 16 MB batch for DNA
 /// and RNA.
@@ -656,7 +660,7 @@ fn check_scan(motifs: &[Motif], opts: &ScanOptions) -> Result<Alphabet> {
 fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Option<Prepared>> {
     let mut pwm = convert_type(m, MotifType::Pwm, None, false)?;
     if pwm.matrix.as_slice().iter().any(|v| v.is_infinite()) {
-        pwm = convert_type(&normalize(m)?, MotifType::Pwm, None, false)?;
+        pwm = convert_type(&with_pseudocount(m)?, MotifType::Pwm, None, false)?;
     }
     let sm = scoring_matrix(&pwm, None)?;
     let gaps = if opts.use_gaps && m.gap.isgapped && !m.gap.gaploc.is_empty() {
@@ -921,7 +925,7 @@ pub fn scan_encoded(
             let mut size = 0;
             while base + batch.len() < motifs.len() && size < TAIL_BUDGET {
                 let lo = base + batch.len();
-                let hi = (lo + PREPARE_GROUP).min(motifs.len());
+                let hi = (lo + prepare_group()).min(motifs.len());
                 let group = motifs[lo..hi]
                     .par_iter()
                     .map(|m| prepare_motif(m, opts, true))
@@ -1201,7 +1205,7 @@ fn scan_fasta_with(
     let prepared: Vec<Option<Prepared>> = with_threads(opts.nthreads, || {
         let mut all: Vec<Option<Prepared>> = Vec::with_capacity(motifs.len());
         let mut size = 0;
-        for group in motifs.chunks(PREPARE_GROUP) {
+        for group in motifs.chunks(prepare_group()) {
             let group = group
                 .par_iter()
                 .map(|m| prepare_motif(m, opts, true))

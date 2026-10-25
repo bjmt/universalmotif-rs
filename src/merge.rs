@@ -3,7 +3,7 @@
 use crate::alphabet::Alphabet;
 use crate::compare::{CompareOptions, NullModel, align, compare_matrix};
 use crate::convert::convert_type;
-use crate::create::{CreateOptions, from_matrix};
+use crate::create::{CreateOptions, from_typed_matrix};
 use crate::error::{Result, arg_err};
 use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType, Strand};
@@ -198,7 +198,15 @@ pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<Me
         pseudocount: ppms[anchor].pseudocount,
         ..Default::default()
     };
-    let merged = from_matrix(Matrix::from_columns(&cols)?, None, Some(alphabet), &copts)?;
+    // Declared as probabilities, since columns of zeros and ones would
+    // otherwise be taken for counts.
+    let merged = from_typed_matrix(
+        Matrix::from_columns(&cols)?,
+        None,
+        Some(alphabet),
+        MotifType::Ppm,
+        &copts,
+    )?;
     let mut used_idx: Vec<usize> = used.iter().map(|u| u.0).collect();
     used_idx.sort_unstable();
     Ok(MergedMotif {
