@@ -55,23 +55,47 @@ impl Col for Vec<f64> {
     }
 }
 
-/// Pearson correlation of two probability columns, which is centred on 1/n, or
-/// 0.25 for DNA and RNA.
-#[inline(always)]
-fn pcc_column<C: Col>(q: &C, t: &C) -> f64 {
-    let (q, t) = (q.values(), t.values());
-    let centre = 1.0 / q.len() as f64;
-    let (mut sqq, mut stt, mut sqt) = (0.0, 0.0, 0.0);
-    for i in 0..q.len() {
-        let (a, b) = (q[i] - centre, t[i] - centre);
-        sqq += a * a;
-        stt += b * b;
-        sqt += a * b;
+/// A probability column centred on the uniform value, 1/n (0.25 for DNA and
+/// RNA), with its sum of squares, so that correlating it with many columns
+/// does its own part once.
+struct Centred<C> {
+    values: C,
+    ss: f64,
+}
+
+impl<C: Col> Centred<C> {
+    fn new(c: &C) -> Self {
+        let v = c.values();
+        let centre = 1.0 / v.len() as f64;
+        let mut ss = 0.0;
+        let centred: Vec<f64> = v
+            .iter()
+            .map(|&x| {
+                let a = x - centre;
+                ss += a * a;
+                a
+            })
+            .collect();
+        Centred {
+            values: C::from_slice(&centred),
+            ss,
+        }
     }
-    if sqq < 1e-12 || stt < 1e-12 {
-        return 0.0;
+
+    /// The Pearson correlation of the two columns, or 0 if either is
+    /// uniform.
+    #[inline(always)]
+    fn pcc(&self, t: &Centred<C>) -> f64 {
+        if self.ss < 1e-12 || t.ss < 1e-12 {
+            return 0.0;
+        }
+        let (q, t_v) = (self.values.values(), t.values.values());
+        let mut sqt = 0.0;
+        for i in 0..q.len() {
+            sqt += q[i] * t_v[i];
+        }
+        sqt / (self.ss * t.ss).sqrt()
     }
-    sqt / (sqq * stt).sqrt()
 }
 
 fn score_to_bin(s: f64) -> usize {
@@ -253,15 +277,23 @@ fn columns<C: Col>(motifs: &[Motif]) -> Result<Vec<Vec<C>>> {
 /// zero. The null is the columns of all the motifs, in both orientations when
 /// reverse complements are tried, or the parametric grid with its weights.
 fn column_medians<C: Col>(cols: &[Vec<C>], opts: &CompareOptions, rc_ok: bool) -> Vec<Vec<f64>> {
-    let null: Vec<(C, f64)> = match opts.null {
+    let null: Vec<(Centred<C>, f64)> = match opts.null {
         NullModel::Parametric => enum_columns(&opts.bkg)
             .into_iter()
-            .map(|(c, w)| (C::from_slice(&c), w))
+            .map(|(c, w)| (Centred::new(&C::from_slice(&c)), w))
             .collect(),
         NullModel::Empirical => {
-            let mut v: Vec<(C, f64)> = cols.iter().flatten().map(|c| (c.clone(), 1.0)).collect();
+            let mut v: Vec<(Centred<C>, f64)> = cols
+                .iter()
+                .flatten()
+                .map(|c| (Centred::new(c), 1.0))
+                .collect();
             if rc_ok {
-                v.extend(cols.iter().flat_map(|m| rc_columns(m)).map(|c| (c, 1.0)));
+                v.extend(
+                    cols.iter()
+                        .flat_map(|m| rc_columns(m))
+                        .map(|c| (Centred::new(&c), 1.0)),
+                );
             }
             v
         }
@@ -270,8 +302,8 @@ fn column_medians<C: Col>(cols: &[Vec<C>], opts: &CompareOptions, rc_ok: bool) -
         .map(|m| {
             m.iter()
                 .map(|q| {
-                    let mut v: Vec<(f64, f64)> =
-                        null.iter().map(|(t, w)| (pcc_column(q, t), *w)).collect();
+                    let q = Centred::new(q);
+                    let mut v: Vec<(f64, f64)> = null.iter().map(|(t, w)| (q.pcc(t), *w)).collect();
                     v.sort_by(|a, b| a.0.total_cmp(&b.0));
                     let half = v.iter().map(|x| x.1).sum::<f64>() / 2.0;
                     let mut cum = 0.0;
@@ -303,9 +335,9 @@ fn running_sums(v: impl Iterator<Item = f64>) -> Vec<f64> {
 /// medians in each orientation, alignments are chosen by complete scores.
 #[allow(clippy::type_complexity)]
 fn best_alignment<C: Col>(
-    q: &[C],
-    q_rc: Option<&[C]>,
-    t: &[C],
+    q: &[Centred<C>],
+    q_rc: Option<&[Centred<C>]>,
+    t: &[Centred<C>],
     min_overlap: usize,
     medians: Option<(&[f64], &[f64])>,
 ) -> (f64, usize, i64, Strand, usize, usize, f64) {
@@ -320,7 +352,7 @@ fn best_alignment<C: Col>(
         0usize,
         f64::NEG_INFINITY,
     );
-    let orientations: Vec<(&[C], Strand)> = match q_rc {
+    let orientations: Vec<(&[Centred<C>], Strand)> = match q_rc {
         Some(r) => vec![(q, Strand::Plus), (r, Strand::Minus)],
         None => vec![(q, Strand::Plus)],
     };
@@ -334,7 +366,7 @@ fn best_alignment<C: Col>(
             }
             let q_start = d + t_start;
             let overlap_sum = (0..len).fold(0.0, |acc, j| {
-                acc + pcc_column(&qq[(q_start + j) as usize], &t[(t_start + j) as usize])
+                acc + qq[(q_start + j) as usize].pcc(&t[(t_start + j) as usize])
             });
             let s = match medians {
                 Some((plus, minus)) => {
@@ -391,8 +423,10 @@ fn align_with<C: Col>(
     }
     let cols: Vec<Vec<C>> = columns(motifs)?;
     let rc_ok = opts.rc && nucleotide;
-    let rc: Vec<Vec<C>> = if rc_ok {
-        cols.iter().map(|c| rc_columns(c)).collect()
+    let centre = |m: &[C]| -> Vec<Centred<C>> { m.iter().map(Centred::new).collect() };
+    let centred: Vec<Vec<Centred<C>>> = cols.iter().map(|m| centre(m)).collect();
+    let rc: Vec<Vec<Centred<C>>> = if rc_ok {
+        cols.iter().map(|m| centre(&rc_columns(m))).collect()
     } else {
         Vec::new()
     };
@@ -410,9 +444,9 @@ fn align_with<C: Col>(
                 let medians = sums.get(q).map(|(p, m)| (p.as_slice(), m.as_slice()));
                 let (complete_score, overlap, offset, strand, query_start, n_tested, score) =
                     best_alignment(
-                        &cols[q],
+                        &centred[q],
                         rc_ok.then(|| rc[q].as_slice()),
-                        &cols[t],
+                        &centred[t],
                         opts.min_overlap,
                         medians,
                     );
@@ -455,12 +489,20 @@ fn median_sums<C: Col>(
 
 fn convolve(a: &[f64], b: &[f64]) -> Vec<f64> {
     let mut out = vec![0.0; a.len() + b.len() - 1];
+    // Zero products add nothing, so only the span of nonzero bins of `b` is
+    // visited.
+    let Some(b_lo) = b.iter().position(|&v| v != 0.0) else {
+        return out;
+    };
+    let b_hi = b.iter().rposition(|&v| v != 0.0).unwrap();
+    let b = &b[b_lo..=b_hi];
     for (i, &ai) in a.iter().enumerate() {
         if ai == 0.0 {
             continue;
         }
-        for (j, &bj) in b.iter().enumerate() {
-            out[i + j] += ai * bj;
+        let dst = &mut out[i + b_lo..i + b_lo + b.len()];
+        for (d, &bj) in dst.iter_mut().zip(b) {
+            *d += ai * bj;
         }
     }
     out
@@ -566,41 +608,45 @@ fn alignment_pvalues_with<C: Col>(
     opts: &CompareOptions,
 ) -> Result<Vec<f64>> {
     let cols: Vec<Vec<C>> = columns(motifs)?;
-    let flat: Vec<C> = cols.iter().flatten().cloned().collect();
-    let grid: Option<Vec<(C, f64)>> = (opts.null == NullModel::Parametric).then(|| {
+    let flat: Vec<Centred<C>> = cols.iter().flatten().map(Centred::new).collect();
+    let grid: Option<Vec<(Centred<C>, f64)>> = (opts.null == NullModel::Parametric).then(|| {
         enum_columns(&opts.bkg)
             .into_iter()
-            .map(|(c, w)| (C::from_slice(&c), w))
+            .map(|(c, w)| (Centred::new(&C::from_slice(&c)), w))
             .collect()
     });
     let col_pmf = |q: &C| -> Vec<f64> {
         let mut pmf = vec![0.0; PCC_BINS];
+        let q = Centred::new(q);
         match &grid {
             None => {
                 if flat.is_empty() {
                     return pmf;
                 }
                 for t in &flat {
-                    pmf[score_to_bin(pcc_column(q, t))] += 1.0;
+                    pmf[score_to_bin(q.pcc(t))] += 1.0;
                 }
                 let inv = 1.0 / flat.len() as f64;
                 pmf.iter_mut().for_each(|p| *p *= inv);
             }
             Some(g) => {
                 for (c, w) in g {
-                    pmf[score_to_bin(pcc_column(q, c))] += w;
+                    pmf[score_to_bin(q.pcc(c))] += w;
                 }
             }
         }
         pmf
     };
-    // Null distributions for every (start, length) of an oriented query.
-    let cache = |q: &[C]| -> Vec<Vec<Vec<f64>>> {
+    // Null distributions of an oriented query by start and length, up to
+    // the longest length needed from each start (every length if `need` is
+    // None).
+    let cache = |q: &[C], need: Option<&[usize]>| -> Vec<Vec<Vec<f64>>> {
         let pmfs: Vec<Vec<f64>> = q.iter().map(col_pmf).collect();
         (0..q.len())
             .map(|start| {
+                let longest = need.map_or(q.len() - start, |n| n[start]);
                 let mut row: Vec<Vec<f64>> = vec![Vec::new(), pmfs[start].clone()];
-                for len in 2..=q.len() - start {
+                for len in 2..=longest {
                     let next = convolve(&row[len - 1], &pmfs[start + len - 1]);
                     row.push(next);
                 }
@@ -626,10 +672,31 @@ fn alignment_pvalues_with<C: Col>(
                 if ks.is_empty() {
                     return Vec::new();
                 }
-                let fwd = cache(&cols[q]);
+                // Outside complete scoring, only the null of each
+                // alignment's own start and overlap is looked up.
+                let width = cols[q].len();
+                let (mut need_fwd, mut need_rev) = (vec![0; width], vec![0; width]);
+                for &k in ks {
+                    let a = &alignments[k];
+                    if a.overlap > 0 && a.query_start < width && a.n_tested > 0 {
+                        let need = if a.strand == Strand::Minus {
+                            &mut need_rev
+                        } else {
+                            &mut need_fwd
+                        };
+                        let longest = a.overlap.min(width - a.query_start);
+                        need[a.query_start] = need[a.query_start].max(longest);
+                    }
+                }
+                let (need_fwd, need_rev) = if opts.complete {
+                    (None, None)
+                } else {
+                    (Some(need_fwd.as_slice()), Some(need_rev.as_slice()))
+                };
+                let fwd = cache(&cols[q], need_fwd);
                 let need_rc = (opts.complete && rc_ok)
                     || ks.iter().any(|&k| alignments[k].strand == Strand::Minus);
-                let rev = need_rc.then(|| cache(&rc_columns(&cols[q])));
+                let rev = need_rc.then(|| cache(&rc_columns(&cols[q]), need_rev));
                 ks.iter()
                     .map(|&k| {
                         let a = &alignments[k];
@@ -770,22 +837,31 @@ pub struct Comparison {
 /// Consensus letters of some columns, by the same rules as a motif's own
 /// consensus for DNA, RNA and proteins, and the most probable letter for other
 /// alphabets.
-fn consensus_range<C: Col>(cols: &[C], start: i64, len: usize, alphabet: &Alphabet) -> String {
-    let start = start.max(0) as usize;
-    let len = len.min(cols.len().saturating_sub(start));
+/// The consensus letter of each column of each motif.
+fn column_letters<C: Col>(cols: &[Vec<C>], alphabet: &Alphabet) -> Vec<Vec<char>> {
     let letters = alphabet.letters();
-    cols[start..start + len]
-        .iter()
-        .map(|c| {
-            let v = c.values();
-            match alphabet {
-                Alphabet::Dna => consensus_letter(v, false, MotifType::Ppm, 0.0),
-                Alphabet::Rna => consensus_letter(v, true, MotifType::Ppm, 0.0),
-                Alphabet::Aa => consensus_letter_aa(v, MotifType::Ppm, 0.0),
-                _ => letters[which_max(v)],
-            }
+    cols.iter()
+        .map(|m| {
+            m.iter()
+                .map(|c| {
+                    let v = c.values();
+                    match alphabet {
+                        Alphabet::Dna => consensus_letter(v, false, MotifType::Ppm, 0.0),
+                        Alphabet::Rna => consensus_letter(v, true, MotifType::Ppm, 0.0),
+                        Alphabet::Aa => consensus_letter_aa(v, MotifType::Ppm, 0.0),
+                        _ => letters[which_max(v)],
+                    }
+                })
+                .collect()
         })
         .collect()
+}
+
+/// The consensus of `len` columns from `start`, clipped to the motif.
+fn consensus_range(letters: &[char], start: i64, len: usize) -> String {
+    let start = (start.max(0) as usize).min(letters.len());
+    let len = len.min(letters.len() - start);
+    letters[start..start + len].iter().collect()
 }
 
 /// Compare each query motif with every motif, itself included.
@@ -826,7 +902,7 @@ pub fn compare_motifs(
     let alphabet = shared_alphabet(motifs)?;
     by_alphabet!(
         alphabet,
-        finish_comparisons(motifs, queries, &al, &pvals, &alphabet)
+        finish_comparisons(motifs, queries, &al, &pvals, &alphabet, opts.nthreads)
     )
 }
 
@@ -836,8 +912,10 @@ fn finish_comparisons<C: Col>(
     al: &[Alignment],
     pvals: &[f64],
     alphabet: &Alphabet,
+    nthreads: usize,
 ) -> Result<Vec<Comparison>> {
     let cols: Vec<Vec<C>> = columns(motifs)?;
+    let letters = column_letters(&cols, alphabet);
 
     // The alignments of each query, gathered in one pass.
     let mut by_query: Vec<Vec<usize>> = vec![Vec::new(); motifs.len()];
@@ -853,36 +931,37 @@ fn finish_comparisons<C: Col>(
         }
     }
 
-    Ok(al
-        .iter()
-        .enumerate()
-        .map(|(k, a)| {
-            let wq = cols[a.query].len() as i64;
-            let len = a.overlap as i64;
-            let q_start = if a.strand == Strand::Minus {
-                wq - 1 - (a.query_start as i64 + len - 1)
-            } else {
-                a.query_start as i64
-            };
-            let t_start = (-a.offset).max(0);
-            Comparison {
-                query: a.query,
-                target: a.target,
-                offset: a.offset,
-                strand: a.strand,
-                overlap: a.overlap,
-                score: if a.overlap > 0 {
-                    a.score / a.overlap as f64
+    with_threads(nthreads, || {
+        al.par_iter()
+            .enumerate()
+            .map(|(k, a)| {
+                let wq = cols[a.query].len() as i64;
+                let len = a.overlap as i64;
+                let q_start = if a.strand == Strand::Minus {
+                    wq - 1 - (a.query_start as i64 + len - 1)
                 } else {
-                    f64::NAN
-                },
-                pvalue: pvals[k],
-                qvalue: qvals[k],
-                query_consensus: consensus_range(&cols[a.query], q_start, a.overlap, alphabet),
-                target_consensus: consensus_range(&cols[a.target], t_start, a.overlap, alphabet),
-            }
-        })
-        .collect())
+                    a.query_start as i64
+                };
+                let t_start = (-a.offset).max(0);
+                Comparison {
+                    query: a.query,
+                    target: a.target,
+                    offset: a.offset,
+                    strand: a.strand,
+                    overlap: a.overlap,
+                    score: if a.overlap > 0 {
+                        a.score / a.overlap as f64
+                    } else {
+                        f64::NAN
+                    },
+                    pvalue: pvals[k],
+                    qvalue: qvals[k],
+                    query_consensus: consensus_range(&letters[a.query], q_start, a.overlap),
+                    target_consensus: consensus_range(&letters[a.target], t_start, a.overlap),
+                }
+            })
+            .collect()
+    })
 }
 
 /// All-against-all comparison results, indexed `[query][target]`.

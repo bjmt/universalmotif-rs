@@ -42,6 +42,9 @@ pub struct ScoreDistribution {
     score_max: i64,
 }
 
+/// Scores filled at a time by [`ScoreDistribution::new`], 32 KB worth.
+const DP_BLOCK: usize = 4096;
+
 impl ScoreDistribution {
     /// Build the distribution for a PWM and background frequencies, one per
     /// row. The PWM must be finite.
@@ -71,25 +74,45 @@ impl ScoreDistribution {
         // Dynamic programming over positions.
         // Only the reachable scores [lo, hi] are visited; the rest are zero.
         let len = width * max_score + 1;
-        let mut pdf_new = vec![1.0; len];
-        let mut pdf_old = vec![1.0; len];
+        let mut pdf_new = vec![0.0; len];
+        let mut pdf_old = vec![0.0; len];
+        pdf_new[0] = 1.0;
         let (mut lo, mut hi) = (0usize, 0usize);
+        // The scores holding values in the buffer that becomes pdf_new next,
+        // which are cleared before it is filled again.
+        let mut stale = (0usize, 0usize);
         for (i, col) in shifted.iter().enumerate() {
             let max_step = i * max_score;
             std::mem::swap(&mut pdf_old, &mut pdf_new);
-            pdf_new[..=max_step + max_score].fill(0.0);
-            // MEME skips zero entries, but adding their zero products
-            // changes nothing and lets the loop vectorize.
             let (lo_k, hi_k) = (lo, hi.min(max_step));
-            for (&s, &b) in col.iter().zip(bkg) {
-                let src = &pdf_old[lo_k..=hi_k];
-                let dst = &mut pdf_new[lo_k + s..=hi_k + s];
-                for (d, &o) in dst.iter_mut().zip(src) {
-                    *d += o * b;
+            let (col_lo, col_hi) = (*col.iter().min().unwrap(), *col.iter().max().unwrap());
+            let (new_lo, new_hi) = (lo_k + col_lo, hi_k + col_hi);
+            pdf_new[stale.0.min(new_lo)..=stale.1.max(new_hi)].fill(0.0);
+            // Scores are filled a block at a time, each block taking every
+            // letter in turn, so that a block and the scores it reads stay in
+            // cache. Every score still sums its terms in letter order. MEME
+            // skips zero entries, but adding their zero products changes
+            // nothing and lets the loop vectorize.
+            let mut start = new_lo;
+            while start <= new_hi {
+                let end = (start + DP_BLOCK).min(new_hi + 1);
+                for (&s, &b) in col.iter().zip(bkg) {
+                    let from = start.max(lo_k + s);
+                    let to = end.min(hi_k + s + 1);
+                    if from >= to {
+                        continue;
+                    }
+                    let src = &pdf_old[from - s..to - s];
+                    let dst = &mut pdf_new[from..to];
+                    for (d, &o) in dst.iter_mut().zip(src) {
+                        *d += o * b;
+                    }
                 }
+                start = end;
             }
-            lo += *col.iter().min().unwrap();
-            hi += *col.iter().max().unwrap();
+            stale = (lo_k, hi_k);
+            lo += col_lo;
+            hi += col_hi;
         }
         let total = sum(&pdf_new);
         if total > 0.0 {

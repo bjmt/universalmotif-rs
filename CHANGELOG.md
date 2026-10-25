@@ -30,6 +30,11 @@
   query's q-values in one pass, which makes thousands of motifs several
   times faster, and scanning prepares one motif per thread at a time, so
   that long P-value tables stay within its memory budget.
+- Comparisons centre each column once and build their consensus strings in
+  parallel, which makes them up to 3 times faster on one thread and 6
+  times faster on four for amino acid motifs, and P-value tables are built
+  in cache-sized blocks, which makes amino acid P-values about 1.5 times
+  faster. Results are unchanged.
 
 ## 0.1.1 (2026-10-24)
 
