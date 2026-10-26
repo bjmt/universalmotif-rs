@@ -1,40 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-26)
 
-- `kmer::get_bkg_table()` gives `get_bkg()`'s output as columns, with
-  k-mers as indices into one list of them, which takes about a third of
-  the memory; `get_bkg()` is built on it and gives the same rows.
-- `io::meme::read()` finds each matrix's MOTIF line by binary search,
-  so reading many motifs takes linear rather than quadratic time.
-- `pvalue::min_pvalues()` multiplies the background probabilities of each
-  column's best letters rather than building a score distribution, which
-  takes microseconds per motif; values agree to about 1e-13.
-- **Breaking:** `HitTable::motif` and `HitTable::sequence` are `Vec<u32>`
-  rather than `Vec<i64>`, which takes 8 bytes off every hit; positions stay
-  `i64`.
-- Scanning keeps hit positions as 64-bit numbers throughout, so hits in a
-  single sequence longer than 4 Gb no longer get wrapped positions.
-- Large scans gather each thread's hits into a list of the final size and
-  no longer copy the first batch, which lowers peak memory by about a
-  quarter for scans with millions of hits.
+Breaking changes:
+
+- `HitTable::motif` and `HitTable::sequence` are `Vec<u32>` rather than
+  `Vec<i64>`, which takes 8 bytes off every hit; positions stay `i64`.
+- `ops::normalize()` gives a PCM without a pseudocount a pseudocount of 1,
+  rather than returning it unchanged.
+
+Fixes:
+
+- `scoring::score_match()`, `motif_range()`, `get_matches()` and P-values
+  add a missing pseudocount the way scanning does, so a word always scores
+  what a scan reports; a CWM goes through its probabilities.
 - `scoring::get_matches()` rounds a score between grid points up, as
   scanning and P-values do, rather than returning words scoring below it.
-- `complexity()`, `sequence_complexity()` and `fasta::write()` work by
-  letter rather than by byte, so sequences with letters outside ASCII no
-  longer panic or come out garbled.
-- `get_bkg()` with reverse complements counts letters found only on the
-  reverse strands.
-- Markov shuffles leave a window shorter than k as it is.
-- The median of no values is NaN rather than a panic.
-- Genomes reject `.fai` records with no letters per line and BGZF blocks
-  too small to be valid, rather than panicking.
-- The error for letters outside a custom alphabet no longer says
-  "alphabet alphabet".
-- `score_match()`, `motif_range()`, `get_matches()` and P-values add a
-  missing pseudocount the way scanning does, so a word always scores what
-  a scan reports, and `normalize()` gives a PCM without one a pseudocount
-  of 1. A CWM goes through its probabilities.
+- Scanning keeps hit positions as 64-bit numbers, so hits in a single
+  sequence longer than 4 Gb no longer get wrapped positions.
 - Converting with a new pseudocount updates the consensus.
 - A uniform column converts to an IC column of zeros, rather than one just
   below zero that fails validation, and back to a uniform column.
@@ -42,22 +25,43 @@
   each hold one letter as probabilities, rather than taking them for
   counts.
 - TRANSFAC counts from a single site are read as they are.
-- `compare_motifs()` and `compare_matrix()` with P-values gather each
-  query's q-values in one pass, which makes thousands of motifs several
-  times faster, and scanning prepares one motif per thread at a time, so
-  that long P-value tables stay within its memory budget.
-- Comparisons centre each column once and build their consensus strings in
-  parallel, which makes them up to 3 times faster on one thread and 6
-  times faster on four for amino acid motifs, and P-value tables are built
-  in cache-sized blocks, which makes amino acid P-values about 1.5 times
-  faster. Results are unchanged.
-- Enrichment builds each motif's P-value table once for the targets and
-  the background, DNA and RNA scans score both strands in one pass, and
-  co-occurrence distances only visit the sequences both motifs hit, which
-  makes enrichment about 1.6 times faster, DNA scans about 1.35 times
-  faster and co-occurrence up to 1.9 times faster. Gapped scans skip
-  starts whose next piece cannot reach the threshold over any gap size,
-  which makes them about 1.25 times faster. Results are unchanged.
+- `complexity()`, `sequence_complexity()` and `fasta::write()` work by
+  letter rather than by byte, so sequences with letters outside ASCII no
+  longer panic or come out garbled.
+- `get_bkg()` with reverse complements counts letters found only on the
+  reverse strands.
+- Markov shuffles leave a window shorter than k as it is.
+- Genomes reject `.fai` records with no letters per line and BGZF blocks
+  too small to be valid, rather than panicking, and the median of no
+  values is NaN rather than a panic.
+- The error for letters outside a custom alphabet no longer says
+  "alphabet alphabet".
+
+Speed and memory, with results unchanged:
+
+- Comparisons centre each column once, build their consensus strings in
+  parallel and gather q-values in one pass: up to 3 times faster on one
+  thread and 6 times on four for amino acid motifs, and far faster for
+  thousands of motifs.
+- DNA and RNA scans score both strands in one pass (about 1.35 times
+  faster), gapped scans skip starts that cannot reach the threshold
+  (about 1.25 times), and enrichment builds each P-value table once for
+  targets and background (about 1.6 times).
+- P-value tables are built in cache-sized blocks (amino acid P-values
+  about 1.5 times faster), and `pvalue::min_pvalues()` is computed in
+  closed form, in microseconds; its values agree with the old ones to
+  about 1e-13.
+- Large scans gather hits into lists of their final size, lowering peak
+  memory by about a quarter for millions of hits, and keep long P-value
+  tables within their memory budget.
+- Co-occurrence distances only visit the sequences both motifs hit (up to
+  1.9 times faster), and `io::meme::read()` takes linear rather than
+  quadratic time in the number of motifs.
+
+Additions:
+
+- `kmer::get_bkg_table()` gives `get_bkg()`'s output as columns, with
+  k-mers as indices into one list, in about a third of the memory.
 
 ## 0.1.1 (2026-10-24)
 
