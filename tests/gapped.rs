@@ -48,8 +48,8 @@ fn gapped_scans_match_r() {
         let mut got: Vec<(i64, i64, i64, i64, String, f64, f64)> = (0..t.len())
             .map(|i| {
                 (
-                    t.motif[i] + 1,
-                    t.sequence[i] + 1,
+                    i64::from(t.motif[i]) + 1,
+                    i64::from(t.sequence[i]) + 1,
                     // R counts positions from 1.
                     t.start[i] + 1,
                     t.end[i],

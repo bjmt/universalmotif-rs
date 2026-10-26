@@ -424,14 +424,18 @@ fn protein_and_custom_scans_match_r() {
         let t = scan_table(&ms, &seqs, &opts).unwrap();
         let w = &case["table"];
         assert_eq!(t.len(), nums(&w["start"]).len(), "{ctx}: number of hits");
-        let plus1 = |v: &[i64]| v.iter().map(|&x| x as f64 + 1.0).collect::<Vec<_>>();
+        let plus1 = |v: &[u32]| v.iter().map(|&x| x as f64 + 1.0).collect::<Vec<_>>();
         assert_eq!(plus1(&t.motif), nums(&w["motif.i"]), "{ctx}: motif");
         assert_eq!(
             plus1(&t.sequence),
             nums(&w["sequence.i"]),
             "{ctx}: sequence"
         );
-        assert_eq!(plus1(&t.start), nums(&w["start"]), "{ctx}: start");
+        assert_eq!(
+            t.start.iter().map(|&x| x as f64 + 1.0).collect::<Vec<_>>(),
+            nums(&w["start"]),
+            "{ctx}: start"
+        );
         let end: Vec<f64> = t.end.iter().map(|&x| x as f64).collect();
         assert_eq!(end, nums(&w["stop"]), "{ctx}: end");
         assert!(t.minus.iter().all(|m| !m), "{ctx}: only the forward strand");

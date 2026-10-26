@@ -141,7 +141,7 @@ fn count_hits(
     let (mut tgt, mut neg) = (empty(), empty());
     // Hits come ordered by motif and sequence, so a new sequence for a motif
     // shows up as a change from the previous row.
-    let mut last: Option<(i64, i64)> = None;
+    let mut last: Option<(u32, u32)> = None;
     for (&m, &s) in hits.motif.iter().zip(&hits.sequence) {
         let c = if (s as usize) < n_tgt {
             &mut tgt

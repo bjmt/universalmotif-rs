@@ -342,7 +342,7 @@ impl Finder<'_> {
                 self.out.push(RawHit {
                     motif: self.mi as u32,
                     sequence: self.si as u32,
-                    start: start as u32,
+                    start: start as u64,
                     score: partial,
                     id: 0,
                     minus: self.minus,

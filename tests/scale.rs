@@ -480,7 +480,7 @@ fn dna_motifs(widths: &[usize], seed: u64) -> Vec<Motif> {
 /// Check every hit against `score_match` and `motif_pvalue`.
 fn check_hits(motifs: &[Motif], seqs: &[&str], t: &HitTable, cutoff: f64) {
     for (mi, m) in motifs.iter().enumerate() {
-        let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as i64).collect();
+        let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as u32).collect();
         let words: Vec<String> = rows.iter().map(|&i| t.matched(i, seqs)).collect();
         let scores = score_match(m, &words, false).unwrap();
         let queries: Vec<(usize, f64)> = scores.iter().map(|&s| (0, s)).collect();
@@ -584,7 +584,7 @@ fn scans_do_not_depend_on_threads_or_chunks() {
             .collect();
         let want = naive_windows(m, refs[0], &starts, cutoff);
         let got: Vec<(usize, bool)> = (0..one.len())
-            .filter(|&i| one.motif[i] == mi as i64 && one.sequence[i] == 0)
+            .filter(|&i| one.motif[i] == mi as u32 && one.sequence[i] == 0)
             .map(|i| (one.start[i] as usize, one.minus[i]))
             .filter(|(s, _)| starts.contains(s))
             .collect();
@@ -928,7 +928,7 @@ fn gapped_scans_across_chunks_and_at_the_combination_limit() {
         // the gaps.
         for (mi, m) in group.iter().enumerate() {
             let plain = ungap(m, true);
-            let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as i64).collect();
+            let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as u32).collect();
             let words: Vec<String> = rows
                 .iter()
                 .map(|&i| t.matched(i, &seqs).replace('.', ""))
@@ -946,7 +946,7 @@ fn gapped_scans_across_chunks_and_at_the_combination_limit() {
             if !range.contains(k) {
                 continue;
             }
-            let mi = (k - range.start) as i64;
+            let mi = (k - range.start) as u32;
             assert!(
                 (0..t.len()).any(|i| t.motif[i] == mi
                     && t.start[i] == *at
@@ -968,7 +968,7 @@ fn gapped_scans_across_chunks_and_at_the_combination_limit() {
                 .collect();
             let want = naive_gapped(m, seqs[0], &starts, cutoff);
             let mut got: Vec<(i64, bool, Vec<usize>)> = (0..t.len())
-                .filter(|&i| t.motif[i] == mi as i64 && t.sequence[i] == 0)
+                .filter(|&i| t.motif[i] == mi as u32 && t.sequence[i] == 0)
                 .filter(|&i| starts.contains(&(t.start[i] as usize)))
                 .map(|i| (t.start[i], t.minus[i], t.gap_sizes(i).unwrap()))
                 .collect();
@@ -1029,7 +1029,7 @@ fn long_score_tails_are_batched_and_rebuilt() {
         .sum::<usize>();
     assert_eq!(t.len(), windows * motifs.len());
     for (mi, m) in motifs.iter().enumerate() {
-        let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as i64).collect();
+        let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as u32).collect();
         let queries: Vec<(usize, f64)> = rows.iter().map(|&i| (0, t.score[i])).collect();
         let p = motif_pvalue(std::slice::from_ref(m), &queries, &PvalueOptions::default()).unwrap();
         for (k, &i) in rows.iter().enumerate() {
@@ -1439,8 +1439,8 @@ fn wide_motif_scans_agree_with_score_match() {
                 .collect();
             want.sort();
             let got: Vec<(i64, i64, bool)> = (0..t.len())
-                .filter(|&i| t.motif[i] == mi as i64 && t.sequence[i] > 0)
-                .map(|i| (t.sequence[i], t.start[i], t.minus[i]))
+                .filter(|&i| t.motif[i] == mi as u32 && t.sequence[i] > 0)
+                .map(|i| (i64::from(t.sequence[i]), t.start[i], t.minus[i]))
                 .collect();
             assert_eq!(got, want, "{alphabet}, motif {mi}");
         }

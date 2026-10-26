@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Breaking:** `HitTable::motif` and `HitTable::sequence` are `Vec<u32>`
+  rather than `Vec<i64>`, which takes 8 bytes off every hit; positions stay
+  `i64`.
+- Scanning keeps hit positions as 64-bit numbers throughout, so hits in a
+  single sequence longer than 4 Gb no longer get wrapped positions.
+- Large scans gather each thread's hits into a list of the final size and
+  no longer copy the first batch, which lowers peak memory by about a
+  quarter for scans with millions of hits.
 - `scoring::get_matches()` rounds a score between grid points up, as
   scanning and P-values do, rather than returning words scoring below it.
 - `complexity()`, `sequence_complexity()` and `fasta::write()` work by

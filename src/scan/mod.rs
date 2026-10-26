@@ -112,16 +112,17 @@ pub struct Hit {
 }
 
 /// Hits as columns, one entry per hit, ordered by motif, sequence and start,
-/// with `+` strand hits first. Indices and positions are `i64` so the columns
-/// can be handed to Arrow as they are. The matched letters are not stored;
+/// with `+` strand hits first. Motif and sequence indices are `u32`, and
+/// positions are `i64`, so that the columns can be handed to Arrow as they
+/// are and sequences longer than 4 Gb are covered. The matched letters are not stored;
 /// [`HitTable::matched`] reads them from the sequences and
 /// [`HitTable::matched_encoded`] from encoded ones.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HitTable {
     /// Index of the motif.
-    pub motif: Vec<i64>,
+    pub motif: Vec<u32>,
     /// Index of the sequence.
-    pub sequence: Vec<i64>,
+    pub sequence: Vec<u32>,
     /// First position on the forward strand, counting from 0.
     pub start: Vec<i64>,
     /// Position just past the hit on the forward strand.
@@ -420,7 +421,8 @@ impl Shape {
 struct RawHit {
     motif: u32,
     sequence: u32,
-    start: u32,
+    /// Positions are 64-bit, as single sequences can be longer than 4 Gb.
+    start: u64,
     score: i32,
     /// Position in the order the hits were found, for [`scan_fasta`].
     id: u32,
@@ -465,7 +467,7 @@ fn scan_chunk(
         let hit = |i: usize, minus: bool, score: i32| RawHit {
             motif: mi as u32,
             sequence: si as u32,
-            start: i as u32,
+            start: i as u64,
             minus,
             score,
             id: 0,
@@ -561,7 +563,7 @@ fn scan_chunk_coded(
                 out.push(RawHit {
                     motif: mi as u32,
                     sequence: si as u32,
-                    start: i as u32,
+                    start: i as u64,
                     minus: false,
                     score: s,
                     id: 0,
@@ -759,7 +761,8 @@ fn scan_raw(
 ) -> Vec<RawHit> {
     let n_letters = seqs.alphabet().len();
     let span = if n_letters <= 64 { 2 } else { 1 };
-    work.par_iter()
+    let parts = work
+        .par_iter()
         .fold(
             || (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             |(mut quads, mut keys, mut pieces, mut out), &(si, starts, seg_end)| {
@@ -791,10 +794,22 @@ fn scan_raw(
             },
         )
         .map(|(_, _, _, out)| out)
-        .reduce(Vec::new, |mut a, mut b| {
-            a.append(&mut b);
-            a
-        })
+        .collect::<Vec<Vec<RawHit>>>();
+    concat(parts)
+}
+
+/// The hits of several threads as one list, allocated once at its final
+/// size, with each thread's list freed as it is copied. A single list is
+/// returned as it is.
+fn concat(mut parts: Vec<Vec<RawHit>>) -> Vec<RawHit> {
+    if parts.len() == 1 {
+        return parts.pop().unwrap();
+    }
+    let mut all = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+    for part in parts {
+        all.extend(part);
+    }
+    all
 }
 
 /// Drop overlapping hits if asked, from hits sorted by motif, sequence and
@@ -859,10 +874,10 @@ fn finish(
         let shape = shapes[r.motif as usize].as_ref().unwrap();
         let (width, max_score) = (shape.span(r.combo), shape.max_score);
         let score = r.score as f64 / 1000.0;
-        t.motif.push(r.motif as i64);
-        t.sequence.push(r.sequence as i64);
+        t.motif.push(r.motif);
+        t.sequence.push(r.sequence);
         t.start.push(r.start as i64);
-        t.end.push((r.start as usize + width) as i64);
+        t.end.push((r.start + width as u64) as i64);
         t.combo.push(r.combo);
         t.minus.push(r.minus);
         t.score.push(score);
@@ -964,7 +979,11 @@ pub fn scan_encoded(
                 r.pvalue = (raw * p.pvalue_scale).min(1.0);
                 r.motif += base as u32;
             });
-            raw.append(&mut hits);
+            if raw.is_empty() {
+                raw = hits;
+            } else {
+                raw.append(&mut hits);
+            }
             shapes.extend(batch.iter().map(|p| p.as_ref().map(Shape::of)));
             base += batch.len();
         }
@@ -1300,7 +1319,11 @@ fn scan_fasta_with(
                     letter_starts.push(start);
                     h.sequence += base as u32;
                 }
-                raw.append(&mut hits);
+                if raw.is_empty() {
+                    raw = hits;
+                } else {
+                    raw.append(&mut hits);
+                }
                 out.lengths
                     .extend((0..batch.len()).map(|i| batch.seq_len(i)));
                 out.names.extend(names);
@@ -1469,7 +1492,7 @@ mod tests {
         assert!(hits.minus.iter().all(|m| !m), "proteins have one strand");
         for (mi, m) in aa.iter().enumerate() {
             let got: Vec<(usize, i32)> = (0..hits.len())
-                .filter(|&i| hits.motif[i] == mi as i64)
+                .filter(|&i| hits.motif[i] == mi as u32)
                 .map(|i| {
                     (
                         hits.start[i] as usize,
@@ -1642,7 +1665,7 @@ mod tests {
             let t = scan_table(&dna, &[&seq], &opts).unwrap();
             for (mi, m) in dna.iter().enumerate() {
                 let mut got: Vec<_> = (0..t.len())
-                    .filter(|&i| t.motif[i] == mi as i64)
+                    .filter(|&i| t.motif[i] == mi as u32)
                     .map(|i| {
                         let w = (t.end[i] - t.start[i]) as usize;
                         assert_eq!(w, GapShape::from_motif(m).unwrap().width(t.combo[i]));

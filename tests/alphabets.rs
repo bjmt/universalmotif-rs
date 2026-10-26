@@ -55,7 +55,7 @@ fn check_scans(motifs: &[Motif], seqs: &[String], cases: &Value, label: &str) {
         assert_eq!(t.len(), n, "{ctx}: number of hits");
         let w = &case["table"];
         let f = |v: &[i64]| v.iter().map(|&x| x as f64).collect::<Vec<_>>();
-        let plus1 = |v: &[i64]| v.iter().map(|&x| x as f64 + 1.0).collect::<Vec<_>>();
+        let plus1 = |v: &[u32]| v.iter().map(|&x| x as f64 + 1.0).collect::<Vec<_>>();
         assert_eq!(plus1(&t.motif), nums(&w["motif.i"]), "{ctx}: motif");
         assert_eq!(
             plus1(&t.sequence),
@@ -63,7 +63,11 @@ fn check_scans(motifs: &[Motif], seqs: &[String], cases: &Value, label: &str) {
             "{ctx}: sequence"
         );
         // R counts positions from 1.
-        assert_eq!(plus1(&t.start), nums(&w["start"]), "{ctx}: start");
+        assert_eq!(
+            t.start.iter().map(|&x| x as f64 + 1.0).collect::<Vec<_>>(),
+            nums(&w["start"]),
+            "{ctx}: start"
+        );
         assert_eq!(f(&t.end), nums(&w["stop"]), "{ctx}: end");
         assert!(t.minus.iter().all(|m| !m), "{ctx}: only the forward strand");
         assert_close_vec(&t.score, &nums(&w["score"]), &format!("{ctx}: score"));

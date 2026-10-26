@@ -1054,7 +1054,7 @@ fn prop_palindromes() {
             ..Default::default()
         };
         let t = scan_table(std::slice::from_ref(&m), &seqs, &opts).ctx("scan")?;
-        let mut plus: Vec<(i64, i64, i64, u64)> = Vec::new();
+        let mut plus: Vec<(u32, i64, i64, u64)> = Vec::new();
         let mut minus = Vec::new();
         for i in 0..t.len() {
             let k = (t.sequence[i], t.start[i], t.end[i], t.score[i].to_bits());
@@ -1613,7 +1613,7 @@ fn prop_scan_matches_brute_force() {
         );
         // Each hit's P-value is that of its score.
         for (mi, m) in motifs.iter().enumerate() {
-            let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as i64).collect();
+            let rows: Vec<usize> = (0..t.len()).filter(|&i| t.motif[i] == mi as u32).collect();
             let q: Vec<(usize, f64)> = rows.iter().map(|&i| (0, t.score[i])).collect();
             let p = motif_pvalue(std::slice::from_ref(m), &q, &PvalueOptions::default())
                 .ctx("pvalues")?;
