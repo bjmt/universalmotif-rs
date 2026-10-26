@@ -6,7 +6,7 @@
 
 use rayon::prelude::*;
 
-use crate::cdf::ScoreDistribution;
+use crate::cdf::{ScoreDistribution, grid_value};
 use crate::convert::convert_type;
 use crate::error::{Error, Result, arg_err};
 use crate::matrix::Matrix;
@@ -231,9 +231,44 @@ pub fn pvalue_to_score(
 
 /// The smallest P-value each motif can give, that of its highest possible
 /// score. A P-value cutoff below it leaves the motif without hits.
+///
+/// No score distribution is needed: the highest score takes, in every
+/// column, one of the letters with that column's best score on the integer
+/// grid, so its probability is the product over columns of their background
+/// probabilities.
 pub fn min_pvalues(motifs: &[Motif], opts: &PvalueOptions) -> Result<Vec<f64>> {
-    let queries: Vec<(usize, f64)> = (0..motifs.len()).map(|i| (i, 0.0)).collect();
-    per_motif(motifs, &queries, opts, |d, _| d.pvalue(d.score_range().1))
+    if opts.bkg.len() > 1 && opts.bkg.len() != motifs.len() {
+        return arg_err("give one background for all motifs or one per motif");
+    }
+    motifs
+        .iter()
+        .enumerate()
+        .map(|(i, motif)| {
+            let bkg = match opts.bkg.len() {
+                0 => None,
+                1 => Some(opts.bkg[0].as_slice()),
+                _ => Some(opts.bkg[i].as_slice()),
+            };
+            let m = scoring_matrix(motif, bkg)?;
+            let (mut top, mut total) = (1.0, 1.0);
+            for col in m.pwm.columns() {
+                let grid: Vec<i32> = col.iter().map(|&v| grid_value(v)).collect();
+                let best = *grid.iter().max().unwrap();
+                top *= grid
+                    .iter()
+                    .zip(&m.bkg)
+                    .filter(|(g, _)| **g == best)
+                    .map(|(_, b)| b)
+                    .sum::<f64>();
+                total *= m.bkg.iter().sum::<f64>();
+            }
+            Ok(if total > 0.0 {
+                (top / total).min(1.0)
+            } else {
+                0.0
+            })
+        })
+        .collect()
 }
 
 /// The natural logarithm of a P-value written as text, such as `"1e-400"`.

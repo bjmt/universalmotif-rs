@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `pvalue::min_pvalues()` multiplies the background probabilities of each
+  column's best letters rather than building a score distribution, which
+  takes microseconds per motif; values agree to about 1e-13.
 - **Breaking:** `HitTable::motif` and `HitTable::sequence` are `Vec<u32>`
   rather than `Vec<i64>`, which takes 8 bytes off every hit; positions stay
   `i64`.
