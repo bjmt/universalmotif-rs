@@ -174,7 +174,13 @@ fn raw_motifs<'a>(lines: &'a [&'a str]) -> Result<Vec<RawMotif<'a>>> {
     }
     let mut out = Vec::new();
     for p in (0..lines.len()).filter(|&i| lines[i].starts_with("letter-probability matrix:")) {
-        let Some(&m) = motif_lines.iter().rev().find(|&&m| m < p) else {
+        // The last MOTIF line before the matrix, by binary search over the
+        // MOTIF lines in order.
+        let Some(&m) = motif_lines
+            .partition_point(|&m| m < p)
+            .checked_sub(1)
+            .map(|i| &motif_lines[i])
+        else {
             return fmt_err("found a letter-probability matrix without a MOTIF line");
         };
         let mt: Vec<&str> = lines[m].split_whitespace().collect();

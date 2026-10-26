@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `io::meme::read()` finds each matrix's MOTIF line by binary search,
+  so reading many motifs takes linear rather than quadratic time.
 - `pvalue::min_pvalues()` multiplies the background probabilities of each
   column's best letters rather than building a score distribution, which
   takes microseconds per motif; values agree to about 1e-13.
