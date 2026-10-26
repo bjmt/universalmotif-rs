@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `compare::anchor_layout()` lowers `min_overlap` to the width of the
+  narrower motif, as comparisons do, so motifs narrower than it are
+  aligned rather than left at the anchor's edge.
+
 ## 0.2.0 (2026-10-26)
 
 Breaking changes:

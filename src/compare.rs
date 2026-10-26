@@ -545,7 +545,8 @@ pub struct Layout {
 
 /// Lay motifs out in a common column frame by aligning each one to
 /// `motifs[anchor]`. Motifs that do not overlap the anchor by at least
-/// `opts.min_overlap` columns are placed at the anchor's left edge.
+/// `opts.min_overlap` columns, lowered to the width of the narrower of the
+/// two as in comparisons, are placed at the anchor's left edge.
 pub fn anchor_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> Result<Layout> {
     if anchor >= motifs.len() {
         return arg_err("anchor index out of range");
@@ -557,7 +558,11 @@ pub fn anchor_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> 
     let mut frame = vec![0i64; motifs.len()];
     let mut rc = vec![false; motifs.len()];
     for (i, a) in al.iter().enumerate() {
-        if i == anchor || a.overlap < opts.min_overlap {
+        let needed = opts
+            .min_overlap
+            .min(widths[anchor] as usize)
+            .min(widths[i] as usize);
+        if i == anchor || a.overlap < needed {
             continue;
         }
         let l = a.overlap as i64;

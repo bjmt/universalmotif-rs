@@ -1346,9 +1346,9 @@ fn anchored_layouts() {
     let layout = anchor_layout(&motifs, 0, &CompareOptions::default()).unwrap();
     let got: Vec<(usize, bool)> = layout.placements.iter().map(|p| (p.left, p.rc)).collect();
     // The anchor starts two columns in, after B's extra columns; C is
-    // flipped and starts one column in; D overlaps too little and sits at
-    // the anchor's left edge.
-    assert_eq!(got, [(2, false), (0, false), (1, true), (2, false)]);
+    // flipped and starts one column in; D, narrower than the minimum
+    // overlap, is aligned over its whole width, as comparisons allow.
+    assert_eq!(got, [(2, false), (0, false), (1, true), (5, false)]);
     assert_eq!(layout.width, 11);
 
     let alone = anchor_layout(&motifs[..1], 0, &CompareOptions::default()).unwrap();
