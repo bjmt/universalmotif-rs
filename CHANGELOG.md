@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `kmer::get_bkg_table()` gives `get_bkg()`'s output as columns, with
+  k-mers as indices into one list of them, which takes about a third of
+  the memory; `get_bkg()` is built on it and gives the same rows.
 - `io::meme::read()` finds each matrix's MOTIF line by binary search,
   so reading many motifs takes linear rather than quadratic time.
 - `pvalue::min_pvalues()` multiplies the background probabilities of each

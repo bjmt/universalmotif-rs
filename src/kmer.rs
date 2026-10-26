@@ -190,6 +190,106 @@ pub struct BkgRow {
     pub probability: f64,
 }
 
+/// The output of [`get_bkg`] as columns, from [`get_bkg_table`]. `sequence`
+/// is empty for merged counts, and `start` and `end` are empty unless
+/// windows were counted.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct BkgTable {
+    /// Every k-mer counted, which `kmer` indexes.
+    pub kmers: Vec<String>,
+    /// Index of each row's sequence.
+    pub sequence: Vec<u32>,
+    /// First position of each row's window, counting from 0.
+    pub start: Vec<u64>,
+    /// Position just past each row's window.
+    pub end: Vec<u64>,
+    /// Each row's k-mer, as an index into `kmers`.
+    pub kmer: Vec<u32>,
+    /// The number of times it occurs.
+    pub count: Vec<u64>,
+    /// Its frequency among the k-mers of the same size counted with it.
+    pub probability: Vec<f64>,
+}
+
+impl BkgTable {
+    /// The number of rows.
+    pub fn len(&self) -> usize {
+        self.kmer.len()
+    }
+
+    /// Whether there are no rows.
+    pub fn is_empty(&self) -> bool {
+        self.kmer.is_empty()
+    }
+
+    fn push(
+        &mut self,
+        sequence: Option<usize>,
+        window: Option<(usize, usize)>,
+        kmer: u32,
+        count: u64,
+        probability: f64,
+    ) {
+        if let Some(s) = sequence {
+            self.sequence.push(s as u32);
+        }
+        if let Some((start, end)) = window {
+            self.start.push(start as u64);
+            self.end.push(end as u64);
+        }
+        self.kmer.push(kmer);
+        self.count.push(count);
+        self.probability.push(probability);
+    }
+
+    /// Put the rows in order of `key`, keeping the order of ties.
+    fn sort_by_key<K: Ord>(&mut self, key: impl Fn(&BkgTable, usize) -> K) {
+        let mut order: Vec<u32> = (0..self.len() as u32).collect();
+        order.sort_by_key(|&i| key(self, i as usize));
+        fn take<T: Copy>(v: &mut Vec<T>, order: &[u32]) {
+            if !v.is_empty() {
+                *v = order.iter().map(|&i| v[i as usize]).collect();
+            }
+        }
+        take(&mut self.sequence, &order);
+        take(&mut self.start, &order);
+        take(&mut self.end, &order);
+        take(&mut self.kmer, &order);
+        take(&mut self.count, &order);
+        take(&mut self.probability, &order);
+    }
+
+    /// The rows as [`get_bkg`] gives them.
+    pub fn into_rows(self) -> Vec<BkgRow> {
+        (0..self.len())
+            .map(|i| BkgRow {
+                sequence: self.sequence.get(i).map(|&s| s as usize),
+                start: self.start.get(i).map(|&s| s as usize),
+                end: self.end.get(i).map(|&e| e as usize),
+                kmer: self.kmers[self.kmer[i] as usize].clone(),
+                count: self.count[i],
+                probability: self.probability[i],
+            })
+            .collect()
+    }
+}
+
+/// Each string's rank in bytewise order, equal strings sharing a rank.
+fn byte_ranks(strings: &[String]) -> Vec<u32> {
+    let mut order: Vec<usize> = (0..strings.len()).collect();
+    order.sort_by(|&a, &b| strings[a].as_bytes().cmp(strings[b].as_bytes()));
+    let mut rank = vec![0u32; strings.len()];
+    let mut r = 0;
+    for (k, &i) in order.iter().enumerate() {
+        if k > 0 && strings[i] != strings[order[k - 1]] {
+            r += 1;
+        }
+        rank[i] = r;
+    }
+    rank
+}
+
 fn probabilities(counts: &[u64]) -> Vec<f64> {
     let total: u64 = counts.iter().sum();
     counts
@@ -204,17 +304,13 @@ fn probabilities(counts: &[u64]) -> Vec<f64> {
         .collect()
 }
 
-/// k-mer counts and frequencies of sequences.
-///
-/// Rows are ordered by k, k-mer and sequence for per-sequence counts; by k-mer
-/// across all k and then window start for merged windows; and by sequence name,
-/// k-mer and window start for per-sequence windows. Names and k-mers are
-/// compared bytewise, and `names` gives the sequence names to order by.
-pub fn get_bkg<S: AsRef<str> + Sync>(
+/// [`get_bkg`] as columns, in the same order, with each row's k-mer as an
+/// index into [`BkgTable::kmers`], which takes far less memory for many rows.
+pub fn get_bkg_table<S: AsRef<str> + Sync>(
     seqs: &[S],
     names: &[String],
     opts: &BkgOptions,
-) -> Result<Vec<BkgRow>> {
+) -> Result<BkgTable> {
     if seqs.is_empty() {
         return arg_err("no sequences given");
     }
@@ -268,9 +364,11 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
     }
 
     let Some(win) = opts.window else {
-        let mut rows = Vec::new();
+        let mut t = BkgTable::default();
         for &k in &ks {
             let kl = kmers(&alphabet, k);
+            let base = t.kmers.len() as u32;
+            t.kmers.extend(kl.iter().cloned());
             let per_seq: Vec<Vec<u64>> = with_threads(opts.nthreads, || {
                 seqs.par_iter()
                     .map(|s| count_kmers(s, k, &alphabet))
@@ -281,15 +379,8 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     .map(|j| per_seq.iter().map(|c| c[j]).sum::<u64>() + opts.pseudocount)
                     .collect();
                 let probs = probabilities(&counts);
-                for (j, kmer) in kl.into_iter().enumerate() {
-                    rows.push(BkgRow {
-                        sequence: None,
-                        start: None,
-                        end: None,
-                        kmer,
-                        count: counts[j],
-                        probability: probs[j],
-                    });
+                for j in 0..kl.len() {
+                    t.push(None, None, base + j as u32, counts[j], probs[j]);
                 }
             } else {
                 let counts: Vec<Vec<u64>> = per_seq
@@ -297,21 +388,14 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     .map(|c| c.iter().map(|x| x + opts.pseudocount).collect())
                     .collect();
                 let probs: Vec<Vec<f64>> = counts.iter().map(|c| probabilities(c)).collect();
-                for (j, kmer) in kl.iter().enumerate() {
+                for j in 0..kl.len() {
                     for (si, c) in counts.iter().enumerate() {
-                        rows.push(BkgRow {
-                            sequence: Some(si),
-                            start: None,
-                            end: None,
-                            kmer: kmer.clone(),
-                            count: c[j],
-                            probability: probs[si][j],
-                        });
+                        t.push(Some(si), None, base + j as u32, c[j], probs[si][j]);
                     }
                 }
             }
         }
-        return Ok(rows);
+        return Ok(t);
     };
 
     // Windowed counts.
@@ -365,9 +449,11 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
         return arg_err("k must not be greater than the smallest window");
     }
 
-    let mut rows = Vec::new();
+    let mut t = BkgTable::default();
     for &k in &ks {
         let kl = kmers(&alphabet, k);
+        let base = t.kmers.len() as u32;
+        t.kmers.extend(kl.iter().cloned());
         // counts[seq][window][kmer]
         let counts: Vec<Vec<Vec<u64>>> = with_threads(opts.nthreads, || {
             seqs.par_iter()
@@ -392,16 +478,15 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                 })
                 .collect();
             let probs: Vec<Vec<f64>> = summed.iter().map(|c| probabilities(c)).collect();
-            for (j, kmer) in kl.iter().enumerate() {
+            for j in 0..kl.len() {
                 for (w, &(start, end)) in ws.iter().enumerate() {
-                    rows.push(BkgRow {
-                        sequence: None,
-                        start: Some(start),
-                        end: Some(end),
-                        kmer: kmer.clone(),
-                        count: summed[w][j],
-                        probability: probs[w][j],
-                    });
+                    t.push(
+                        None,
+                        Some((start, end)),
+                        base + j as u32,
+                        summed[w][j],
+                        probs[w][j],
+                    );
                 }
             }
         } else {
@@ -413,33 +498,49 @@ pub fn get_bkg<S: AsRef<str> + Sync>(
                     .map(|w| w.iter().map(|x| x + opts.pseudocount).collect())
                     .collect();
                 let probs: Vec<Vec<f64>> = c.iter().map(|w| probabilities(w)).collect();
-                for (j, kmer) in kl.iter().enumerate() {
+                for j in 0..kl.len() {
                     for (w, &(start, end)) in wins[si].iter().enumerate() {
-                        rows.push(BkgRow {
-                            sequence: Some(si),
-                            start: Some(start),
-                            end: Some(end),
-                            kmer: kmer.clone(),
-                            count: c[w][j],
-                            probability: probs[w][j],
-                        });
+                        t.push(
+                            Some(si),
+                            Some((start, end)),
+                            base + j as u32,
+                            c[w][j],
+                            probs[w][j],
+                        );
                     }
                 }
             }
         }
     }
+    // Rows are ordered by k-mer string, after the sequence name unless
+    // merged; ranks of the strings give the same order as comparing them.
+    let kmer_rank = byte_ranks(&t.kmers);
     if opts.merge {
-        // Merged windows are ordered by k-mer only, across all k.
-        rows.sort_by(|a, b| a.kmer.as_bytes().cmp(b.kmer.as_bytes()));
+        t.sort_by_key(|t, i| (0, kmer_rank[t.kmer[i] as usize]));
     } else {
-        rows.sort_by(|a, b| {
-            names[a.sequence.unwrap()]
-                .as_bytes()
-                .cmp(names[b.sequence.unwrap()].as_bytes())
-                .then(a.kmer.as_bytes().cmp(b.kmer.as_bytes()))
+        let name_rank = byte_ranks(&names);
+        t.sort_by_key(|t, i| {
+            (
+                name_rank[t.sequence[i] as usize],
+                kmer_rank[t.kmer[i] as usize],
+            )
         });
     }
-    Ok(rows)
+    Ok(t)
+}
+
+/// k-mer counts and frequencies of sequences.
+///
+/// Rows are ordered by k, k-mer and sequence for per-sequence counts; by k-mer
+/// across all k and then window start for merged windows; and by sequence name,
+/// k-mer and window start for per-sequence windows. Names and k-mers are
+/// compared bytewise, and `names` gives the sequence names to order by.
+pub fn get_bkg<S: AsRef<str> + Sync>(
+    seqs: &[S],
+    names: &[String],
+    opts: &BkgOptions,
+) -> Result<Vec<BkgRow>> {
+    get_bkg_table(seqs, names, opts).map(BkgTable::into_rows)
 }
 
 #[cfg(test)]
