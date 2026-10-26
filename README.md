@@ -1,6 +1,6 @@
 # universalmotif (Rust)
 
-[![crates.io](https://img.shields.io/crates/v/universalmotif)](https://crates.io/crates/universalmotif) [![docs.rs](https://img.shields.io/docsrs/universalmotif)](https://docs.rs/universalmotif) [![DOI](https://joss.theoj.org/papers/10.21105/joss.07012/status.svg)](https://doi.org/10.21105/joss.07012)
+[![crates.io](https://img.shields.io/crates/v/universalmotif)](https://crates.io/crates/universalmotif) [![Downloads](https://img.shields.io/crates/d/universalmotif)](https://crates.io/crates/universalmotif) [![docs.rs](https://img.shields.io/docsrs/universalmotif)](https://docs.rs/universalmotif) [![DOI](https://joss.theoj.org/papers/10.21105/joss.07012/status.svg)](https://doi.org/10.21105/joss.07012)
 
 This crate is a Rust port of [universalmotif](https://bioconductor.org/packages/universalmotif/),
 an R/Bioconductor package for working with sequence motifs. It covers most
