@@ -71,6 +71,16 @@ pub struct ScanOptions {
     /// cutoff divided by that number, and P-values are multiplied by it, up to
     /// 1. Off by default.
     pub correct_gaps: bool,
+    /// Keep only the first hit of each motif in each sequence, the one a
+    /// full scan would list first: the hit with the lowest start, and of a
+    /// `+` and a `-` strand hit at the same start, the `+` one. This is the
+    /// leftmost hit rather than the best, and its score and P-value are the
+    /// same as without this option. Scanning a sequence stops for a motif
+    /// soon after its first hit, so the time saved grows with the share of
+    /// sequences that have one; long sequences are scanned in pieces that
+    /// each stop on their own. It cannot be combined with `no_overlaps`.
+    /// Off by default.
+    pub first_hit: bool,
 }
 
 impl Default for ScanOptions {
@@ -82,6 +92,7 @@ impl Default for ScanOptions {
             nthreads: 1,
             use_gaps: true,
             correct_gaps: false,
+            first_hit: false,
         }
     }
 }
@@ -436,17 +447,16 @@ struct RawHit {
 /// Scan with every motif the windows starting in `starts` of one stretch of a
 /// sequence free of unknown letters, which ends at `seg_end`. The packed
 /// letters are decoded once into one byte per position, holding the four
-/// letters that start there.
+/// letters that start there. With `first_only`, each motif keeps only its
+/// first hit, in the order of [`finish`], and stops soon after it.
 #[allow(clippy::too_many_arguments)]
-// Kept out of line: inlined into the work loop, it compiles to a slower
-// scanning loop.
-#[inline(never)]
 fn scan_chunk(
     prepared: &[Option<Prepared>],
     seq: &PackedSeq,
     si: usize,
     starts: (usize, usize),
     seg_end: usize,
+    first_only: bool,
     quads: &mut Vec<u8>,
     pieces: &mut Vec<Vec<i32>>,
     out: &mut Vec<RawHit>,
@@ -464,46 +474,18 @@ fn scan_chunk(
         let Scorers::Packed(scorers) = &p.scorers else {
             continue;
         };
-        let hit = |i: usize, minus: bool, score: i32| RawHit {
+        let at = Window {
             motif: mi as u32,
             sequence: si as u32,
-            start: i as u64,
-            minus,
-            score,
-            id: 0,
-            combo: 0,
-            pvalue: f64::NAN,
+            first: c,
+            min_score: p.min_score,
         };
-        if let [(Strand::Plus, plus), (Strand::Minus, minus)] = scorers.as_slice() {
-            // Both strands from one read of each window's letters.
-            for i in c..last {
-                let q = &quads[i - c..];
-                let (mut sp, mut sm) = (0i32, 0i32);
-                for (g, (tp, tm)) in plus.groups.iter().zip(&minus.groups).enumerate() {
-                    let code = q[4 * g] as usize;
-                    sp += tp[code];
-                    sm += tm[code];
-                }
-                if sp >= p.min_score {
-                    out.push(hit(i, false, sp));
-                }
-                if sm >= p.min_score {
-                    out.push(hit(i, true, sm));
-                }
-            }
-            continue;
-        }
-        for (strand, scorer) in scorers {
-            for i in c..last {
-                let q = &quads[i - c..];
-                let mut s = 0i32;
-                for (g, t) in scorer.groups.iter().enumerate() {
-                    s += t[q[4 * g] as usize];
-                }
-                if s >= p.min_score {
-                    out.push(hit(i, *strand == Strand::Minus, s));
-                }
-            }
+        if first_only {
+            in_blocks((c, last), out, |range, out| {
+                scan_packed(scorers, quads, &at, range, out)
+            });
+        } else {
+            scan_packed(scorers, quads, &at, (c, last), out);
         }
     }
     if prepared
@@ -512,22 +494,151 @@ fn scan_chunk(
         .any(|p| matches!(p.scorers, Scorers::Gapped(_)))
     {
         let stop = (end + max_w).min(seg_end);
-        scan_chunk_gapped(prepared, quads, si, starts, stop, seg_end, pieces, out);
+        scan_chunk_gapped(
+            prepared, quads, si, starts, stop, seg_end, first_only, pieces, out,
+        );
+    }
+}
+
+/// What the scanning loops need to know besides the scores: the motif and
+/// sequence, the first window start the decoded letters cover, and the
+/// threshold.
+struct Window {
+    motif: u32,
+    sequence: u32,
+    first: usize,
+    min_score: i32,
+}
+
+impl Window {
+    fn hit(&self, i: usize, minus: bool, score: i32) -> RawHit {
+        RawHit {
+            motif: self.motif,
+            sequence: self.sequence,
+            start: i as u64,
+            minus,
+            score,
+            id: 0,
+            combo: 0,
+            pvalue: f64::NAN,
+        }
+    }
+}
+
+/// Window starts scored at a time when only each motif's first hit is kept.
+const FIRST_BLOCK: usize = 64;
+
+/// Run `scan` over `range` a block of [`FIRST_BLOCK`] window starts at a
+/// time until a block has hits, and keep only the first of them. Stopping
+/// between blocks rather than at the hit itself spares the scanning loops a
+/// second way out, which slows them down even when it is never taken.
+fn in_blocks(
+    range: (usize, usize),
+    out: &mut Vec<RawHit>,
+    mut scan: impl FnMut((usize, usize), &mut Vec<RawHit>),
+) {
+    let before = out.len();
+    let (mut b, last) = range;
+    while b < last && out.len() == before {
+        let e = (b + FIRST_BLOCK).min(last);
+        scan((b, e), out);
+        b = e;
+    }
+    keep_first(out, before);
+}
+
+/// Keep only the first of the hits from `before` on, in the order of
+/// [`finish`].
+fn keep_first(out: &mut Vec<RawHit>, before: usize) {
+    if out.len() > before + 1 {
+        let best = (before..out.len())
+            .min_by_key(|&k| (out[k].start, out[k].minus, out[k].combo))
+            .unwrap();
+        out.swap(before, best);
+        out.truncate(before + 1);
+    }
+}
+
+/// Score the windows starting in `range` with one motif's scorers, one per
+/// strand, given the letters decoded by [`scan_chunk`].
+// Kept out of line: inlined, it compiles to a slower scanning loop.
+#[inline(never)]
+fn scan_packed(
+    scorers: &[(Strand, Scorer)],
+    quads: &[u8],
+    at: &Window,
+    range: (usize, usize),
+    out: &mut Vec<RawHit>,
+) {
+    let (from, to) = range;
+    let c = at.first;
+    if let [(Strand::Plus, plus), (Strand::Minus, minus)] = scorers {
+        // Both strands from one read of each window's letters.
+        for i in from..to {
+            let q = &quads[i - c..];
+            let (mut sp, mut sm) = (0i32, 0i32);
+            for (g, (tp, tm)) in plus.groups.iter().zip(&minus.groups).enumerate() {
+                let code = q[4 * g] as usize;
+                sp += tp[code];
+                sm += tm[code];
+            }
+            if sp >= at.min_score {
+                out.push(at.hit(i, false, sp));
+            }
+            if sm >= at.min_score {
+                out.push(at.hit(i, true, sm));
+            }
+        }
+        return;
+    }
+    for (strand, scorer) in scorers {
+        for i in from..to {
+            let q = &quads[i - c..];
+            let mut s = 0i32;
+            for (g, t) in scorer.groups.iter().enumerate() {
+                s += t[q[4 * g] as usize];
+            }
+            if s >= at.min_score {
+                out.push(at.hit(i, *strand == Strand::Minus, s));
+            }
+        }
+    }
+}
+
+/// [`scan_packed`] for the letter codes of [`scan_chunk_coded`], combined
+/// `span` letters at a time.
+#[inline(never)]
+fn scan_coded(
+    scorer: &CodedScorer,
+    keys: &[u16],
+    span: usize,
+    at: &Window,
+    range: (usize, usize),
+    out: &mut Vec<RawHit>,
+) {
+    let c = at.first;
+    for i in range.0..range.1 {
+        let k = &keys[i - c..];
+        let mut s = 0i32;
+        for (g, t) in scorer.groups.iter().enumerate() {
+            s += t[k[span * g] as usize];
+        }
+        if s >= at.min_score {
+            out.push(at.hit(i, false, s));
+        }
     }
 }
 
 /// [`scan_chunk`] for alphabets other than DNA and RNA: the letter codes of
 /// each group of `span` positions are combined once per position.
 #[allow(clippy::too_many_arguments)]
-// Kept out of line: inlined into the work loop, it compiles to a slower
-// scanning loop.
-#[inline(never)]
 fn scan_chunk_coded(
     prepared: &[Option<Prepared>],
     seq: &CodedSeq,
     si: usize,
     starts: (usize, usize),
     seg_end: usize,
+    first_only: bool,
     n: usize,
     span: usize,
     keys: &mut Vec<u16>,
@@ -553,24 +664,18 @@ fn scan_chunk_coded(
             continue;
         }
         let last = end.min(seg_end + 1 - p.width);
-        for i in c..last {
-            let k = &keys[i - c..];
-            let mut s = 0i32;
-            for (g, t) in scorer.groups.iter().enumerate() {
-                s += t[k[span * g] as usize];
-            }
-            if s >= p.min_score {
-                out.push(RawHit {
-                    motif: mi as u32,
-                    sequence: si as u32,
-                    start: i as u64,
-                    minus: false,
-                    score: s,
-                    id: 0,
-                    combo: 0,
-                    pvalue: f64::NAN,
-                });
-            }
+        let at = Window {
+            motif: mi as u32,
+            sequence: si as u32,
+            first: c,
+            min_score: p.min_score,
+        };
+        if first_only {
+            in_blocks((c, last), out, |range, out| {
+                scan_coded(scorer, keys, span, &at, range, out)
+            });
+        } else {
+            scan_coded(scorer, keys, span, &at, (c, last), out);
         }
     }
     if prepared
@@ -578,12 +683,15 @@ fn scan_chunk_coded(
         .flatten()
         .any(|p| matches!(p.scorers, Scorers::Gapped(_)))
     {
-        scan_chunk_coded_gapped(prepared, keys, si, starts, stop, seg_end, span, pieces, out);
+        scan_chunk_coded_gapped(
+            prepared, keys, si, starts, stop, seg_end, span, first_only, pieces, out,
+        );
     }
 }
 
 /// The gapped motifs' part of [`scan_chunk`], kept apart so the loop over
-/// other motifs compiles as it would without them.
+/// other motifs compiles as it would without them. With `first`, each motif
+/// is scanned a block at a time by [`in_blocks`].
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn scan_chunk_gapped(
@@ -593,6 +701,7 @@ fn scan_chunk_gapped(
     starts: (usize, usize),
     stop: usize,
     seg_end: usize,
+    first: bool,
     pieces: &mut Vec<Vec<i32>>,
     out: &mut Vec<RawHit>,
 ) {
@@ -615,9 +724,27 @@ fn scan_chunk_gapped(
             ..
         }) = p
         {
-            g.scan(
-                mi, si, starts, stop, seg_end, *min_score, pieces, score, out,
-            );
+            if first {
+                let w = g.shape.max_width();
+                in_blocks(starts, out, |(b, e), out| {
+                    let stop = (e + w).min(stop);
+                    g.scan(
+                        mi,
+                        si,
+                        (b, e),
+                        stop,
+                        seg_end,
+                        *min_score,
+                        pieces,
+                        score,
+                        out,
+                    )
+                });
+            } else {
+                g.scan(
+                    mi, si, starts, stop, seg_end, *min_score, pieces, score, out,
+                );
+            }
         }
     }
 }
@@ -634,6 +761,7 @@ fn scan_chunk_coded_gapped(
     stop: usize,
     seg_end: usize,
     span: usize,
+    first: bool,
     pieces: &mut Vec<Vec<i32>>,
     out: &mut Vec<RawHit>,
 ) {
@@ -656,9 +784,27 @@ fn scan_chunk_coded_gapped(
             ..
         }) = p
         {
-            g.scan(
-                mi, si, starts, stop, seg_end, *min_score, pieces, score, out,
-            );
+            if first {
+                let w = g.shape.max_width();
+                in_blocks(starts, out, |(b, e), out| {
+                    let stop = (e + w).min(stop);
+                    g.scan(
+                        mi,
+                        si,
+                        (b, e),
+                        stop,
+                        seg_end,
+                        *min_score,
+                        pieces,
+                        score,
+                        out,
+                    )
+                });
+            } else {
+                g.scan(
+                    mi, si, starts, stop, seg_end, *min_score, pieces, score, out,
+                );
+            }
         }
     }
 }
@@ -673,6 +819,11 @@ fn check_scan(motifs: &[Motif], opts: &ScanOptions) -> Result<Alphabet> {
     }
     if motifs.iter().any(|m| m.alphabet != first.alphabet) {
         return arg_err("all motifs must share the same alphabet");
+    }
+    if opts.first_hit && opts.no_overlaps.is_some() {
+        return arg_err(
+            "first_hit keeps one hit per motif and sequence, so it cannot be combined with no_overlaps",
+        );
     }
     Ok(first.alphabet.clone())
 }
@@ -753,11 +904,13 @@ fn work_items(seqs: &EncodedSequences) -> Vec<(usize, (usize, usize), usize)> {
 }
 
 /// Every hit of the prepared motifs in `seqs`, in no particular order and
-/// without P-values. Runs on the current thread pool.
+/// without P-values, or with `first` the first hit of each motif in each
+/// unit of work. Runs on the current thread pool.
 fn scan_raw(
     prepared: &[Option<Prepared>],
     seqs: &EncodedSequences,
     work: &[(usize, (usize, usize), usize)],
+    first: bool,
 ) -> Vec<RawHit> {
     let n_letters = seqs.alphabet().len();
     let span = if n_letters <= 64 { 2 } else { 1 };
@@ -773,6 +926,7 @@ fn scan_raw(
                         si,
                         starts,
                         seg_end,
+                        first,
                         &mut quads,
                         &mut pieces,
                         &mut out,
@@ -783,6 +937,7 @@ fn scan_raw(
                         si,
                         starts,
                         seg_end,
+                        first,
                         n_letters,
                         span,
                         &mut keys,
@@ -850,6 +1005,11 @@ fn finish(
     alphabet: &Alphabet,
 ) -> (HitTable, Vec<u32>) {
     raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
+    if opts.first_hit {
+        // Each unit of work stopped at its own first hit; keep the
+        // sequence's.
+        raw.dedup_by_key(|r| (r.motif, r.sequence));
+    }
     drop_overlaps(&mut raw, shapes, opts);
 
     let n = raw.len();
@@ -972,7 +1132,7 @@ pub fn scan_encoded(
                     .sum::<usize>();
                 batch.extend(group);
             }
-            let mut hits = scan_raw(&batch, seqs, &work);
+            let mut hits = scan_raw(&batch, seqs, &work, opts.first_hit);
             hits.par_iter_mut().for_each(|r| {
                 let p = batch[r.motif as usize].as_ref().unwrap();
                 let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
@@ -1061,11 +1221,14 @@ const MATCH_BLOCK: usize = 1 << 22;
 /// Which motifs hit which sequences, as a sparse matrix of hits, hit counts
 /// or best scores, without keeping the hits themselves.
 ///
-/// Scanning is as in [`scan_encoded`], with `opts.no_overlaps` applied before
-/// counting. Only the score thresholds are needed, so P-values are computed
-/// only to choose among overlapping hits. Sequences are scanned a block at a time and each block's hits
-/// are summarized straight away, which keeps memory to that of the matrix
-/// even for hundreds of thousands of sequences.
+/// Scanning is as in [`scan_encoded`], with `opts.no_overlaps` and
+/// `opts.first_hit` applied before counting. Only the score thresholds are
+/// needed, so P-values are computed only to choose among overlapping hits.
+/// For [`MatchValue::Matches`], scanning a stretch of sequence stops for a
+/// motif at its first hit, since only whether there is one matters.
+/// Sequences are scanned a block at a time and each block's hits are
+/// summarized straight away, which keeps memory to that of the matrix even
+/// for hundreds of thousands of sequences.
 ///
 /// # Example
 ///
@@ -1100,11 +1263,16 @@ pub fn motif_matches(
         n_motifs: motifs.len(),
         ..Default::default()
     };
+    // Removing overlapping hits keeps at least one hit of each motif in
+    // each sequence unless hits of different motifs are compared, so
+    // presence needs only the first hit of each.
+    let presence = value == MatchValue::Matches && opts.no_overlaps.is_none_or(|n| !n.ignore_motif);
     with_threads(opts.nthreads, || -> Result<()> {
         // P-values are only needed to choose among overlapping hits.
-        let by_pvalue = opts
-            .no_overlaps
-            .is_some_and(|n| n.by == OverlapPriority::Pvalue);
+        let by_pvalue = !presence
+            && opts
+                .no_overlaps
+                .is_some_and(|n| n.by == OverlapPriority::Pvalue);
         let prepared = motifs
             .par_iter()
             .map(|m| prepare_motif(m, opts, by_pvalue))
@@ -1121,16 +1289,21 @@ pub fn motif_matches(
                 size += work[hi].1.1 - work[hi].1.0;
                 hi += 1;
             }
-            let mut raw = scan_raw(&prepared, seqs, &work[lo..hi]);
-            if by_pvalue {
-                raw.par_iter_mut().for_each(|r| {
-                    let p = prepared[r.motif as usize].as_ref().unwrap();
-                    let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
-                    r.pvalue = (raw * p.pvalue_scale).min(1.0);
-                });
+            let mut raw = scan_raw(&prepared, seqs, &work[lo..hi], presence || opts.first_hit);
+            if !presence {
+                if by_pvalue {
+                    raw.par_iter_mut().for_each(|r| {
+                        let p = prepared[r.motif as usize].as_ref().unwrap();
+                        let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
+                        r.pvalue = (raw * p.pvalue_scale).min(1.0);
+                    });
+                }
+                raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
+                if opts.first_hit {
+                    raw.dedup_by_key(|r| (r.motif, r.sequence));
+                }
+                drop_overlaps(&mut raw, &shapes, opts);
             }
-            raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
-            drop_overlaps(&mut raw, &shapes, opts);
             raw.sort_unstable_by_key(|r| (r.sequence, r.motif));
             for r in &raw {
                 // Blocks hold whole sequences in order, so a sequence and
@@ -1299,7 +1472,7 @@ fn scan_fasta_with(
             for (names, batch) in rx {
                 let base = out.names.len();
                 let work = work_items(&batch);
-                let mut hits = scan_raw(&prepared, &batch, &work);
+                let mut hits = scan_raw(&prepared, &batch, &work, opts.first_hit);
                 for h in &mut hits {
                     let shape = shapes[h.motif as usize].as_ref().unwrap();
                     let start = letters.len();
