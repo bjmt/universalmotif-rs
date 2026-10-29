@@ -1,17 +1,21 @@
 //! Motif comparison with [`compare_motifs`].
 //!
 //! Two motifs are compared by sliding one along the other and summing, over the
-//! overlapping columns, the Pearson correlation of each column pair centred on
-//! a uniform background; for DNA and RNA the reverse complement is tried as
-//! well. The best alignment is kept. Its significance comes from the
-//! distribution of that sum under a null model of target columns, computed
-//! exactly by convolution, Bonferroni-corrected for the number of alignments
-//! tried.
+//! overlapping columns, a score for each column pair; for DNA and RNA the
+//! reverse complement is tried as well. The best alignment is kept. Its
+//! significance comes from the distribution of that sum under a null model of
+//! target columns, computed exactly by convolution, Bonferroni-corrected for
+//! the number of alignments tried.
 //!
-//! Motifs of any alphabet can be compared. Columns are centred on 1/n for an
-//! n-letter alphabet, which makes the score the Pearson correlation of
-//! probability columns. Reverse complements are only tried, and the parametric
-//! null is only available, for DNA and RNA.
+//! Columns are scored by Pearson correlation by default, centred on 1/n for an
+//! n-letter alphabet so that it is the correlation of probability columns, or
+//! by Euclidean distance, which is negated so that the best alignment always
+//! has the highest sum. With [`Overhang::Background`], the columns of either
+//! motif hanging over the ends of the other are compared with the background
+//! too.
+//!
+//! Motifs of any alphabet can be compared. Reverse complements are only tried,
+//! and the parametric null is only available, for DNA and RNA.
 
 use rayon::prelude::*;
 
@@ -19,10 +23,13 @@ use crate::alphabet::Alphabet;
 use crate::convert::{consensus_letter, consensus_letter_aa, convert_type};
 use crate::error::{Error, Result, arg_err};
 use crate::matrix::which_max;
+use crate::metrics::ColumnMetric;
 use crate::motif::{Motif, MotifType, Strand};
 use crate::pvalue::with_threads;
 
-const PCC_BINS: usize = 51;
+/// How close to the edge between two bins, as a fraction of a bin, a score
+/// must be for [`Scorer::careful`] to decide its bin.
+const EDGE: f64 = 1e-9;
 const ENUM_GRID_K: usize = 5;
 const ENUM_DIRICHLET_N: f64 = 4.0;
 const TIE_TOLERANCE: f64 = 1e-10;
@@ -55,16 +62,76 @@ impl Col for Vec<f64> {
     }
 }
 
-/// A probability column centred on the uniform value, 1/n (0.25 for DNA and
-/// RNA), with its sum of squares, so that correlating it with many columns
-/// does its own part once.
+/// A way of scoring column pairs: columns are prepared once, so that scoring
+/// a pair does as little as possible, and scores lie in `LO..=HI`, higher
+/// being more alike.
+trait Scorer {
+    const LO: f64;
+    const HI: f64;
+    /// Bins that column scores are rounded to, evenly over `LO..=HI`, for
+    /// the null distributions.
+    const BINS: usize;
+    /// Whether alignments of overlaps alone are chosen by their mean score
+    /// rather than their sum, as scores that are never positive would
+    /// otherwise favour the shortest overlaps.
+    const BY_MEAN: bool;
+    fn prepare<C: Col>(c: &C) -> C;
+    fn score<C: Col>(a: &C, b: &C) -> f64;
+    /// Columns prepared for [`Scorer::careful`].
+    type Careful<C: Col>: Send + Sync;
+    fn careful_prepare<C: Col>(c: &C) -> Self::Careful<C>;
+    /// The score of two columns by the plainest formula. Column medians and
+    /// the alignments kept are scored this way, and so are column scores on
+    /// the edge between two bins, so that rounding errors cannot send a
+    /// score that is on the edge in theory, such as a correlation of -0.5,
+    /// either way, and results do not depend on the quicker scores.
+    fn careful<C: Col>(a: &Self::Careful<C>, b: &Self::Careful<C>) -> f64;
+}
+
+/// A probability column centred on the uniform value, with its sum of
+/// squares, for correlating it carefully.
 struct Centred<C> {
     values: C,
     ss: f64,
 }
 
-impl<C: Col> Centred<C> {
-    fn new(c: &C) -> Self {
+/// Pearson correlation. Columns are centred on the uniform value, 1/n (0.25
+/// for DNA and RNA), and scaled to unit length, which makes a correlation a
+/// dot product. Uniform columns become zeros, so that they correlate 0 with
+/// anything.
+struct PccScore;
+
+impl Scorer for PccScore {
+    const LO: f64 = -1.0;
+    const HI: f64 = 1.0;
+    const BINS: usize = 51;
+    const BY_MEAN: bool = false;
+
+    fn prepare<C: Col>(c: &C) -> C {
+        let v = c.values();
+        let centre = 1.0 / v.len() as f64;
+        let ss = v.iter().fold(0.0, |a, &x| a + (x - centre) * (x - centre));
+        let norm = ss.sqrt();
+        let unit: Vec<f64> = v
+            .iter()
+            .map(|&x| if ss < 1e-12 { 0.0 } else { (x - centre) / norm })
+            .collect();
+        C::from_slice(&unit)
+    }
+
+    #[inline(always)]
+    fn score<C: Col>(a: &C, b: &C) -> f64 {
+        let (a, b) = (a.values(), b.values());
+        let mut s = 0.0;
+        for i in 0..a.len() {
+            s += a[i] * b[i];
+        }
+        s
+    }
+
+    type Careful<C: Col> = Centred<C>;
+
+    fn careful_prepare<C: Col>(c: &C) -> Centred<C> {
         let v = c.values();
         let centre = 1.0 / v.len() as f64;
         let mut ss = 0.0;
@@ -82,31 +149,89 @@ impl<C: Col> Centred<C> {
         }
     }
 
-    /// The Pearson correlation of the two columns, or 0 if either is
-    /// uniform.
-    #[inline(always)]
-    fn pcc(&self, t: &Centred<C>) -> f64 {
-        if self.ss < 1e-12 || t.ss < 1e-12 {
+    fn careful<C: Col>(a: &Centred<C>, b: &Centred<C>) -> f64 {
+        if a.ss < 1e-12 || b.ss < 1e-12 {
             return 0.0;
         }
-        let (q, t_v) = (self.values.values(), t.values.values());
-        let mut sqt = 0.0;
-        for i in 0..q.len() {
-            sqt += q[i] * t_v[i];
-        }
-        sqt / (self.ss * t.ss).sqrt()
+        Self::score(&a.values, &b.values) / (a.ss * b.ss).sqrt()
     }
 }
 
-fn score_to_bin(s: f64) -> usize {
-    let t = ((s + 1.0) / 2.0).clamp(0.0, 1.0);
-    ((t * (PCC_BINS - 1) as f64 + 0.5).floor() as i64).clamp(0, PCC_BINS as i64 - 1) as usize
+/// Euclidean distance between probability columns, negated so that more
+/// alike columns score higher. No two columns are further apart than the
+/// square root of 2.
+struct EuclScore;
+
+impl Scorer for EuclScore {
+    const LO: f64 = -std::f64::consts::SQRT_2;
+    const HI: f64 = 0.0;
+    // Distances between real columns spread over the whole range. Among
+    // all pairs of JASPAR vertebrate motifs with P-values from 1e-6 to
+    // 0.05, rounding to 51 bins moved 1% of the P-values by more than 0.13
+    // orders of magnitude and 201 bins by more than 0.03, at about three
+    // times the cost.
+    const BINS: usize = 201;
+    const BY_MEAN: bool = true;
+
+    fn prepare<C: Col>(c: &C) -> C {
+        c.clone()
+    }
+
+    #[inline(always)]
+    fn score<C: Col>(a: &C, b: &C) -> f64 {
+        let (a, b) = (a.values(), b.values());
+        let mut s = 0.0;
+        for i in 0..a.len() {
+            let d = a[i] - b[i];
+            s += d * d;
+        }
+        -s.sqrt()
+    }
+
+    type Careful<C: Col> = C;
+
+    fn careful_prepare<C: Col>(c: &C) -> C {
+        c.clone()
+    }
+
+    fn careful<C: Col>(a: &C, b: &C) -> f64 {
+        Self::score(a, b)
+    }
 }
 
-fn sum_score_to_bin(s: f64, len: usize) -> usize {
-    let per_col = ((s / len as f64 + 1.0) / 2.0).clamp(0.0, 1.0);
-    let bin = (per_col * (PCC_BINS - 1) as f64 * len as f64 + 0.5).floor() as i64;
-    bin.clamp(0, (len * (PCC_BINS - 1)) as i64) as usize
+/// The bin of a sum of `len` column scores.
+fn sum_score_to_bin<S: Scorer>(s: f64, len: usize) -> usize {
+    let per_col = ((s / len as f64 - S::LO) / (S::HI - S::LO)).clamp(0.0, 1.0);
+    let bin = (per_col * (S::BINS - 1) as f64 * len as f64 + 0.5).floor() as i64;
+    bin.clamp(0, (len * (S::BINS - 1)) as i64) as usize
+}
+
+/// A column prepared both for quick scoring and for careful scoring.
+struct Both<C: Col, S: Scorer> {
+    quick: C,
+    careful: S::Careful<C>,
+}
+
+impl<C: Col, S: Scorer> Both<C, S> {
+    fn new(c: &C) -> Self {
+        Both {
+            quick: S::prepare(c),
+            careful: S::careful_prepare(c),
+        }
+    }
+
+    /// The bin of the score of the two columns. Away from the edges between
+    /// bins, quicker arithmetic than [`sum_score_to_bin`] finds the same bin.
+    #[inline(always)]
+    fn bin(&self, t: &Both<C, S>) -> usize {
+        let s = S::score(&self.quick, &t.quick);
+        let x = (s - S::LO) * ((S::BINS - 1) as f64 / (S::HI - S::LO)) + 0.5;
+        let f = x.floor();
+        if x - f < EDGE || f + 1.0 - x < EDGE {
+            return sum_score_to_bin::<S>(S::careful(&self.careful, &t.careful), 1);
+        }
+        (f as i64).clamp(0, S::BINS as i64 - 1) as usize
+    }
 }
 
 /// Reverse complement of DNA or RNA columns. In A, C, G, T order the complement
@@ -170,6 +295,29 @@ pub enum NullModel {
     Parametric,
 }
 
+/// What the columns of either motif hanging over the ends of the other are
+/// compared with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Overhang {
+    /// Nothing: only the overlap is scored.
+    #[default]
+    Ignore,
+    /// The background, so that every column of both motifs is compared with
+    /// something in every alignment. A query column is compared with the
+    /// target column facing it or, past the target's ends, with the
+    /// background, and the same goes for each target column, which makes as
+    /// many column scores as the two motifs have columns between them,
+    /// whatever the alignment. Each overlapping pair is thus counted from
+    /// both sides. The alignment with the highest total is kept, and the
+    /// score reported is its mean, so that partial overlaps are penalized
+    /// by however much their overhanging columns differ from the
+    /// background. With Pearson correlation and a uniform background, the
+    /// overhanging columns score 0, which leaves the choice of alignment as
+    /// it is without them and only lowers the reported score of partial
+    /// overlaps.
+    Background,
+}
+
 /// Options for comparisons.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompareOptions {
@@ -180,11 +328,25 @@ pub struct CompareOptions {
     pub rc: bool,
     /// The null model for P-values; the empirical one by default.
     pub null: NullModel,
-    /// Background for the parametric null, in A, C, G, T order.
+    /// Background for the parametric null and for
+    /// [`Overhang::Background`], in A, C, G, T order. Other alphabets use a
+    /// uniform background.
     pub bkg: [f64; 4],
+    /// How column pairs are scored: [`ColumnMetric::Pcc`], their Pearson
+    /// correlation, by default, or [`ColumnMetric::Eucl`], their Euclidean
+    /// distance. Distances are negated while aligning, so that the best
+    /// alignment always has the highest sum of column scores, but reported
+    /// as they are, lower meaning more alike. Since summed distances favour
+    /// short overlaps, Euclidean alignments are chosen by their mean column
+    /// distance unless complete scores or background overhangs are used,
+    /// both of which make alignments cover the same number of columns.
+    pub method: ColumnMetric,
+    /// What overhanging columns are compared with; nothing by default.
+    /// Cannot be combined with `complete`.
+    pub overhang: Overhang,
     /// Score whole queries rather than overlaps, as TOMTOM does by default.
-    /// Each query column's correlations are measured against the median of
-    /// its correlations with the null columns, so that a typical column
+    /// Each query column's scores are measured against the median of its
+    /// scores with the null columns, so that a typical column
     /// scores zero, and query columns hanging over the ends of the target
     /// count as typical columns. The best alignment is then the one with the
     /// highest sum, and its P-value is that of the best of all the alignments
@@ -204,6 +366,8 @@ impl Default for CompareOptions {
             rc: true,
             null: NullModel::Empirical,
             bkg: [0.25; 4],
+            method: ColumnMetric::Pcc,
+            overhang: Overhang::Ignore,
             complete: false,
             nthreads: 1,
         }
@@ -218,11 +382,14 @@ pub struct Alignment {
     pub query: usize,
     /// Index of the target motif.
     pub target: usize,
-    /// Sum of column correlations over the overlap.
+    /// Sum of column scores over the overlap, with Euclidean distances
+    /// negated.
     pub score: f64,
-    /// The score the alignment was chosen by: `score`, or with
-    /// [`CompareOptions::complete`] the sum over the overlap of each query
-    /// column's correlation less its median.
+    /// The score the alignment was chosen by: `score`, its mean over the
+    /// overlap for Euclidean distances, with [`CompareOptions::complete`] the
+    /// sum over the overlap of each query column's score less its median, or
+    /// with [`Overhang::Background`] the sum over every column of both
+    /// motifs.
     pub complete_score: f64,
     /// Number of overlapping columns, or 0 if no alignment was possible.
     pub overlap: usize,
@@ -250,6 +417,29 @@ fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
     Ok(first.alphabet.clone())
 }
 
+/// Check the options that the alignments and P-values both depend on.
+fn check_options(opts: &CompareOptions, alphabet: &Alphabet) -> Result<()> {
+    if !matches!(opts.method, ColumnMetric::Pcc | ColumnMetric::Eucl) {
+        return Err(Error::Unsupported(format!(
+            "motifs can only be compared by PCC or EUCL, not {}",
+            opts.method
+        )));
+    }
+    if opts.overhang == Overhang::Background {
+        if opts.complete {
+            return arg_err("complete scores and background overhangs cannot be combined");
+        }
+        let b = &opts.bkg;
+        if alphabet.is_nucleotide()
+            && (b.iter().any(|v| !(v.is_finite() && *v >= 0.0))
+                || (b.iter().sum::<f64>() - 1.0).abs() > 1e-6)
+        {
+            return arg_err("bkg must be four non-negative values summing to 1");
+        }
+    }
+    Ok(())
+}
+
 /// Run `$f::<C>` with the column type that suits the alphabet.
 macro_rules! by_alphabet {
     ($alphabet:expr, $f:ident($($arg:expr),*)) => {
@@ -257,6 +447,21 @@ macro_rules! by_alphabet {
             4 => $f::<[f64; 4]>($($arg),*),
             20 => $f::<[f64; 20]>($($arg),*),
             _ => $f::<Vec<f64>>($($arg),*),
+        }
+    };
+}
+
+/// Run `$f::<C, S>` with the column type that suits the alphabet and the
+/// scorer of `opts.method`, which [`check_options`] has made PCC or EUCL.
+macro_rules! by_method {
+    ($alphabet:expr, $opts:expr, $f:ident($($arg:expr),*)) => {
+        match ($alphabet.len(), $opts.method) {
+            (4, ColumnMetric::Eucl) => $f::<[f64; 4], EuclScore>($($arg),*),
+            (20, ColumnMetric::Eucl) => $f::<[f64; 20], EuclScore>($($arg),*),
+            (_, ColumnMetric::Eucl) => $f::<Vec<f64>, EuclScore>($($arg),*),
+            (4, _) => $f::<[f64; 4], PccScore>($($arg),*),
+            (20, _) => $f::<[f64; 20], PccScore>($($arg),*),
+            _ => $f::<Vec<f64>, PccScore>($($arg),*),
         }
     };
 }
@@ -272,27 +477,40 @@ fn columns<C: Col>(motifs: &[Motif]) -> Result<Vec<Vec<C>>> {
         .collect()
 }
 
-/// The median correlation of each column of each motif with the null
-/// columns, which complete scores subtract so that a typical column scores
-/// zero. The null is the columns of all the motifs, in both orientations when
-/// reverse complements are tried, or the parametric grid with its weights.
-fn column_medians<C: Col>(cols: &[Vec<C>], opts: &CompareOptions, rc_ok: bool) -> Vec<Vec<f64>> {
-    let null: Vec<(Centred<C>, f64)> = match opts.null {
+/// The background column that overhanging columns are compared with.
+fn bkg_column<C: Col>(opts: &CompareOptions, n: usize) -> C {
+    if n == 4 {
+        C::from_slice(&opts.bkg)
+    } else {
+        C::from_slice(&vec![1.0 / n as f64; n])
+    }
+}
+
+/// The median score of each column of each motif with the null columns,
+/// which complete scores subtract so that a typical column scores zero. The
+/// null is the columns of all the motifs, in both orientations when reverse
+/// complements are tried, or the parametric grid with its weights.
+fn column_medians<C: Col, S: Scorer>(
+    cols: &[Vec<C>],
+    opts: &CompareOptions,
+    rc_ok: bool,
+) -> Vec<Vec<f64>> {
+    let null: Vec<(S::Careful<C>, f64)> = match opts.null {
         NullModel::Parametric => enum_columns(&opts.bkg)
             .into_iter()
-            .map(|(c, w)| (Centred::new(&C::from_slice(&c)), w))
+            .map(|(c, w)| (S::careful_prepare(&C::from_slice(&c)), w))
             .collect(),
         NullModel::Empirical => {
-            let mut v: Vec<(Centred<C>, f64)> = cols
+            let mut v: Vec<(S::Careful<C>, f64)> = cols
                 .iter()
                 .flatten()
-                .map(|c| (Centred::new(c), 1.0))
+                .map(|c| (S::careful_prepare(c), 1.0))
                 .collect();
             if rc_ok {
                 v.extend(
                     cols.iter()
                         .flat_map(|m| rc_columns(m))
-                        .map(|c| (Centred::new(&c), 1.0)),
+                        .map(|c| (S::careful_prepare(&c), 1.0)),
                 );
             }
             v
@@ -302,8 +520,9 @@ fn column_medians<C: Col>(cols: &[Vec<C>], opts: &CompareOptions, rc_ok: bool) -
         .map(|m| {
             m.iter()
                 .map(|q| {
-                    let q = Centred::new(q);
-                    let mut v: Vec<(f64, f64)> = null.iter().map(|(t, w)| (q.pcc(t), *w)).collect();
+                    let q = S::careful_prepare(q);
+                    let mut v: Vec<(f64, f64)> =
+                        null.iter().map(|(t, w)| (S::careful(&q, t), *w)).collect();
                     v.sort_by(|a, b| a.0.total_cmp(&b.0));
                     let half = v.iter().map(|x| x.1).sum::<f64>() / 2.0;
                     let mut cum = 0.0;
@@ -329,30 +548,162 @@ fn running_sums(v: impl Iterator<Item = f64>) -> Vec<f64> {
     out
 }
 
-/// The best alignment of `t` to the query, as (score it was chosen by,
-/// overlap, offset, strand, first query column, alignments tried, sum over
-/// the overlap). With `medians`, the running sums of the query's column
-/// medians in each orientation, alignments are chosen by complete scores.
-#[allow(clippy::type_complexity)]
-fn best_alignment<C: Col>(
-    q: &[Centred<C>],
-    q_rc: Option<&[Centred<C>]>,
-    t: &[Centred<C>],
+/// The sum of the entries of `sums`, running sums of some column values,
+/// outside the `len` columns from `start`.
+fn sum_outside(sums: &[f64], start: usize, len: usize) -> f64 {
+    sums[start] + (sums[sums.len() - 1] - sums[start + len])
+}
+
+/// How alignments are chosen beyond the sum of column scores over the
+/// overlap, with each motif's running sums in its own orientation and as its
+/// reverse complement has them.
+enum Extras {
+    /// Nothing more: the overlap's sum, or its mean for Euclidean distances.
+    None,
+    /// Running sums of column medians, for complete scores.
+    Medians(Vec<(Vec<f64>, Vec<f64>)>),
+    /// Running sums of column scores with the background, for background
+    /// overhangs.
+    Background(Vec<(Vec<f64>, Vec<f64>)>),
+}
+
+impl Extras {
+    fn new<C: Col, S: Scorer>(
+        cols: &[Vec<C>],
+        n_letters: usize,
+        opts: &CompareOptions,
+        rc_ok: bool,
+    ) -> Extras {
+        let both = |m: Vec<f64>, minus: Vec<f64>| {
+            (running_sums(m.into_iter()), running_sums(minus.into_iter()))
+        };
+        if opts.complete {
+            Extras::Medians(
+                column_medians::<C, S>(cols, opts, rc_ok)
+                    .into_iter()
+                    .map(|m| {
+                        let rev = m.iter().rev().copied().collect();
+                        both(m, rev)
+                    })
+                    .collect(),
+            )
+        } else if opts.overhang == Overhang::Background {
+            let b = S::prepare(&bkg_column::<C>(opts, n_letters));
+            let scores =
+                |m: &[C]| -> Vec<f64> { m.iter().map(|c| S::score(&S::prepare(c), &b)).collect() };
+            Extras::Background(
+                cols.iter()
+                    .map(|m| {
+                        let minus = if rc_ok {
+                            scores(&rc_columns(m))
+                        } else {
+                            Vec::new()
+                        };
+                        both(scores(m), minus)
+                    })
+                    .collect(),
+            )
+        } else {
+            Extras::None
+        }
+    }
+
+    fn rule<S: Scorer>(&self, q: usize, t: usize) -> Rule<'_> {
+        match self {
+            Extras::None if S::BY_MEAN => Rule::Mean,
+            Extras::None => Rule::Sum,
+            Extras::Medians(m) => Rule::Complete(&m[q].0, &m[q].1),
+            Extras::Background(b) => Rule::Background {
+                query: (&b[q].0, &b[q].1),
+                target: &b[t].0,
+            },
+        }
+    }
+}
+
+/// What an alignment is chosen by: the sum of column scores over the
+/// overlap, its mean, the sum less the query's column medians over the
+/// overlap, or the sum over every column of both motifs, each overlapping
+/// pair counted from both sides and overhanging columns compared with the
+/// background, given the running sums of these background scores.
+#[derive(Clone, Copy)]
+enum Rule<'a> {
+    Sum,
+    Mean,
+    Complete(&'a [f64], &'a [f64]),
+    Background {
+        query: (&'a [f64], &'a [f64]),
+        target: &'a [f64],
+    },
+}
+
+impl Rule<'_> {
+    /// The value of an alignment with sum `overlap_sum` over the `len`
+    /// columns from `q_start` of the query in orientation `strand` and from
+    /// `t_start` of the target.
+    #[inline(always)]
+    fn value(
+        &self,
+        overlap_sum: f64,
+        strand: Strand,
+        q_start: usize,
+        t_start: usize,
+        len: usize,
+    ) -> f64 {
+        let (qs, ts, l) = (q_start, t_start, len);
+        match *self {
+            Rule::Sum => overlap_sum,
+            Rule::Mean => overlap_sum / len as f64,
+            Rule::Complete(plus, minus) => {
+                let b = if strand == Strand::Plus { plus } else { minus };
+                overlap_sum - (b[qs + l] - b[qs])
+            }
+            Rule::Background {
+                query: (plus, minus),
+                target,
+            } => {
+                let b = if strand == Strand::Plus { plus } else { minus };
+                2.0 * overlap_sum + sum_outside(b, qs, l) + sum_outside(target, ts, l)
+            }
+        }
+    }
+}
+
+/// The best alignment of a target to a query.
+struct Best {
+    /// The score it was chosen by.
+    chosen: f64,
+    overlap: usize,
+    offset: i64,
+    strand: Strand,
+    /// First overlapping column of the oriented query.
+    query_start: usize,
+    /// Number of alignments tried.
+    n_tested: usize,
+    /// Sum of column scores over the overlap.
+    sum: f64,
+}
+
+/// The best alignment of `t` to the query, chosen by `rule`.
+fn best_alignment<C: Col, S: Scorer>(
+    q: &[C],
+    q_rc: Option<&[C]>,
+    t: &[C],
     min_overlap: usize,
-    medians: Option<(&[f64], &[f64])>,
-) -> (f64, usize, i64, Strand, usize, usize, f64) {
+    rule: Rule<'_>,
+) -> Best {
     let (wq, wt) = (q.len() as i64, t.len() as i64);
     let mo = (min_overlap as i64).min(wq).min(wt);
-    let mut best = (
-        f64::NEG_INFINITY,
-        0usize,
-        0i64,
-        Strand::Plus,
-        0usize,
-        0usize,
-        f64::NEG_INFINITY,
-    );
-    let orientations: Vec<(&[Centred<C>], Strand)> = match q_rc {
+    let mut best = Best {
+        chosen: f64::NEG_INFINITY,
+        overlap: 0,
+        offset: 0,
+        strand: Strand::Plus,
+        query_start: 0,
+        n_tested: 0,
+        sum: f64::NEG_INFINITY,
+    };
+    let orientations: Vec<(&[C], Strand)> = match q_rc {
         Some(r) => vec![(q, Strand::Plus), (r, Strand::Minus)],
         None => vec![(q, Strand::Plus)],
     };
@@ -366,31 +717,26 @@ fn best_alignment<C: Col>(
             }
             let q_start = d + t_start;
             let overlap_sum = (0..len).fold(0.0, |acc, j| {
-                acc + qq[(q_start + j) as usize].pcc(&t[(t_start + j) as usize])
+                acc + S::score(&qq[(q_start + j) as usize], &t[(t_start + j) as usize])
             });
-            let s = match medians {
-                Some((plus, minus)) => {
-                    let b = if strand == Strand::Plus { plus } else { minus };
-                    overlap_sum - (b[(q_start + len) as usize] - b[q_start as usize])
-                }
-                None => overlap_sum,
-            };
-            best.5 += 1;
+            let (qs, ts, l) = (q_start as usize, t_start as usize, len as usize);
+            let s = rule.value(overlap_sum, strand, qs, ts, l);
+            best.n_tested += 1;
             // Ties (such as both strands of a palindrome) go to the longer
             // overlap, so that comparing the two motifs either way round gives
             // the same mean score, and then to the first alignment, rather than
             // to whichever rounds higher.
-            let tied_longer = (s - best.0).abs() <= TIE_TOLERANCE && len as usize > best.1;
-            if s > best.0 + TIE_TOLERANCE || tied_longer || best.5 == 1 {
-                best = (
-                    s,
-                    len as usize,
-                    d,
+            let tied_longer = (s - best.chosen).abs() <= TIE_TOLERANCE && l > best.overlap;
+            if s > best.chosen + TIE_TOLERANCE || tied_longer || best.n_tested == 1 {
+                best = Best {
+                    chosen: s,
+                    overlap: l,
+                    offset: d,
                     strand,
-                    q_start as usize,
-                    best.5,
-                    overlap_sum,
-                );
+                    query_start: qs,
+                    n_tested: best.n_tested,
+                    sum: overlap_sum,
+                };
             }
         }
     }
@@ -406,13 +752,15 @@ pub fn align(
     opts: &CompareOptions,
 ) -> Result<Vec<Alignment>> {
     let alphabet = shared_alphabet(motifs)?;
-    by_alphabet!(
+    check_options(opts, &alphabet)?;
+    by_method!(
         alphabet,
+        opts,
         align_with(motifs, pairs, opts, alphabet.is_nucleotide())
     )
 }
 
-fn align_with<C: Col>(
+fn align_with<C: Col, S: Scorer>(
     motifs: &[Motif],
     pairs: &[(usize, usize)],
     opts: &CompareOptions,
@@ -423,10 +771,15 @@ fn align_with<C: Col>(
     }
     let cols: Vec<Vec<C>> = columns(motifs)?;
     let rc_ok = opts.rc && nucleotide;
-    let centre = |m: &[C]| -> Vec<Centred<C>> { m.iter().map(Centred::new).collect() };
-    let centred: Vec<Vec<Centred<C>>> = cols.iter().map(|m| centre(m)).collect();
-    let rc: Vec<Vec<Centred<C>>> = if rc_ok {
-        cols.iter().map(|m| centre(&rc_columns(m))).collect()
+    let prepare = |m: &[C]| -> (Vec<C>, Vec<S::Careful<C>>) {
+        (
+            m.iter().map(S::prepare).collect(),
+            m.iter().map(S::careful_prepare).collect(),
+        )
+    };
+    let fwd: Vec<_> = cols.iter().map(|m| prepare(m)).collect();
+    let rc: Vec<_> = if rc_ok {
+        cols.iter().map(|m| prepare(&rc_columns(m))).collect()
     } else {
         Vec::new()
     };
@@ -437,54 +790,49 @@ fn align_with<C: Col>(
         return arg_err("motif index out of range");
     }
     with_threads(opts.nthreads, || {
-        let sums = median_sums(&cols, opts, rc_ok);
+        let extras = Extras::new::<C, S>(&cols, motifs[0].alphabet.len(), opts, rc_ok);
         pairs
             .par_iter()
             .map(|&(q, t)| {
-                let medians = sums.get(q).map(|(p, m)| (p.as_slice(), m.as_slice()));
-                let (complete_score, overlap, offset, strand, query_start, n_tested, score) =
-                    best_alignment(
-                        &centred[q],
-                        rc_ok.then(|| rc[q].as_slice()),
-                        &centred[t],
-                        opts.min_overlap,
-                        medians,
-                    );
+                let rule = extras.rule::<S>(q, t);
+                let b = best_alignment::<C, S>(
+                    &fwd[q].0,
+                    rc_ok.then(|| rc[q].0.as_slice()),
+                    &fwd[t].0,
+                    opts.min_overlap,
+                    rule,
+                );
+                // The alignment kept is scored again by careful scores, so
+                // that the scores reported and binned for P-values do not
+                // depend on how quickly they were found.
+                let qq = if b.strand == Strand::Minus {
+                    &rc[q].1
+                } else {
+                    &fwd[q].1
+                };
+                let ts = (-b.offset).max(0) as usize;
+                let sum = (0..b.overlap).fold(0.0, |acc, j| {
+                    acc + S::careful(&qq[b.query_start + j], &fwd[t].1[ts + j])
+                });
+                let chosen = if b.overlap > 0 {
+                    rule.value(sum, b.strand, b.query_start, ts, b.overlap)
+                } else {
+                    b.chosen
+                };
                 Alignment {
                     query: q,
                     target: t,
-                    score,
-                    complete_score,
-                    overlap,
-                    offset,
-                    strand,
-                    query_start,
-                    n_tested,
+                    score: if b.overlap > 0 { sum } else { b.sum },
+                    complete_score: chosen,
+                    overlap: b.overlap,
+                    offset: b.offset,
+                    strand: b.strand,
+                    query_start: b.query_start,
+                    n_tested: b.n_tested,
                 }
             })
             .collect()
     })
-}
-
-/// With complete scores, the running sums of each motif's column medians in
-/// its own orientation and reversed, as its reverse complement has them;
-/// otherwise nothing.
-fn median_sums<C: Col>(
-    cols: &[Vec<C>],
-    opts: &CompareOptions,
-    rc_ok: bool,
-) -> Vec<(Vec<f64>, Vec<f64>)> {
-    if !opts.complete {
-        return Vec::new();
-    }
-    column_medians(cols, opts, rc_ok)
-        .into_iter()
-        .map(|m| {
-            let plus = running_sums(m.iter().copied());
-            let minus = running_sums(m.iter().rev().copied());
-            (plus, minus)
-        })
-        .collect()
 }
 
 fn convolve(a: &[f64], b: &[f64]) -> Vec<f64> {
@@ -599,44 +947,49 @@ pub(crate) fn alignment_pvalues(
     opts: &CompareOptions,
 ) -> Result<Vec<f64>> {
     let alphabet = shared_alphabet(motifs)?;
+    check_options(opts, &alphabet)?;
     if opts.null == NullModel::Parametric && !alphabet.is_nucleotide() {
         return Err(Error::Unsupported(format!(
             "the parametric null is only available for DNA and RNA motifs; use the empirical null for {alphabet} motifs"
         )));
     }
-    by_alphabet!(alphabet, alignment_pvalues_with(motifs, alignments, opts))
+    by_method!(
+        alphabet,
+        opts,
+        alignment_pvalues_with(motifs, alignments, opts)
+    )
 }
 
-fn alignment_pvalues_with<C: Col>(
+fn alignment_pvalues_with<C: Col, S: Scorer>(
     motifs: &[Motif],
     alignments: &[Alignment],
     opts: &CompareOptions,
 ) -> Result<Vec<f64>> {
     let cols: Vec<Vec<C>> = columns(motifs)?;
-    let flat: Vec<Centred<C>> = cols.iter().flatten().map(Centred::new).collect();
-    let grid: Option<Vec<(Centred<C>, f64)>> = (opts.null == NullModel::Parametric).then(|| {
+    let flat: Vec<Both<C, S>> = cols.iter().flatten().map(Both::new).collect();
+    let grid: Option<Vec<(Both<C, S>, f64)>> = (opts.null == NullModel::Parametric).then(|| {
         enum_columns(&opts.bkg)
             .into_iter()
-            .map(|(c, w)| (Centred::new(&C::from_slice(&c)), w))
+            .map(|(c, w)| (Both::new(&C::from_slice(&c)), w))
             .collect()
     });
     let col_pmf = |q: &C| -> Vec<f64> {
-        let mut pmf = vec![0.0; PCC_BINS];
-        let q = Centred::new(q);
+        let mut pmf = vec![0.0; S::BINS];
+        let q = Both::<C, S>::new(q);
         match &grid {
             None => {
                 if flat.is_empty() {
                     return pmf;
                 }
                 for t in &flat {
-                    pmf[score_to_bin(q.pcc(t))] += 1.0;
+                    pmf[q.bin(t)] += 1.0;
                 }
                 let inv = 1.0 / flat.len() as f64;
                 pmf.iter_mut().for_each(|p| *p *= inv);
             }
             Some(g) => {
                 for (c, w) in g {
-                    pmf[score_to_bin(q.pcc(c))] += w;
+                    pmf[q.bin(c)] += w;
                 }
             }
         }
@@ -662,14 +1015,29 @@ fn alignment_pvalues_with<C: Col>(
 
     let mut by_query: Vec<Vec<usize>> = vec![Vec::new(); cols.len()];
     for (k, a) in alignments.iter().enumerate() {
-        if a.query >= cols.len() {
+        if a.query >= cols.len() || a.target >= cols.len() {
             return arg_err("motif index out of range");
         }
         by_query[a.query].push(k);
     }
     let rc_ok = opts.rc && motifs.first().is_some_and(|m| m.alphabet.is_nucleotide());
+    let n_letters = motifs[0].alphabet.len();
+    // With background overhangs, the null distributions of the sums of
+    // target columns' scores with the background, by number of columns.
+    let overhang_pmfs: Vec<Vec<f64>> = if opts.overhang == Overhang::Background {
+        let widest = cols.iter().map(Vec::len).max().unwrap_or(0);
+        let one = col_pmf(&bkg_column::<C>(opts, n_letters));
+        let mut v = vec![vec![1.0]];
+        for k in 1..=widest {
+            let next = convolve(&v[k - 1], &one);
+            v.push(next);
+        }
+        v
+    } else {
+        Vec::new()
+    };
     let per_query: Vec<Vec<(usize, f64)>> = with_threads(opts.nthreads, || {
-        let sums = median_sums(&cols, opts, rc_ok);
+        let extras = Extras::new::<C, S>(&cols, n_letters, opts, rc_ok);
         by_query
             .par_iter()
             .enumerate()
@@ -707,45 +1075,61 @@ fn alignment_pvalues_with<C: Col>(
                         let a = &alignments[k];
                         let mut p = 1.0;
                         if a.overlap > 0 && a.query_start < cols[q].len() && a.n_tested > 0 {
-                            if opts.complete {
-                                let (plus, minus) = &sums[q];
-                                let mut orientations = vec![(&fwd, plus.as_slice())];
-                                if let Some(r) = rev.as_ref().filter(|_| rc_ok) {
-                                    orientations.push((r, minus.as_slice()));
-                                }
-                                // An observed score beyond what the null reaches
-                                // keeps the probability of the null's highest.
-                                let own = if a.strand == Strand::Plus {
-                                    Some(&fwd)
-                                } else {
-                                    rev.as_ref()
-                                };
-                                let floor = own
-                                    .and_then(|c| c.get(a.query_start))
-                                    .and_then(|r| r.get(a.overlap))
-                                    .map_or(0.0, |pmf| {
-                                        tail_prob(pmf, sum_score_to_bin(a.score, a.overlap))
-                                    });
-                                p = best_of_all(
-                                    a.complete_score,
-                                    cols[q].len(),
-                                    cols[a.target].len(),
-                                    opts.min_overlap,
-                                    &orientations,
-                                )
-                                .max(floor);
+                            let own = if a.strand == Strand::Plus {
+                                Some(&fwd)
                             } else {
-                                let c = if a.strand == Strand::Plus {
-                                    Some(&fwd)
-                                } else {
-                                    rev.as_ref()
-                                };
-                                if let Some(pmf) = c
-                                    .and_then(|c| c.get(a.query_start))
-                                    .and_then(|r| r.get(a.overlap))
-                                {
-                                    let bin = sum_score_to_bin(a.score, a.overlap);
-                                    p = (tail_prob(pmf, bin) * a.n_tested as f64).clamp(0.0, 1.0);
+                                rev.as_ref()
+                            };
+                            let pmf = own
+                                .and_then(|c| c.get(a.query_start))
+                                .and_then(|r| r.get(a.overlap));
+                            match &extras {
+                                Extras::Medians(sums) => {
+                                    let (plus, minus) = &sums[q];
+                                    let mut orientations = vec![(&fwd, plus.as_slice())];
+                                    if let Some(r) = rev.as_ref().filter(|_| rc_ok) {
+                                        orientations.push((r, minus.as_slice()));
+                                    }
+                                    // An observed score beyond what the null
+                                    // reaches keeps the probability of the
+                                    // null's highest.
+                                    let floor = pmf.map_or(0.0, |pmf| {
+                                        tail_prob(pmf, sum_score_to_bin::<S>(a.score, a.overlap))
+                                    });
+                                    p = best_of_all::<S>(
+                                        a.complete_score,
+                                        cols[q].len(),
+                                        cols[a.target].len(),
+                                        opts.min_overlap,
+                                        &orientations,
+                                    )
+                                    .max(floor);
+                                }
+                                Extras::Background(sums) => {
+                                    if let Some(pmf) = pmf {
+                                        // The query's overhanging columns
+                                        // score the same whatever the target,
+                                        // so only the target's columns, facing
+                                        // the query or the background, vary.
+                                        let n_out = cols[a.target].len() - a.overlap;
+                                        let t_start = (-a.offset).max(0) as usize;
+                                        let t_out =
+                                            sum_outside(&sums[a.target].0, t_start, a.overlap);
+                                        let tail = overhang_tail::<S>(
+                                            pmf,
+                                            &overhang_pmfs[n_out],
+                                            2.0 * a.score + t_out,
+                                            2 * a.overlap + n_out,
+                                        );
+                                        p = (tail * a.n_tested as f64).clamp(0.0, 1.0);
+                                    }
+                                }
+                                Extras::None => {
+                                    if let Some(pmf) = pmf {
+                                        let bin = sum_score_to_bin::<S>(a.score, a.overlap);
+                                        p = (tail_prob(pmf, bin) * a.n_tested as f64)
+                                            .clamp(0.0, 1.0);
+                                    }
                                 }
                             }
                         }
@@ -762,6 +1146,38 @@ fn alignment_pvalues_with<C: Col>(
     Ok(out)
 }
 
+/// The probability that twice a sum drawn from `overlap`, the null of the
+/// overlap's column scores, plus a sum drawn from `outside`, the null of
+/// the overhanging target columns' scores with the background, reaches
+/// `score`, a sum of `units` column scores. As in [`tail_prob`], a score
+/// beyond what the null can reach gets the probability of the null's
+/// highest.
+fn overhang_tail<S: Scorer>(overlap: &[f64], outside: &[f64], score: f64, units: usize) -> f64 {
+    let (Some(top_x), Some(top_y)) = (
+        overlap.iter().rposition(|&p| p > 0.0),
+        outside.iter().rposition(|&p| p > 0.0),
+    ) else {
+        return 0.0;
+    };
+    let bin = sum_score_to_bin::<S>(score, units).min(2 * top_x + top_y);
+    let mut at_least = vec![0.0; overlap.len() + 1];
+    for i in (0..overlap.len()).rev() {
+        at_least[i] = at_least[i + 1] + overlap[i];
+    }
+    let mut p = 0.0;
+    for (j, &py) in outside.iter().enumerate() {
+        if py == 0.0 {
+            continue;
+        }
+        // Twice the overlap's bin must reach what the outside leaves.
+        let i = bin.saturating_sub(j).div_ceil(2);
+        if let Some(&x) = at_least.get(i) {
+            p += py * x;
+        }
+    }
+    p.clamp(0.0, 1.0)
+}
+
 /// Null distributions of an oriented query's column sums, by first column and
 /// number of columns.
 type NullCache = Vec<Vec<Vec<f64>>>;
@@ -771,7 +1187,7 @@ type NullCache = Vec<Vec<Vec<f64>>>;
 /// treating the alignments as independent. `orientations` holds, for each
 /// orientation of the query tried, its null distributions by first column
 /// and overlap and the running sums of its column medians.
-fn best_of_all(
+fn best_of_all<S: Scorer>(
     score: f64,
     wq: usize,
     wt: usize,
@@ -793,12 +1209,13 @@ fn best_of_all(
             // The complete score is the overlap's sum less its medians, so
             // reaching it takes an overlap sum of the score plus the medians.
             let raw = score + medians[start + len] - medians[start];
-            // A sum of correlations cannot exceed the number of columns.
-            if raw > len as f64 + 1e-9 {
+            // A sum of column scores cannot exceed the best each column can
+            // score.
+            if raw > len as f64 * S::HI + 1e-9 {
                 continue;
             }
             let pmf = &cache[start][len];
-            let bin = sum_score_to_bin(raw, len);
+            let bin = sum_score_to_bin::<S>(raw, len);
             let tail = pmf
                 .get(bin..)
                 .map_or(0.0, |t| t.iter().sum::<f64>().min(1.0));
@@ -826,7 +1243,10 @@ pub struct Comparison {
     pub strand: Strand,
     /// Number of overlapping columns.
     pub overlap: usize,
-    /// Mean column correlation over the overlap.
+    /// Mean column correlation over the overlap, or for
+    /// [`ColumnMetric::Eucl`] the mean column distance, lower meaning more
+    /// alike. With [`Overhang::Background`], the mean is over every column
+    /// of both motifs instead, as [`Overhang::Background`] describes.
     pub score: f64,
     /// The P-value of the alignment's score.
     pub pvalue: f64,
@@ -907,8 +1327,30 @@ pub fn compare_motifs(
     let alphabet = shared_alphabet(motifs)?;
     by_alphabet!(
         alphabet,
-        finish_comparisons(motifs, queries, &al, &pvals, &alphabet, opts.nthreads)
+        finish_comparisons(motifs, queries, &al, &pvals, &alphabet, opts)
     )
+}
+
+/// The score reported for an alignment: the mean column score, over the
+/// overlap or with background overhangs over every column of both motifs,
+/// with Euclidean distances as they are, or NaN if no alignment was made.
+fn mean_score(a: &Alignment, motifs: &[Motif], opts: &CompareOptions) -> f64 {
+    if a.overlap == 0 {
+        return f64::NAN;
+    }
+    let mean = match opts.overhang {
+        Overhang::Ignore => a.score / a.overlap as f64,
+        Overhang::Background => {
+            a.complete_score / (motifs[a.query].width() + motifs[a.target].width()) as f64
+        }
+    };
+    // Subtracting from 0 rather than negating keeps a distance of 0 from
+    // being -0.
+    if opts.method == ColumnMetric::Eucl {
+        0.0 - mean
+    } else {
+        mean
+    }
 }
 
 fn finish_comparisons<C: Col>(
@@ -917,7 +1359,7 @@ fn finish_comparisons<C: Col>(
     al: &[Alignment],
     pvals: &[f64],
     alphabet: &Alphabet,
-    nthreads: usize,
+    opts: &CompareOptions,
 ) -> Result<Vec<Comparison>> {
     let cols: Vec<Vec<C>> = columns(motifs)?;
     let letters = column_letters(&cols, alphabet);
@@ -936,7 +1378,7 @@ fn finish_comparisons<C: Col>(
         }
     }
 
-    with_threads(nthreads, || {
+    with_threads(opts.nthreads, || {
         al.par_iter()
             .enumerate()
             .map(|(k, a)| {
@@ -954,11 +1396,7 @@ fn finish_comparisons<C: Col>(
                     offset: a.offset,
                     strand: a.strand,
                     overlap: a.overlap,
-                    score: if a.overlap > 0 {
-                        a.score / a.overlap as f64
-                    } else {
-                        f64::NAN
-                    },
+                    score: mean_score(a, motifs, opts),
                     pvalue: pvals[k],
                     qvalue: qvals[k],
                     query_consensus: consensus_range(&letters[a.query], q_start, a.overlap),
@@ -973,7 +1411,7 @@ fn finish_comparisons<C: Col>(
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ComparisonMatrices {
-    /// Mean column correlations.
+    /// Mean column scores, as [`Comparison::score`] has them.
     pub scores: Vec<Vec<f64>>,
     /// P-values of the best alignments.
     pub pvalues: Vec<Vec<f64>>,
@@ -1007,17 +1445,7 @@ pub fn compare_matrix(
         let al = align(motifs, &pairs, opts)?;
         let s: Vec<Vec<f64>> = al
             .chunks(n)
-            .map(|r| {
-                r.iter()
-                    .map(|a| {
-                        if a.overlap > 0 {
-                            a.score / a.overlap as f64
-                        } else {
-                            f64::NAN
-                        }
-                    })
-                    .collect()
-            })
+            .map(|r| r.iter().map(|a| mean_score(a, motifs, opts)).collect())
             .collect();
         let nan = vec![vec![f64::NAN; n]; n];
         (s, nan.clone(), nan)

@@ -91,10 +91,8 @@ copied, and are not listed here. The other differences are below.
 
 ## Names
 
-- **Spelling.** Names use underscores where the R package uses dots, and
-  Canadian spelling throughout, so `summarise_motifs()` is
-  `summarize_motifs()`, and `motif_peaks()` reports `best_centre` and
-  `centres` where the R package has `best.center` and `centers`.
+- **Underscores.** Names use underscores where the R package uses dots,
+  so `min.ic` becomes `min_ic`.
 - **Positions.** Positions on sequences and genomes count from 0 and
   leave the end out, as in BED files, Python slices and Rust ranges, where
   the R package counts from 1 and includes the end. A hit the R package

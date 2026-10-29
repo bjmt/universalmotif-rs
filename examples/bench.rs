@@ -10,13 +10,15 @@
 //! `UM_BENCH_MOTIFS`, for which the HOCOMOCO v11 human set is a good choice, or
 //! are otherwise 400 random motifs of widths 8 to 25. With
 //! `UM_BENCH_ALPHABET=AA`, the random motifs and sequences are proteins
-//! instead.
+//! instead. `UM_BENCH_COMPLETE=1` makes the comparison tasks use complete
+//! scores, `UM_BENCH_METHOD=EUCL` Euclidean distances and
+//! `UM_BENCH_OVERHANG=background` background overhangs.
 
 use std::time::Instant;
 
 use universalmotif::background::{MatchOptions, match_bkg};
 use universalmotif::cluster::{Linkage, TreeOptions, hclust, motif_tree};
-use universalmotif::compare::{CompareOptions, compare_matrix};
+use universalmotif::compare::{CompareOptions, Overhang, compare_matrix};
 use universalmotif::complexity::{ComplexityMethod as Cx, ComplexityOptions, sequence_complexity};
 use universalmotif::convert::convert_type;
 use universalmotif::coocc::{CooccHit, CooccOptions, motif_coocc};
@@ -26,6 +28,7 @@ use universalmotif::finder::{FinderOptions, motif_finder};
 use universalmotif::io::meme;
 use universalmotif::kmer::{BkgOptions, WindowOptions, get_bkg};
 use universalmotif::merge::{MergeSimilarOptions, merge_similar};
+use universalmotif::metrics::ColumnMetric;
 use universalmotif::ops::add_gap;
 use universalmotif::pvalue::{PvalueOptions, motif_pvalue};
 use universalmotif::scan::{ScanOptions, scan_sequences, scan_table};
@@ -179,6 +182,13 @@ fn main() {
             &mut || {
                 let opts = CompareOptions {
                     nthreads: threads,
+                    complete: std::env::var("UM_BENCH_COMPLETE").is_ok_and(|v| v == "1"),
+                    method: std::env::var("UM_BENCH_METHOD")
+                        .map_or(ColumnMetric::Pcc, |v| v.parse().unwrap()),
+                    overhang: match std::env::var("UM_BENCH_OVERHANG").as_deref() {
+                        Ok("background") => Overhang::Background,
+                        _ => Overhang::Ignore,
+                    },
                     ..Default::default()
                 };
                 let m = compare_matrix(&motifs, &opts, task == "compare_pvalues").unwrap();

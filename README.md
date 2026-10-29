@@ -108,3 +108,18 @@ DOI: [10.21105/joss.07012](https://doi.org/10.21105/joss.07012)
 ## Licence
 
 MIT
+
+## About this port
+
+This crate, and the Python package built on it, are AI-assisted rewrites of
+the R/Bioconductor package universalmotif, made by Benjamin Jean-Marie
+Tremblay, the author of the R package. They are meant to be faithful to the
+original, and the tests check their results against reference values
+computed with the R package (version 1.31.56, and 1.31.60 for motif
+comparisons). The rewrite was also a chance to make improvements that the R
+package has held back on, since changes there are weighed against not
+breaking the behaviour its existing users rely on. The places where the
+ports deliberately differ, including these improvements, the bugs fixed
+along the way and the features left out, are listed in
+[DIVERGENCES.md](DIVERGENCES.md). The rewrite follows the principles set
+out at [rewrites.bio](https://rewrites.bio).

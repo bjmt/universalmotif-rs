@@ -1,8 +1,8 @@
 //! Column similarity metrics with [`compare_columns`], and averages with
 //! [`average`] and [`average_ic`].
 //!
-//! [`crate::compare`] uses Pearson correlation only; the other metrics are
-//! here for comparing single columns.
+//! [`crate::compare`] uses Pearson correlation or Euclidean distance; the
+//! other metrics are here for comparing single columns.
 
 use crate::convert::convert_type;
 use crate::error::{Result, arg_err};

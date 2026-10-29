@@ -6,7 +6,9 @@
 //! letter's index in the alphabet. Anything outside the alphabet, such as `N`,
 //! is coded as the first letter and recorded in runs of one repeated byte, so
 //! decoding gives it back exactly; only the case of the alphabet's own letters
-//! is lost when they are matched in either case.
+//! is lost when they are matched in either case. The idea is borrowed from
+//! UCSC's [2bit format](https://genome.ucsc.edu/FAQ/FAQformat.html#format7), which also stores four bases to a byte and
+//! keeps runs of other letters, such as `N`, to one side.
 //!
 //! Sequences can be encoded whole or fed in pieces, such as a line of a FASTA
 //! file at a time, with [`EncodedSequences::record`], so they never need to be

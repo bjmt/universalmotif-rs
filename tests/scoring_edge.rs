@@ -3,14 +3,14 @@
 //! values come from exhaustive enumeration of small motifs or are worked out
 //! by hand.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::slice::from_ref;
 
 use universalmotif::alphabet::AMINO_ACIDS;
 use universalmotif::cdf::ScoreDistribution;
 use universalmotif::cluster::{Linkage, Tree, TreeOptions, hclust, motif_tree};
 use universalmotif::compare::{
-    CompareOptions, NullModel, anchor_layout, compare_matrix, compare_motifs,
+    CompareOptions, NullModel, Overhang, anchor_layout, compare_matrix, compare_motifs,
 };
 use universalmotif::convert::convert_type;
 use universalmotif::create::{CreateOptions, from_strings, random};
@@ -1353,6 +1353,430 @@ fn anchored_layouts() {
 
     let alone = anchor_layout(&motifs[..1], 0, &CompareOptions::default()).unwrap();
     assert_eq!((alone.placements[0].left, alone.width), (0, 9));
+}
+
+// Comparison by Euclidean distance and with background overhangs.
+
+/// PPM columns of a motif.
+fn ppm_columns(m: &Motif) -> Vec<Vec<f64>> {
+    convert_type(m, MotifType::Ppm, None, false)
+        .unwrap()
+        .matrix
+        .columns()
+        .map(<[f64]>::to_vec)
+        .collect()
+}
+
+fn rc_columns(cols: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    cols.iter()
+        .rev()
+        .map(|c| c.iter().rev().copied().collect())
+        .collect()
+}
+
+/// A column score as comparisons use it: the Pearson correlation of columns
+/// centred on 1/n, 0 if either is uniform, or the negated Euclidean
+/// distance.
+fn column_score(a: &[f64], b: &[f64], eucl: bool) -> f64 {
+    if eucl {
+        return -compare_columns(&Column::new(a), &Column::new(b), ColumnMetric::Eucl).unwrap();
+    }
+    let centre = 1.0 / a.len() as f64;
+    let ca: Vec<f64> = a.iter().map(|x| x - centre).collect();
+    let cb: Vec<f64> = b.iter().map(|x| x - centre).collect();
+    let ss = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>();
+    if ss(&ca) < 1e-12 || ss(&cb) < 1e-12 {
+        return 0.0;
+    }
+    ca.iter().zip(&cb).map(|(x, y)| x * y).sum::<f64>() / (ss(&ca) * ss(&cb)).sqrt()
+}
+
+/// Every alignment of a target of width `wt` to a query of width `wq`
+/// overlapping at least `mo` columns, as (offset, query start, target
+/// start, overlap).
+fn layouts(wq: usize, wt: usize, mo: usize) -> Vec<(i64, usize, usize, usize)> {
+    let (wq, wt) = (wq as i64, wt as i64);
+    let mo = (mo as i64).min(wq).min(wt);
+    (mo - wt..=wq - mo)
+        .filter_map(|d| {
+            let t_start = (-d).max(0);
+            let len = (wq - d).min(wt) - t_start;
+            (len >= mo).then_some((d, (d + t_start) as usize, t_start as usize, len as usize))
+        })
+        .collect()
+}
+
+/// The terms an alignment's score is made of, by target column: each
+/// target column facing the query is scored against the query column it
+/// faces, counted twice with background overhangs, and each one hanging
+/// over is scored against the background, with background overhangs only.
+/// Returns, for each target column, the query column it faces if any, and
+/// the sum of the query's overhanging columns' background scores.
+#[allow(clippy::type_complexity)]
+fn alignment_terms(
+    q: &[Vec<f64>],
+    wt: usize,
+    (q_start, t_start, len): (usize, usize, usize),
+    bkg: Option<&[f64]>,
+    eucl: bool,
+) -> (Vec<Option<usize>>, f64) {
+    let facing = (0..wt)
+        .map(|j| {
+            (t_start..t_start + len)
+                .contains(&j)
+                .then(|| q_start + j - t_start)
+        })
+        .collect();
+    let q_out = bkg.map_or(0.0, |b| {
+        (0..q.len())
+            .filter(|i| !(q_start..q_start + len).contains(i))
+            .map(|i| column_score(&q[i], b, eucl))
+            .sum()
+    });
+    (facing, q_out)
+}
+
+/// The score of target column `t` in an alignment, with its weight.
+fn target_term(
+    q: &[Vec<f64>],
+    t: &[f64],
+    facing: Option<usize>,
+    bkg: Option<&[f64]>,
+    eucl: bool,
+) -> Option<(f64, usize)> {
+    match (facing, bkg) {
+        (Some(i), None) => Some((column_score(&q[i], t, eucl), 1)),
+        (Some(i), Some(_)) => Some((2.0 * column_score(&q[i], t, eucl), 2)),
+        (None, Some(b)) => Some((column_score(t, b, eucl), 1)),
+        (None, None) => None,
+    }
+}
+
+const UNIFORM: [f64; 4] = [0.25; 4];
+
+#[test]
+fn alignments_by_method_and_overhang() {
+    let mut set = compare_set();
+    // Informative columns around a shared core, and nearly uniform ones.
+    set.push(sites(&["CCGATTACAGGTT"]));
+    set.push(raw_ppm(
+        &[
+            &[0.3, 0.2, 0.25, 0.25],
+            &[0.9, 0.0, 0.1, 0.0],
+            &[0.0, 0.0, 0.0, 1.0],
+            &[0.0, 0.0, 0.0, 1.0],
+            &[0.25, 0.25, 0.3, 0.2],
+        ],
+        Alphabet::Dna,
+    ));
+    let cols: Vec<Vec<Vec<f64>>> = set.iter().map(ppm_columns).collect();
+    let skewed = [0.3, 0.2, 0.2, 0.3];
+    for (eucl, overhang, bkg) in [
+        (false, Overhang::Ignore, UNIFORM),
+        (true, Overhang::Ignore, UNIFORM),
+        (false, Overhang::Background, UNIFORM),
+        (true, Overhang::Background, UNIFORM),
+        (false, Overhang::Background, skewed),
+        (true, Overhang::Background, skewed),
+    ] {
+        let opts = CompareOptions {
+            method: if eucl {
+                ColumnMetric::Eucl
+            } else {
+                ColumnMetric::Pcc
+            },
+            overhang,
+            bkg,
+            min_overlap: 3,
+            ..Default::default()
+        };
+        let ctx = format!("EUCL {eucl}, {overhang:?}, bkg {bkg:?}");
+        let b = (overhang == Overhang::Background).then_some(&bkg[..]);
+        let queries: Vec<usize> = (0..set.len()).collect();
+        let rows = compare_motifs(&set, &queries, &opts).unwrap();
+        let matrix = compare_matrix(&set, &opts, false).unwrap();
+        for r in &rows {
+            let ctx = format!("{ctx}, {} vs {}", r.query, r.target);
+            assert_eq!(matrix.scores[r.query][r.target], r.score, "{ctx}");
+            let (wq, wt) = (cols[r.query].len(), cols[r.target].len());
+            // What each alignment is chosen by and the score it reports.
+            let judge = |q: &[Vec<f64>], (q_start, t_start, len): (usize, usize, usize)| {
+                let (facing, q_out) = alignment_terms(q, wt, (q_start, t_start, len), b, eucl);
+                let total: f64 = (0..wt)
+                    .filter_map(|j| target_term(q, &cols[r.target][j], facing[j], b, eucl))
+                    .map(|x| x.0)
+                    .sum::<f64>()
+                    + q_out;
+                let (chosen, mean) = match overhang {
+                    Overhang::Background => (total, total / (wq + wt) as f64),
+                    _ if eucl => (total / len as f64, total / len as f64),
+                    _ => (total, total / len as f64),
+                };
+                (chosen, if eucl { -mean } else { mean })
+            };
+            let plus = cols[r.query].clone();
+            let minus = rc_columns(&plus);
+            let mut best = f64::NEG_INFINITY;
+            let mut own = None;
+            for (q, strand) in [(&plus, Strand::Plus), (&minus, Strand::Minus)] {
+                for (d, q_start, t_start, len) in layouts(wq, wt, 3) {
+                    let (chosen, mean) = judge(q, (q_start, t_start, len));
+                    best = best.max(chosen);
+                    if (d, strand, len) == (r.offset, r.strand, r.overlap) {
+                        own = Some((chosen, mean));
+                    }
+                }
+            }
+            let (chosen, mean) = own.unwrap_or_else(|| panic!("{ctx}: no such alignment"));
+            assert_near(chosen, best, 1e-12, &ctx);
+            assert_near(r.score, mean, 1e-12, &ctx);
+            if r.query == r.target {
+                assert_eq!(
+                    (r.offset, r.strand, r.overlap),
+                    (0, Strand::Plus, wq),
+                    "{ctx}"
+                );
+                if eucl {
+                    assert_eq!(r.score.to_bits(), 0.0f64.to_bits(), "{ctx}");
+                }
+            }
+            assert!((0.0..=1.0).contains(&r.pvalue), "{ctx}: {r:?}");
+        }
+    }
+}
+
+#[test]
+fn background_overhangs_with_correlations() {
+    let set = compare_set();
+    let plain = compare_motifs(&set, &[0, 3], &CompareOptions::default()).unwrap();
+    let padded = compare_motifs(
+        &set,
+        &[0, 3],
+        &CompareOptions {
+            overhang: Overhang::Background,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // A uniform background correlates 0 with anything, which leaves the
+    // alignments as they are and averages the score over both motifs.
+    for (a, b) in plain.iter().zip(&padded) {
+        assert_eq!(
+            (a.offset, a.strand, a.overlap),
+            (b.offset, b.strand, b.overlap)
+        );
+        let n = (set[a.query].width() + set[a.target].width()) as f64;
+        assert_near(b.score, a.score * 2.0 * a.overlap as f64 / n, 1e-12, "PCC");
+        assert!(b.pvalue <= (a.pvalue * 1.5).min(1.0) && b.pvalue >= a.pvalue / 1.5);
+    }
+}
+
+#[test]
+fn euclidean_distances_penalize_informative_overhangs() {
+    let core = sites(&["GATTACA"]);
+    let flanked = sites(&["CCGATTACAGG"]);
+    let flat = raw_ppm(
+        &[
+            &[0.25, 0.25, 0.25, 0.25],
+            &[0.25, 0.25, 0.25, 0.25],
+            &[0.9, 0.0, 0.1, 0.0],
+            &[0.0, 0.0, 0.0, 1.0],
+            &[0.0, 0.0, 0.0, 1.0],
+            &[0.25, 0.25, 0.25, 0.25],
+        ],
+        Alphabet::Dna,
+    );
+    let set = [core, flanked, flat];
+    let score = |overhang, t: usize| {
+        let opts = CompareOptions {
+            method: ColumnMetric::Eucl,
+            overhang,
+            ..Default::default()
+        };
+        compare_motifs(&set, &[0], &opts).unwrap()[t].score
+    };
+    // Overlaps alone match the core perfectly either way.
+    assert!(score(Overhang::Ignore, 1) < 0.05);
+    // Uniform overhangs cost nothing, informative ones cost their distance
+    // from the background.
+    let flanked_bkg = score(Overhang::Background, 1);
+    assert!(
+        flanked_bkg > 3.0 * score(Overhang::Ignore, 1),
+        "{flanked_bkg}"
+    );
+    let cols = ppm_columns(&set[1]);
+    let outside: f64 = [0, 1, 9, 10]
+        .iter()
+        .map(|&j| -column_score(&cols[j], &UNIFORM, true))
+        .sum();
+    assert!(flanked_bkg >= outside / 18.0 && flanked_bkg < outside / 18.0 + 0.05);
+}
+
+#[test]
+fn comparison_options_are_checked() {
+    let set = compare_set();
+    let both = CompareOptions {
+        complete: true,
+        overhang: Overhang::Background,
+        ..Default::default()
+    };
+    assert_eq!(
+        arg_msg(compare_motifs(&set, &[0], &both)),
+        "complete scores and background overhangs cannot be combined"
+    );
+    let bad_bkg = CompareOptions {
+        overhang: Overhang::Background,
+        bkg: [0.5, 0.5, 0.5, 0.5],
+        ..Default::default()
+    };
+    assert_eq!(
+        arg_msg(compare_matrix(&set, &bad_bkg, false)),
+        "bkg must be four non-negative values summing to 1"
+    );
+    let sw = CompareOptions {
+        method: ColumnMetric::Sw,
+        ..Default::default()
+    };
+    match anchor_layout(&set, 0, &sw) {
+        Err(Error::Unsupported(m)) => {
+            assert_eq!(m, "motifs can only be compared by PCC or EUCL, not SW")
+        }
+        other => panic!("expected an unsupported error, got {other:?}"),
+    }
+    // Amino acids are compared with a uniform background.
+    let aa = [
+        sites_in(&["MKVLAG"], Alphabet::Aa),
+        sites_in(&["KVLAGW"], Alphabet::Aa),
+    ];
+    let rows = compare_motifs(&aa, &[0], &bad_bkg).unwrap();
+    assert_eq!((rows[1].offset, rows[1].overlap), (1, 5));
+}
+
+/// The P-value of every alignment against the exact distribution of its
+/// score under the empirical null, where each target column is drawn from
+/// the columns of all the motifs. Column scores are rounded to 51 bins
+/// over their range for correlations and to 201 for distances, as the
+/// comparisons do, which the P-values must match exactly; without rounding,
+/// the P-values must lie between the exact probabilities of the score plus
+/// and minus the most the rounding can move it.
+#[test]
+fn comparison_pvalues_match_enumeration() {
+    let set = vec![
+        sites(&["TGACTCA", "TGAGTCA"]),
+        sites(&["TGACGTC"]),
+        sites(&["CACGTGA", "CACATGA", "CACGTGT"]),
+        sites(&["GATTAC"]),
+        sites(&["AACCC", "AACCG"]),
+    ];
+    let pool: Vec<Vec<f64>> = set.iter().flat_map(ppm_columns).collect();
+    let cols: Vec<Vec<Vec<f64>>> = set.iter().map(ppm_columns).collect();
+    let skewed = [0.35, 0.15, 0.15, 0.35];
+    let mut checked = 0;
+    for (eucl, overhang, bkg) in [
+        (false, Overhang::Ignore, UNIFORM),
+        (true, Overhang::Ignore, UNIFORM),
+        (false, Overhang::Background, skewed),
+        (true, Overhang::Background, UNIFORM),
+        (true, Overhang::Background, skewed),
+    ] {
+        let opts = CompareOptions {
+            method: if eucl {
+                ColumnMetric::Eucl
+            } else {
+                ColumnMetric::Pcc
+            },
+            overhang,
+            bkg,
+            min_overlap: 4,
+            ..Default::default()
+        };
+        let (lo, hi, steps) = if eucl {
+            (-std::f64::consts::SQRT_2, 0.0, 200)
+        } else {
+            (-1.0, 1.0, 50)
+        };
+        let width = (hi - lo) / steps as f64;
+        let bin = |s: f64| ((s - lo) / width + 0.5).floor() as usize;
+        let b = (overhang == Overhang::Background).then_some(&bkg[..]);
+        for q in 0..set.len() {
+            let pairs: Vec<(usize, usize)> = (0..set.len()).map(|t| (q, t)).collect();
+            let al = universalmotif::compare::align(&set, &pairs, &opts).unwrap();
+            let rows = compare_motifs(&set, &[q], &opts).unwrap();
+            for (a, r) in al.iter().zip(&rows) {
+                let ctx = format!("EUCL {eucl}, {overhang:?}, {bkg:?}, {q} vs {}", a.target);
+                let qq = if a.strand == Strand::Minus {
+                    rc_columns(&cols[q])
+                } else {
+                    cols[q].clone()
+                };
+                let wt = cols[a.target].len();
+                let t_start = (-a.offset).max(0) as usize;
+                let (facing, _) =
+                    alignment_terms(&qq, wt, (a.query_start, t_start, a.overlap), b, eucl);
+                let mut observed = 0.0;
+                let mut units = 0;
+                // Binned and exact distributions of the target's part.
+                let mut binned = vec![1.0];
+                let mut exact: Vec<(f64, f64)> = vec![(0.0, 1.0)];
+                for (j, &f) in facing.iter().enumerate() {
+                    let Some((s, w)) = target_term(&qq, &cols[a.target][j], f, b, eucl) else {
+                        continue;
+                    };
+                    observed += s;
+                    units += w;
+                    // The distinct scores of a pool column here, with their
+                    // bins and probabilities.
+                    let mut terms: Vec<(f64, usize, f64)> = Vec::new();
+                    for t in &pool {
+                        let (s, w) = target_term(&qq, t, f, b, eucl).unwrap();
+                        let p = 1.0 / pool.len() as f64;
+                        match terms.iter_mut().find(|x| (x.0 - s).abs() < 1e-12) {
+                            Some(x) => x.2 += p,
+                            None => terms.push((s, bin(s / w as f64) * w, p)),
+                        }
+                    }
+                    let mut next = vec![0.0; binned.len() + steps * w];
+                    for (k, &p) in binned.iter().enumerate() {
+                        for &(_, idx, pt) in &terms {
+                            next[k + idx] += p * pt;
+                        }
+                    }
+                    binned = next;
+                    let mut merged: BTreeMap<i64, (f64, f64)> = BTreeMap::new();
+                    for &(v, p) in &exact {
+                        for &(s, _, pt) in &terms {
+                            let e = merged.entry(((v + s) * 1e9).round() as i64).or_default();
+                            *e = (v + s, e.1 + p * pt);
+                        }
+                    }
+                    exact = merged.into_values().collect();
+                }
+                let top = binned.iter().rposition(|&p| p > 0.0).unwrap();
+                let per_col = ((observed / units as f64 - lo) / (hi - lo)).clamp(0.0, 1.0);
+                let k = ((per_col * steps as f64 * units as f64 + 0.5).floor() as usize).min(top);
+                let want: f64 = binned[k..].iter().sum();
+                let got = r.pvalue / a.n_tested as f64;
+                if r.pvalue >= 1.0 {
+                    assert!(want * a.n_tested as f64 >= 1.0 - 1e-9, "{ctx}: {want}");
+                    continue;
+                }
+                assert_near(got, want, 1e-9, &ctx);
+                let reach = exact.last().unwrap().0;
+                let slack = (units + 1) as f64 * width / 2.0 + 1e-9;
+                let at_least = |x: f64| exact.iter().filter(|e| e.0 >= x).map(|e| e.1).sum::<f64>();
+                let (low, high) = (
+                    at_least(observed + slack),
+                    at_least(observed.min(reach) - slack),
+                );
+                assert!(
+                    low - 1e-12 <= got && got <= high + 1e-12,
+                    "{ctx}: {low} {got} {high}"
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 60, "{checked}");
 }
 
 // Clustering.
