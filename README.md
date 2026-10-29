@@ -105,10 +105,6 @@ Tremblay BJM (2024). universalmotif: An R package for biological motif
 analysis. *Journal of Open Source Software* **9**, 7012.
 DOI: [10.21105/joss.07012](https://doi.org/10.21105/joss.07012)
 
-## Licence
-
-MIT
-
 ## About this port
 
 This crate, and the Python package built on it, are AI-assisted rewrites of
@@ -122,3 +118,7 @@ places where the ports deliberately differ, including these improvements,
 the bugs fixed along the way and the features left out, are listed in
 [DIVERGENCES.md](DIVERGENCES.md). The rewrite follows the principles set
 out at [rewrites.bio](https://rewrites.bio).
+
+## Licence
+
+MIT
