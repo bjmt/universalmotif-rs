@@ -104,7 +104,13 @@ struct PccScore;
 impl Scorer for PccScore {
     const LO: f64 = -1.0;
     const HI: f64 = 1.0;
-    const BINS: usize = 51;
+    // Correlations between real columns pile up near 1 and -1. Among all
+    // pairs of JASPAR vertebrate motifs, rounding to 51 bins lost 6% of
+    // the comparisons significant at q 0.05 and moved 1% of P-values from
+    // 1e-6 to 0.05 by more than an order of magnitude; 201 bins lose a
+    // third as many and move them by at most about half that, at about
+    // three times the cost of the P-values.
+    const BINS: usize = 201;
     const BY_MEAN: bool = false;
 
     fn prepare<C: Col>(c: &C) -> C {

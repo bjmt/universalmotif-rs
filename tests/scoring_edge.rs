@@ -1654,9 +1654,8 @@ fn comparison_options_are_checked() {
 
 /// The P-value of every alignment against the exact distribution of its
 /// score under the empirical null, where each target column is drawn from
-/// the columns of all the motifs. Column scores are rounded to 51 bins
-/// over their range for correlations and to 201 for distances, as the
-/// comparisons do, which the P-values must match exactly; without rounding,
+/// the columns of all the motifs. Column scores are rounded to 201 bins
+/// over their range, as the comparisons do, which the P-values must match exactly; without rounding,
 /// the P-values must lie between the exact probabilities of the score plus
 /// and minus the most the rounding can move it.
 #[test]
@@ -1693,7 +1692,7 @@ fn comparison_pvalues_match_enumeration() {
         let (lo, hi, steps) = if eucl {
             (-std::f64::consts::SQRT_2, 0.0, 200)
         } else {
-            (-1.0, 1.0, 50)
+            (-1.0, 1.0, 200)
         };
         let width = (hi - lo) / steps as f64;
         let bin = |s: f64| ((s - lo) / width + 0.5).floor() as usize;

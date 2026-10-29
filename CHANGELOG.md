@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Breaking changes:
+
+- `ScanOptions` has a new `first_hit` field, and `CompareOptions` new
+  `method` and `overhang` fields, so struct literals need them or
+  `..Default::default()`.
+
+Other changes:
+
+- `ScanOptions::first_hit` keeps only the leftmost hit of each motif in
+  each sequence and stops scanning that sequence for the motif soon after
+  it.
+- `motif_matches()` with `MatchValue::Matches` stops scanning a sequence
+  for a motif after its first hit, which is up to 1.7 times faster when
+  most sequences contain the motifs.
+- `CompareOptions::method` compares motifs by Euclidean distance
+  (`ColumnMetric::Eucl`) as well as Pearson correlation, with exact
+  P-values from either null.
+- `CompareOptions::overhang` with `Overhang::Background` compares columns
+  hanging over either motif's ends with the background, so that every
+  alignment counts the same number of column scores.
+- Comparison P-values round column correlations to 201 bins instead of
+  51, which makes them more accurate, especially for short, near-perfect
+  alignments, at about three times the cost of the P-values. P-values and
+  q-values change, while scores and alignments do not.
+- Comparisons are otherwise about 10% faster, with identical results.
 - `compare::anchor_layout()` lowers `min_overlap` to the width of the
   narrower motif, as comparisons do, so motifs narrower than it are
   aligned rather than left at the anchor's edge.
