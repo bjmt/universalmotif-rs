@@ -1,6 +1,6 @@
 [package]
 name = "universalmotif"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Sequence motif types, conversions and analysis, following the universalmotif R package"

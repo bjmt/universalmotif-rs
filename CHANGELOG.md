@@ -1,12 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-29)
 
 Breaking changes:
 
 - `ScanOptions` has a new `first_hit` field, and `CompareOptions` new
   `method` and `overhang` fields, so struct literals need them or
   `..Default::default()`.
+
+Changes in behaviour:
+
+- Comparison P-values round column correlations to 201 bins instead of
+  51, which makes them more accurate, especially for short, near-perfect
+  alignments, at about three times the cost of the P-values. P-values and
+  q-values change, while scores and alignments do not.
+- `complexity()` without an alphabet scores DNA against `ACGT` and RNA
+  against `ACGU`, as the Python package and the R package do, rather than
+  against the letters of the sequence.
+- `compare::anchor_layout()` lowers `min_overlap` to the width of the
+  narrower motif, as comparisons do, so motifs narrower than it are
+  aligned rather than left at the anchor's edge.
 
 Other changes:
 
@@ -22,17 +35,7 @@ Other changes:
 - `CompareOptions::overhang` with `Overhang::Background` compares columns
   hanging over either motif's ends with the background, so that every
   alignment counts the same number of column scores.
-- Comparison P-values round column correlations to 201 bins instead of
-  51, which makes them more accurate, especially for short, near-perfect
-  alignments, at about three times the cost of the P-values. P-values and
-  q-values change, while scores and alignments do not.
-- Comparisons are otherwise about 10% faster, with identical results.
-- `complexity()` without an alphabet scores DNA against `ACGT` and RNA
-  against `ACGU`, as the Python package and the R package do, rather than
-  against the letters of the sequence.
-- `compare::anchor_layout()` lowers `min_overlap` to the width of the
-  narrower motif, as comparisons do, so motifs narrower than it are
-  aligned rather than left at the anchor's edge.
+- Comparisons are about 10% faster, with identical results.
 
 ## 0.2.0 (2026-10-26)
 
