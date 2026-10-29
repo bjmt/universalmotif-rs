@@ -901,18 +901,24 @@ fn approx(a: f64, b: f64) -> bool {
 #[test]
 fn complexity_by_hand() {
     use ComplexityMethod::*;
-    // Wootton-Federhen: log_n(L! / prod n_i!) / L, here log2(4! / (2! 2!)) / 4.
+    // Wootton-Federhen: log_n(L! / prod n_i!) / L, here log2(4! / (2! 2!)) / 4
+    // over the sequence's own two letters.
     assert!(approx(
-        complexity("AACC", WoottonFederhen, None, 7),
+        complexity("AACC", WoottonFederhen, Some("AC"), 7),
         6f64.log2() / 4.0
     ));
+    // DNA is scored against ACGT by default.
+    assert_eq!(
+        complexity("AACC", WoottonFederhen, None, 7),
+        complexity("AACC", WoottonFederhen, Some("ACGT"), 7)
+    );
     assert!(approx(
         complexity("AACC", WoottonFederhen, Some("ACGT"), 7),
         6f64.ln() / 4f64.ln() / 4.0
     ));
     // Its entropy approximation: two letters, each half the sequence.
     assert!(approx(
-        complexity("AACC", WoottonFederhenFast, None, 7),
+        complexity("AACC", WoottonFederhenFast, Some("AC"), 7),
         1.0
     ));
     assert!(approx(

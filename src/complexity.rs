@@ -79,10 +79,21 @@ fn distinct_words<T: Ord>(seq: &[T], n: usize) -> f64 {
     seq.windows(n).collect::<BTreeSet<_>>().len() as f64
 }
 
-/// The complexity of one sequence. `alph` gives the possible letters, by
-/// default those in the sequence, and `max_word` limits Trifonov word sizes.
+/// The complexity of one sequence. `alph` gives the possible letters. By
+/// default it is `ACGT` when the sequence holds only those letters and `N`,
+/// `ACGU` likewise for RNA, and otherwise the letters of the sequence, so a
+/// DNA homopolymer scores 0 rather than nothing. `max_word` limits Trifonov
+/// word sizes.
 pub fn complexity(seq: &str, method: ComplexityMethod, alph: Option<&str>, max_word: usize) -> f64 {
-    let alph = alph.filter(|a| !a.is_empty());
+    let alph = alph.filter(|a| !a.is_empty()).or_else(|| {
+        if seq.bytes().all(|b| b"ACGTN".contains(&b)) {
+            Some("ACGT")
+        } else if seq.bytes().all(|b| b"ACGUN".contains(&b)) {
+            Some("ACGU")
+        } else {
+            None
+        }
+    });
     if seq.is_ascii() && alph.is_none_or(|a| a.is_ascii()) {
         let a: Option<Vec<u8>> = alph.map(|a| a.bytes().collect());
         complexity_of(seq.as_bytes(), a.as_deref(), method, max_word)

@@ -73,7 +73,10 @@ fn proximity_matches_r() {
         let ctx = format!("proximity {a:?} universe={}", case["universe"]);
         let (universe, chrom_lengths): (Vec<GRange>, Vec<Option<i64>>) =
             if case["universe"].as_bool().unwrap() {
-                (ranges(&r["universe"], &chroms), vec![None; chroms.len()])
+                (
+                    ranges(&r["universe"], &chroms),
+                    lengths.iter().map(|&l| Some(l)).collect(),
+                )
             } else {
                 (
                     lengths
@@ -100,17 +103,20 @@ fn proximity_matches_r() {
                 .unwrap_or(true),
             ..Default::default()
         };
-        // The R package means to clip zones at chromosome ends but never
-        // does, which matters only when counting
-        // anchors; leaving out the lengths reproduces its arithmetic.
-        let chrom_lengths = if opts.count == ProximityCount::Anchors {
-            vec![None; chroms.len()]
-        } else {
-            chrom_lengths
-        };
         let mut got = motif_proximity(&hits, &anchors, &universe, &chrom_lengths, &opts).unwrap();
-        got.sort_by(|x, y| x.pvalue.total_cmp(&y.pvalue).then(x.motif.cmp(&y.motif)));
         let t = &case["table"];
+        // The R package breaks ties in P-value by its own motif index, the
+        // order in which motifs first appear among the hits.
+        let r_index: std::collections::HashMap<String, f64> = texts(&t["motif"])
+            .into_iter()
+            .zip(nums(&t["motif.i"]))
+            .collect();
+        let r_order = |m: usize| r_index.get(&sorted[m]).copied().unwrap_or(f64::INFINITY);
+        got.sort_by(|x, y| {
+            x.pvalue
+                .total_cmp(&y.pvalue)
+                .then(r_order(x.motif).total_cmp(&r_order(y.motif)))
+        });
         let names: Vec<String> = got.iter().map(|p| sorted[p.motif].clone()).collect();
         assert_eq!(names, texts(&t["motif"]), "{ctx}: motif");
         let nh: Vec<f64> = got.iter().map(|p| p.nhits as f64).collect();

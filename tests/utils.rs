@@ -247,14 +247,7 @@ fn masking_matches_r() {
     }
     let mr = &r["mask_ranges"];
     let (seqs, names) = (texts(&mr["seqs"]), texts(&mr["names"]));
-    // The R package fails on the first and third cases (when every sequence
-    // has exactly one range, or one has none), so those
-    // were worked out by hand.
-    let fixed: [(usize, [&str; 2]); 2] = [
-        (0, ["------GTACGTACGT", "GGGG----AAAATTTT"]),
-        (2, ["NNNNNCGTACGTANNN", "GGGGCCCCAAAATTTT"]),
-    ];
-    for (i, case) in mr["cases"].as_array().unwrap().iter().enumerate() {
+    for case in mr["cases"].as_array().unwrap() {
         let chroms = texts(&case["chrom"]);
         let (starts, ends) = (nums(&case["start"]), nums(&case["end"]));
         let letter = case["letter"].as_str().unwrap().chars().next().unwrap();
@@ -274,10 +267,6 @@ fn masking_matches_r() {
                 })
                 .collect()
         })();
-        if let Some((_, want)) = fixed.iter().find(|(k, _)| *k == i) {
-            assert_eq!(got.unwrap(), want.to_vec(), "mask_ranges {case}");
-            continue;
-        }
         match case.get("value") {
             Some(v) => assert_eq!(got.unwrap(), texts(v), "mask_ranges {case}"),
             None => assert!(got.is_err(), "mask_ranges {case}"),

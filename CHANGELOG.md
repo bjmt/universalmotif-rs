@@ -27,6 +27,9 @@ Other changes:
   alignments, at about three times the cost of the P-values. P-values and
   q-values change, while scores and alignments do not.
 - Comparisons are otherwise about 10% faster, with identical results.
+- `complexity()` without an alphabet scores DNA against `ACGT` and RNA
+  against `ACGU`, as the Python package and the R package do, rather than
+  against the letters of the sequence.
 - `compare::anchor_layout()` lowers `min_overlap` to the width of the
   narrower motif, as comparisons do, so motifs narrower than it are
   aligned rather than left at the anchor's edge.

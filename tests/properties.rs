@@ -2614,7 +2614,8 @@ fn prop_complexity_bounds() {
         let alph = gen_alphabet(rng);
         let len = rng.random_range(2..200);
         let seq = gen_seq(rng, &alph, len, 0.05);
-        let distinct = sequence_letters(&[&seq]).len();
+        let own: String = sequence_letters(&[&seq]).iter().collect();
+        let distinct = own.chars().count();
         let max_word = rng.random_range(1..=8);
         for method in [
             ComplexityMethod::WoottonFederhen,
@@ -2622,7 +2623,9 @@ fn prop_complexity_bounds() {
             ComplexityMethod::Trifonov,
             ComplexityMethod::TrifonovFast,
         ] {
-            let c = complexity(&seq, method, None, max_word);
+            // Against its own letters, as the default alphabet of DNA
+            // would not cover other letters in the sequence.
+            let c = complexity(&seq, method, Some(&own), max_word);
             if distinct < 2
                 && matches!(
                     method,
