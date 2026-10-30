@@ -387,6 +387,12 @@ impl Motif {
 
     /// Start building a motif from a matrix whose rows follow the order of
     /// `alphabet`'s letters.
+    ///
+    /// The builder's pseudocount is 1 unless set, while
+    /// [`crate::create::CreateOptions`] uses 0: the builder wraps a matrix
+    /// from elsewhere, often counts with zeros that would become infinite
+    /// weights, whereas the motifs made in [`crate::create`] keep the
+    /// frequencies they were made from unless a pseudocount is asked for.
     pub fn builder(matrix: Matrix, alphabet: Alphabet) -> MotifBuilder {
         MotifBuilder::new(matrix, alphabet)
     }
@@ -491,7 +497,9 @@ macro_rules! setter {
 
 impl MotifBuilder {
     /// Start building a motif from its matrix and alphabet, with the name `"new
-    /// motif"`, a pseudocount of 1, both strands and nothing else set.
+    /// motif"`, a pseudocount of 1, both strands and nothing else set. The
+    /// pseudocount differs from that of [`crate::create::CreateOptions`] for
+    /// the reason given at [`Motif::builder`].
     pub fn new(matrix: Matrix, alphabet: Alphabet) -> Self {
         MotifBuilder {
             matrix,

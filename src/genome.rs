@@ -360,7 +360,7 @@ fn build_fai<R: BufRead>(mut reader: R) -> io::Result<FaiIndex> {
             .map_or(0, |p| p + 1) as u64;
         if line.first() == Some(&b'>') {
             let header = String::from_utf8_lossy(&line[1..content as usize]);
-            names.push(header.split_whitespace().next().unwrap_or("").to_string());
+            names.push(crate::io::fasta::first_word(&header).to_string());
             lengths.push(0);
             records.push(FaiRecord {
                 offset: offset + n,

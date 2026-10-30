@@ -42,15 +42,28 @@ pub enum OverlapPriority {
 }
 
 /// Removal of overlapping hits, as done by [`crate::dedup`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// By default hits on opposite strands are compared too, so that a
+/// palindromic site, which is hit on both strands, is kept once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoOverlaps {
     /// Which of two overlapping hits to keep; the one with the smaller P-value
     /// by default.
     pub by: OverlapPriority,
-    /// Compare hits on different strands too.
+    /// Compare hits on different strands too; on by default.
     pub ignore_strand: bool,
-    /// Compare hits of different motifs too.
+    /// Compare hits of different motifs too; off by default.
     pub ignore_motif: bool,
+}
+
+impl Default for NoOverlaps {
+    fn default() -> Self {
+        NoOverlaps {
+            by: OverlapPriority::Pvalue,
+            ignore_strand: true,
+            ignore_motif: false,
+        }
+    }
 }
 
 /// Options for [`scan_sequences`].
@@ -58,7 +71,11 @@ pub struct NoOverlaps {
 pub struct ScanOptions {
     /// P-value cutoff, in (0, 1).
     pub pvalue: f64,
-    /// Also scan the reverse strand.
+    /// Also scan the reverse strand of DNA and RNA, for motifs whose strand
+    /// is [`Strand::Both`]; a motif whose strand is [`Strand::Plus`] or
+    /// [`Strand::Minus`] is only scanned on that strand whatever this says.
+    /// On by default, which suits DNA; RNA is usually read on one strand, so
+    /// callers scanning RNA will mostly want to turn it off.
     pub rc: bool,
     /// Remove overlapping hits.
     pub no_overlaps: Option<NoOverlaps>,
@@ -67,9 +84,12 @@ pub struct ScanOptions {
     /// Scan gapped motifs with their gaps; otherwise their gaps are ignored.
     pub use_gaps: bool,
     /// Bonferroni-correct gapped motifs' P-values for the number of
-    /// combinations of gap sizes tried: the score threshold comes from the
-    /// cutoff divided by that number, and P-values are multiplied by it, up to
-    /// 1. Off by default.
+    /// combinations of gap sizes tried, since each window is scored once per
+    /// combination and keeps the best: the score threshold comes from the
+    /// cutoff divided by that number, and P-values are multiplied by it and
+    /// capped at 1. On by default; turn it off to give each hit the P-value
+    /// of its score under the motif without its gaps. Motifs without gaps
+    /// are not affected.
     pub correct_gaps: bool,
     /// Keep only the first hit of each motif in each sequence, the one a
     /// full scan would list first: the hit with the lowest start, and of a
@@ -91,7 +111,7 @@ impl Default for ScanOptions {
             no_overlaps: None,
             nthreads: 1,
             use_gaps: true,
-            correct_gaps: false,
+            correct_gaps: true,
             first_hit: false,
         }
     }
@@ -828,6 +848,20 @@ fn check_scan(motifs: &[Motif], opts: &ScanOptions) -> Result<Alphabet> {
     Ok(first.alphabet.clone())
 }
 
+/// Whether motif `m` is scanned on the forward and on the reverse strand: a
+/// DNA or RNA motif on the strand it is for, or on both with `rc` if it is
+/// for both, and motifs of other alphabets on the forward strand only.
+pub(crate) fn scan_strands(m: &Motif, rc: bool) -> (bool, bool) {
+    if !m.alphabet.is_nucleotide() {
+        return (true, false);
+    }
+    match m.strand {
+        Strand::Plus => (true, false),
+        Strand::Minus => (false, true),
+        Strand::Both => (true, rc),
+    }
+}
+
 /// A motif's scoring tables and threshold, and its P-value tail if
 /// `keep_tail`; `None` if no window can reach the threshold.
 fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Option<Prepared>> {
@@ -852,11 +886,15 @@ fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Optio
         return Ok(None);
     }
     let nucleotide = m.alphabet.is_nucleotide();
+    let (plus, minus) = scan_strands(m, opts.rc);
     let scorers = if let Some(shape) = gaps {
-        Scorers::Gapped(GappedScorer::new(&sm.pwm, shape, nucleotide, opts.rc))
+        Scorers::Gapped(GappedScorer::new(&sm.pwm, shape, nucleotide, plus, minus))
     } else if nucleotide {
-        let mut s = vec![(Strand::Plus, Scorer::new(&sm.pwm))];
-        if opts.rc {
+        let mut s = Vec::with_capacity(2);
+        if plus {
+            s.push((Strand::Plus, Scorer::new(&sm.pwm)));
+        }
+        if minus {
             s.push((Strand::Minus, Scorer::new(&sm.pwm.reversed())));
         }
         Scorers::Packed(s)
@@ -1373,6 +1411,11 @@ impl FastaHits {
 /// the last batch is scanned, so it is never held in memory whole. Sequence
 /// indices follow the file's records.
 ///
+/// With `trim_names`, each sequence is named by the first word of its header,
+/// as with [`crate::io::fasta::trim_names`] and [`crate::genome::Genome`], and
+/// two sequences with the same name are an error, raised as soon as the second
+/// is read; otherwise names are whole headers and may repeat.
+///
 /// # Example
 ///
 /// ```no_run
@@ -1381,7 +1424,7 @@ impl FastaHits {
 ///
 /// let motifs = meme::read(&std::fs::read_to_string("motifs.meme")?, &Default::default())?;
 /// let opts = ScanOptions { pvalue: 1e-5, nthreads: 8, ..Default::default() };
-/// let hits = scan_fasta(&motifs, "genome.fa.gz", &opts)?;
+/// let hits = scan_fasta(&motifs, "genome.fa.gz", &opts, true)?;
 /// for i in 0..hits.len() {
 ///     let t = &hits.table;
 ///     println!("{}\t{}\t{}", hits.names[t.sequence[i] as usize], t.start[i], hits.matched(i));
@@ -1392,8 +1435,16 @@ pub fn scan_fasta(
     motifs: &[Motif],
     path: impl AsRef<std::path::Path>,
     opts: &ScanOptions,
+    trim_names: bool,
 ) -> Result<FastaHits> {
-    scan_fasta_with(motifs, path.as_ref(), opts, STREAM_BATCH, TAIL_BUDGET)
+    scan_fasta_with(
+        motifs,
+        path.as_ref(),
+        opts,
+        trim_names,
+        STREAM_BATCH,
+        TAIL_BUDGET,
+    )
 }
 
 /// [`scan_fasta`] with the batch size and tail budget given.
@@ -1401,6 +1452,7 @@ fn scan_fasta_with(
     motifs: &[Motif],
     path: &std::path::Path,
     opts: &ScanOptions,
+    trim_names: bool,
     batch_size: usize,
     tail_budget: usize,
 ) -> Result<FastaHits> {
@@ -1468,8 +1520,19 @@ fn scan_fasta_with(
                 },
             )
         });
-        let scanned = with_threads(opts.nthreads, || {
-            for (names, batch) in rx {
+        let mut seen = std::collections::HashSet::new();
+        let scanned = with_threads(opts.nthreads, || -> Result<()> {
+            for (mut names, batch) in rx {
+                if trim_names {
+                    for n in names.iter_mut() {
+                        *n = crate::io::fasta::first_word(n).to_string();
+                        if !seen.insert(n.clone()) {
+                            return arg_err(format!(
+                                "the sequence name '{n}' appears more than once"
+                            ));
+                        }
+                    }
+                }
                 let base = out.names.len();
                 let work = work_items(&batch);
                 let mut hits = scan_raw(&prepared, &batch, &work, opts.first_hit);
@@ -1507,10 +1570,13 @@ fn scan_fasta_with(
                     }
                 }
             }
+            Ok(())
         });
+        // Stopping early leaves the reader without a scanner, so its
+        // error is the scan's.
         (scanned, reader.join().expect("the FASTA reader panicked"))
     });
-    scanned?;
+    scanned??;
     read?;
 
     // P-values, motif by motif, rebuilding the tails that were dropped.
@@ -1833,6 +1899,7 @@ mod tests {
                 pvalue: 0.005,
                 rc,
                 nthreads: 2,
+                correct_gaps: false,
                 ..Default::default()
             };
             let t = scan_table(&dna, &[&seq], &opts).unwrap();
@@ -1862,6 +1929,7 @@ mod tests {
         let base = ScanOptions {
             pvalue: 0.005,
             nthreads: 2,
+            correct_gaps: false,
             ..Default::default()
         };
         let raw = scan_table(&dna, &[&seq], &base).unwrap();
@@ -1869,6 +1937,14 @@ mod tests {
             correct_gaps: true,
             ..base.clone()
         };
+        assert_eq!(
+            corrected,
+            ScanOptions {
+                nthreads: 2,
+                pvalue: 0.005,
+                ..Default::default()
+            }
+        );
         let adj = scan_table(&dna, &[&seq], &corrected).unwrap();
         assert!(!adj.is_empty() && adj.len() < raw.len());
         let key = |t: &HitTable, i: usize| (t.motif[i], t.start[i], t.minus[i], t.combo[i]);
@@ -2010,20 +2086,44 @@ mod tests {
                     (&path, 1, 0),
                     (&gz, 2_500, TAIL_BUDGET),
                 ] {
-                    let f = scan_fasta_with(motifs, file, &opts, batch, budget).unwrap();
+                    let f = scan_fasta_with(motifs, file, &opts, false, batch, budget).unwrap();
                     assert_eq!(f.table, want, "{label}: fasta, batches of {batch}");
                     let fm: Vec<&str> = (0..f.len()).map(|i| f.matched(i)).collect();
                     assert_eq!(fm, matched, "{label}: fasta letters");
                     assert_eq!(f.names[0], "s0 extra");
                     let lengths: Vec<usize> = seqs.iter().map(String::len).collect();
                     assert_eq!(f.lengths, lengths);
+                    let t = scan_fasta_with(motifs, file, &opts, true, batch, budget).unwrap();
+                    assert_eq!(t.table, want, "{label}: trimmed, batches of {batch}");
+                    assert_eq!(t.names[0], "s0");
                 }
             }
         }
         let rna = from_strings(&["ACGU"], Some(Alphabet::Rna), &copts).unwrap();
         let enc = EncodedSequences::new(&dna_seqs, &Alphabet::Dna, 1).unwrap();
         assert!(scan_encoded(&[rna], &enc, &ScanOptions::default()).is_err());
-        assert!(scan_fasta(&dna, dir.join("missing.fa"), &ScanOptions::default()).is_err());
+        assert!(scan_fasta(&dna, dir.join("missing.fa"), &ScanOptions::default(), true).is_err());
+
+        // Names that only differ after their first word collide when trimmed,
+        // also across batches.
+        let dup = dir.join("dup.fa");
+        let records = [
+            ("chr1 a", "ACGTACGTAC"),
+            ("chr2", "ACGT"),
+            ("chr1 b", "TTTT"),
+        ];
+        std::fs::write(&dup, crate::io::fasta::write(&records, 60)).unwrap();
+        let opts = ScanOptions::default();
+        for batch in [1, STREAM_BATCH] {
+            let e = scan_fasta_with(&dna, &dup, &opts, true, batch, TAIL_BUDGET).unwrap_err();
+            assert!(
+                e.to_string()
+                    .contains("the sequence name 'chr1' appears more than once"),
+                "{e}"
+            );
+            let f = scan_fasta_with(&dna, &dup, &opts, false, batch, TAIL_BUDGET).unwrap();
+            assert_eq!(f.names, ["chr1 a", "chr2", "chr1 b"]);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -58,7 +58,8 @@ pub struct EnrichOptions {
     pub pvalue: f64,
     /// What to count; sequences with hits by default.
     pub test: EnrichTest,
-    /// Scan both strands.
+    /// Scan both strands of DNA and RNA, for motifs whose strand is
+    /// [`crate::motif::Strand::Both`], as [`ScanOptions::rc`] does.
     pub rc: bool,
     /// k-mers kept when shuffling the targets into a background.
     pub shuffle_k: usize,
@@ -215,13 +216,7 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
     let (n_tgt, n_bkg) = (sequences.len(), bkg.len());
     let tgt_lens: Vec<usize> = sequences.iter().map(|s| s.as_ref().len()).collect();
     let bkg_lens: Vec<usize> = bkg.iter().map(|s| s.len()).collect();
-    // Only DNA and RNA have a reverse strand to scan.
-    let strands = if opts.rc && first.alphabet.is_nucleotide() {
-        2
-    } else {
-        1
-    };
-    let positions = |lens: &[usize], w: usize| -> usize {
+    let positions = |lens: &[usize], w: usize, strands: usize| -> usize {
         lens.iter()
             .map(|&l| (l + 1).saturating_sub(w))
             .sum::<usize>()
@@ -245,7 +240,13 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
             }
             EnrichTest::Sites => {
                 let w = m.width();
-                let (ppos, npos) = (positions(&tgt_lens, w), positions(&bkg_lens, w));
+                // The strands scanned, as decided for the scan itself.
+                let (plus, minus) = crate::scan::scan_strands(m, opts.rc);
+                let strands = usize::from(plus) + usize::from(minus);
+                let (ppos, npos) = (
+                    positions(&tgt_lens, w, strands),
+                    positions(&bkg_lens, w, strands),
+                );
                 let (a, b) = (tgt.sites[i], neg.sites[i]);
                 let pos_rate = if ppos > 0 {
                     a as f64 / ppos as f64

@@ -22,6 +22,30 @@ pub fn read(text: &str) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
+/// The first word of a FASTA header, which most tools take as the sequence's
+/// name, or an empty name for a blank header.
+pub fn first_word(header: &str) -> &str {
+    header.split_whitespace().next().unwrap_or("")
+}
+
+/// Cut each name to its first word with [`first_word`], failing if two
+/// sequences then share a name, as they could not be told apart.
+pub fn trim_names(names: Vec<String>) -> Result<Vec<String>> {
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    names
+        .into_iter()
+        .map(|n| {
+            let w = first_word(&n).to_string();
+            if !seen.insert(w.clone()) {
+                return Err(Error::Argument(format!(
+                    "the sequence name '{w}' appears more than once"
+                )));
+            }
+            Ok(w)
+        })
+        .collect()
+}
+
 /// Read FASTA records from a reader line by line, as [`read`] does for text, so
 /// the file's text is never held in memory as a whole. The first `skip` lines
 /// are ignored.

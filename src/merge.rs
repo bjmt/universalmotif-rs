@@ -1,6 +1,7 @@
 //! Merging motifs with [`merge_motifs`] and [`merge_similar`].
 
 use crate::alphabet::Alphabet;
+use crate::cluster::{Linkage, hclust};
 use crate::compare::{CompareOptions, NullModel, align, compare_matrix};
 use crate::convert::convert_type;
 use crate::create::{CreateOptions, from_typed_matrix};
@@ -225,6 +226,48 @@ pub struct MergedClusters {
     pub clusters: Vec<usize>,
     /// One motif per cluster, in cluster order.
     pub motifs: Vec<Motif>,
+    /// Notes on clusters that may be too broad to merge well, such as one
+    /// cluster holding over a quarter of the motifs, for the caller to pass
+    /// on.
+    pub warnings: Vec<String>,
+}
+
+/// How [`merge_similar`] grows clusters from the links between motifs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MergeLinkage {
+    /// Clusters are the connected groups of linked motifs, so one link to any
+    /// member is enough to join a cluster. Motifs alike only in part can
+    /// then chain into one large cluster.
+    #[default]
+    Single,
+    /// Every pair of motifs in a cluster is linked. Clusters come from
+    /// complete-linkage clustering of the q-values, with motifs that are not
+    /// linked kept apart, which joins the closest pair of clusters first and
+    /// breaks ties by input order, so the result is fully determined by the
+    /// motifs.
+    Complete,
+}
+
+impl MergeLinkage {
+    /// `"single"` or `"complete"`, as [`str::parse`] reads them.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MergeLinkage::Single => "single",
+            MergeLinkage::Complete => "complete",
+        }
+    }
+}
+
+impl std::str::FromStr for MergeLinkage {
+    type Err = crate::error::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "single" => Ok(MergeLinkage::Single),
+            "complete" => Ok(MergeLinkage::Complete),
+            _ => arg_err(format!("linkage must be 'single' or 'complete', not '{s}'")),
+        }
+    }
 }
 
 /// Options for [`merge_similar`].
@@ -245,6 +288,8 @@ pub struct MergeSimilarOptions {
     pub bkg: [f64; 4],
     /// Weight each motif by its `nsites` when merging.
     pub weighted: bool,
+    /// How clusters grow from the links; single linkage by default.
+    pub linkage: MergeLinkage,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
@@ -258,6 +303,7 @@ impl Default for MergeSimilarOptions {
             rc: true,
             bkg: [0.25; 4],
             weighted: false,
+            linkage: MergeLinkage::Single,
             nthreads: 1,
         }
     }
@@ -266,14 +312,21 @@ impl Default for MergeSimilarOptions {
 /// Cluster similar motifs and merge each cluster.
 ///
 /// Motifs are linked when their comparison q-value is within `opts.qvalue` in
-/// either direction, and clusters are the connected groups. Single motifs are
-/// kept as they were, and larger clusters merged with [`merge_motifs`].
+/// either direction. With [`MergeLinkage::Single`] clusters are the connected
+/// groups, and with [`MergeLinkage::Complete`] every pair within a cluster is
+/// linked. Single motifs are kept as they were, and larger clusters merged
+/// with [`merge_motifs`].
+///
+/// A cluster of more than two motifs that holds over a quarter of them has
+/// likely grown from chains of partial likenesses, and is named in
+/// [`MergedClusters::warnings`].
 #[allow(clippy::needless_range_loop)]
 pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<MergedClusters> {
     if motifs.is_empty() {
         return Ok(MergedClusters {
             clusters: Vec::new(),
             motifs: Vec::new(),
+            warnings: Vec::new(),
         });
     }
     shared_alphabet(motifs)?;
@@ -285,6 +338,7 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
         return Ok(MergedClusters {
             clusters: vec![0],
             motifs: motifs.to_vec(),
+            warnings: Vec::new(),
         });
     }
     let copts = CompareOptions {
@@ -297,43 +351,48 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
     };
     let q = compare_matrix(motifs, &copts, true)?.qvalues;
 
-    let mut parent: Vec<usize> = (0..n).collect();
-    fn find(parent: &mut [usize], mut x: usize) -> usize {
-        let mut root = x;
-        while parent[root] != root {
-            root = parent[root];
+    // The smaller q-value of each pair, with pairs that cannot be compared
+    // never linked.
+    let link = |i: usize, j: usize| {
+        let qij = q[i][j].min(q[j][i]);
+        if qij.is_nan() { f64::INFINITY } else { qij }
+    };
+    let clusters = match opts.linkage {
+        MergeLinkage::Single => connected_groups(n, |i, j| link(i, j) <= opts.qvalue),
+        MergeLinkage::Complete => {
+            // Above any q-value, so that motifs not linked stay apart.
+            let dist: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| if i == j { 0.0 } else { link(i, j).min(2.0) })
+                        .collect()
+                })
+                .collect();
+            hclust(&dist, Linkage::Complete)?.cutree_height(opts.qvalue)?
         }
-        while parent[x] != root {
-            let next = parent[x];
-            parent[x] = root;
-            x = next;
-        }
-        root
+    };
+    let n_clusters = clusters.iter().max().map_or(0, |&c| c + 1);
+    let mut sizes = vec![0usize; n_clusters];
+    for &c in &clusters {
+        sizes[c] += 1;
     }
-    for i in 0..n - 1 {
-        for j in i + 1..n {
-            let qij = q[i][j].min(q[j][i]);
-            if !qij.is_nan() && qij <= opts.qvalue {
-                let (ra, rb) = (find(&mut parent, i), find(&mut parent, j));
-                if ra != rb {
-                    parent[rb] = ra;
-                }
-            }
-        }
+    let mut warnings = Vec::new();
+    if let Some((big, &size)) = sizes
+        .iter()
+        .enumerate()
+        .max_by_key(|&(c, &s)| (s, std::cmp::Reverse(c)))
+        && size > 2
+        && size * 4 > n
+    {
+        let advice = match opts.linkage {
+            MergeLinkage::Single => "a smaller qvalue or complete linkage",
+            MergeLinkage::Complete => "a smaller qvalue",
+        };
+        warnings.push(format!(
+            "cluster {big} holds {size} of the {n} motifs, which suggests that unlike motifs \
+             were joined; try {advice} to split it"
+        ));
     }
-    let mut seen: Vec<usize> = Vec::new();
-    let clusters: Vec<usize> = (0..n)
-        .map(|i| {
-            let r = find(&mut parent, i);
-            match seen.iter().position(|&s| s == r) {
-                Some(p) => p,
-                None => {
-                    seen.push(r);
-                    seen.len() - 1
-                }
-            }
-        })
-        .collect();
 
     let mopts = MergeOptions {
         min_overlap: opts.min_overlap,
@@ -342,7 +401,7 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
         nthreads: opts.nthreads,
         name: None,
     };
-    let merged = (0..seen.len())
+    let merged = (0..n_clusters)
         .map(|c| {
             let members: Vec<Motif> = (0..n)
                 .filter(|&i| clusters[i] == c)
@@ -358,5 +417,47 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
     Ok(MergedClusters {
         clusters,
         motifs: merged,
+        warnings,
     })
+}
+
+/// The connected groups of `n` items under `linked`, numbered from 0 in order
+/// of first appearance.
+fn connected_groups(n: usize, linked: impl Fn(usize, usize) -> bool) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        let mut root = x;
+        while parent[root] != root {
+            root = parent[root];
+        }
+        while parent[x] != root {
+            let next = parent[x];
+            parent[x] = root;
+            x = next;
+        }
+        root
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            if linked(i, j) {
+                let (ra, rb) = (find(&mut parent, i), find(&mut parent, j));
+                if ra != rb {
+                    parent[rb] = ra;
+                }
+            }
+        }
+    }
+    let mut seen: Vec<usize> = Vec::new();
+    (0..n)
+        .map(|i| {
+            let r = find(&mut parent, i);
+            match seen.iter().position(|&s| s == r) {
+                Some(p) => p,
+                None => {
+                    seen.push(r);
+                    seen.len() - 1
+                }
+            }
+        })
+        .collect()
 }

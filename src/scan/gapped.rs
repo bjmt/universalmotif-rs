@@ -196,9 +196,16 @@ pub(super) struct GappedScorer {
 
 impl GappedScorer {
     /// Lay out `pwm`, the motif's scoring matrix without gaps, with the gaps of
-    /// `shape`. With `rc`, the reverse strand of DNA and RNA uses the reverse
-    /// complement of each piece, in reverse order.
-    pub(super) fn new(pwm: &Matrix, shape: GapShape, nucleotide: bool, rc: bool) -> GappedScorer {
+    /// `shape`, on the forward strand with `plus` and on the reverse strand of
+    /// DNA and RNA with `minus`, which uses the reverse complement of each
+    /// piece, in reverse order.
+    pub(super) fn new(
+        pwm: &Matrix,
+        shape: GapShape,
+        nucleotide: bool,
+        plus: bool,
+        minus: bool,
+    ) -> GappedScorer {
         let mut pieces = Vec::new();
         let mut at = 0;
         for &w in &shape.widths {
@@ -206,14 +213,17 @@ impl GappedScorer {
             at += w;
         }
         let strides = shape.strides();
-        let mut layouts = vec![Layout::new(
-            Strand::Plus,
-            pieces.clone(),
-            shape.sizes.clone(),
-            strides.clone(),
-            nucleotide,
-        )];
-        if nucleotide && rc {
+        let mut layouts = Vec::with_capacity(2);
+        if plus {
+            layouts.push(Layout::new(
+                Strand::Plus,
+                pieces.clone(),
+                shape.sizes.clone(),
+                strides.clone(),
+                nucleotide,
+            ));
+        }
+        if nucleotide && minus {
             layouts.push(Layout::new(
                 Strand::Minus,
                 pieces.iter().rev().map(Matrix::reversed).collect(),

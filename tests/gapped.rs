@@ -38,6 +38,8 @@ fn gapped_scans_match_r() {
                 .unwrap()
                 .then(NoOverlaps::default),
             nthreads: 2,
+            // As in the reference scans.
+            correct_gaps: false,
             ..Default::default()
         };
         let ctx = format!(

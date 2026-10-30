@@ -97,7 +97,9 @@ impl std::fmt::Display for ShuffleMethod {
 /// Options for [`shuffle_sequences`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShuffleOptions {
-    /// Size of the k-mers to preserve.
+    /// Size of the k-mers to preserve; 2 by default, since the dinucleotide
+    /// make-up of DNA, CpG depletion above all, changes how often motifs
+    /// match, so backgrounds should keep it.
     pub k: usize,
     /// The shuffling method; the Euler walk by default.
     pub method: ShuffleMethod,
@@ -113,7 +115,7 @@ pub struct ShuffleOptions {
 impl Default for ShuffleOptions {
     fn default() -> Self {
         ShuffleOptions {
-            k: 1,
+            k: 2,
             method: ShuffleMethod::Euler,
             seed: 1,
             window: None,

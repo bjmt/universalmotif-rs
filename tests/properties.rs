@@ -1586,6 +1586,8 @@ fn prop_scan_matches_brute_force() {
             pvalue: 10f64.powf(rng.random_range(-4.0..-0.3)),
             rc: rng.random_bool(0.7),
             use_gaps: rng.random_bool(0.8),
+            // The brute force scores each gap combination on its own.
+            correct_gaps: false,
             ..Default::default()
         };
         let ctx = || format!("{}\nseqs {seqs:?}\noptions {opts:?}", descs(&motifs));

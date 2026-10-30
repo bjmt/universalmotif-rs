@@ -749,6 +749,7 @@ fn fasta_scans_match_table_scans() {
                     nthreads,
                     ..opts.clone()
                 },
+                false,
             )
             .unwrap();
             let names: Vec<&str> = records.iter().map(|r| r.0.as_str()).collect();
@@ -905,6 +906,7 @@ fn gapped_scans_across_chunks_and_at_the_combination_limit() {
         let opts = ScanOptions {
             pvalue: cutoff,
             nthreads: 4,
+            correct_gaps: false,
             ..Default::default()
         };
         let t = scan_table(group, &seqs, &opts).unwrap();
@@ -918,7 +920,7 @@ fn gapped_scans_across_chunks_and_at_the_combination_limit() {
         )
         .unwrap();
         assert_same_table(&t, &t1, "gapped, threads");
-        let f = scan_fasta(group, &path, &opts).unwrap();
+        let f = scan_fasta(group, &path, &opts, true).unwrap();
         assert_same_table(&t, &f.table, "gapped, scan_fasta");
         for i in 0..t.len() {
             assert_eq!(f.matched(i), t.matched(i, &seqs));
@@ -1052,7 +1054,7 @@ fn long_score_tails_are_batched_and_rebuilt() {
     let dir = TempDir::new("tails");
     let path = dir.join("ab.fa");
     std::fs::write(&path, fasta_text(&records, 70, false)).unwrap();
-    let f = scan_fasta(&motifs, &path, &opts).unwrap();
+    let f = scan_fasta(&motifs, &path, &opts, true).unwrap();
     assert_same_table(&t, &f.table, "scan_fasta");
 }
 

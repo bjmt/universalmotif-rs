@@ -297,3 +297,258 @@ fn bad_matrices_and_frequencies_are_rejected() {
     let e = from_matrix(ints, None, Some(Alphabet::Dna), &opts()).unwrap_err();
     assert!(e.to_string().contains("read as counts"), "{e}");
 }
+
+fn dna(site: &str, strand: universalmotif::Strand) -> universalmotif::Motif {
+    let o = CreateOptions {
+        strand,
+        nsites: Some(20.0),
+        ..opts()
+    };
+    from_strings(&[site], Some(Alphabet::Dna), &o).unwrap()
+}
+
+#[test]
+fn scans_honour_the_motif_strand() {
+    use universalmotif::Strand;
+    use universalmotif::scan::{ScanOptions, scan_table};
+    // The site only appears as its reverse complement.
+    let seq = format!("{}GGGTTTTCC{}", "A".repeat(20), "C".repeat(20));
+    let strands = |strand: Strand, rc: bool| {
+        let o = ScanOptions {
+            pvalue: 1e-3,
+            rc,
+            ..Default::default()
+        };
+        let t = scan_table(&[dna("GGAAAACCC", strand)], &[seq.as_str()], &o).unwrap();
+        t.minus
+    };
+    assert_eq!(strands(Strand::Both, true), [true]);
+    assert!(strands(Strand::Both, false).is_empty());
+    // A one-stranded motif ignores rc.
+    for rc in [true, false] {
+        assert!(strands(Strand::Plus, rc).is_empty(), "rc {rc}");
+        assert_eq!(strands(Strand::Minus, rc), [true], "rc {rc}");
+    }
+    // The same holds for gapped motifs.
+    let gapped = |strand: Strand| {
+        let m = universalmotif::ops::add_gap(&dna("GGAAAACCC", strand), Some(&[4]), &[0], &[1])
+            .unwrap();
+        let o = ScanOptions {
+            pvalue: 1e-3,
+            ..Default::default()
+        };
+        scan_table(&[m], &[seq.as_str()], &o).unwrap().minus
+    };
+    assert!(gapped(Strand::Plus).is_empty());
+    assert!(gapped(Strand::Minus).iter().all(|&m| m));
+    assert!(!gapped(Strand::Minus).is_empty());
+}
+
+#[test]
+fn enrichment_counts_positions_on_the_strands_scanned() {
+    use universalmotif::Strand;
+    use universalmotif::enrich::{EnrichOptions, EnrichTest, enrich_motifs};
+    let targets = vec![format!("{}GGAAAACCC{}", "A".repeat(20), "C".repeat(20)); 5];
+    let bkg = vec!["ACGT".repeat(12); 5];
+    let o = EnrichOptions {
+        test: EnrichTest::Sites,
+        pvalue: 1e-3,
+        ..Default::default()
+    };
+    let both = enrich_motifs(&[dna("GGAAAACCC", Strand::Both)], &targets, Some(&bkg), &o).unwrap();
+    let plus = enrich_motifs(&[dna("GGAAAACCC", Strand::Plus)], &targets, Some(&bkg), &o).unwrap();
+    assert_eq!(both[0].target_site_hits, plus[0].target_site_hits);
+    // The same hits out of half the positions: 41 and 40 windows in each
+    // target and background, with a pseudocount of 1 in every cell.
+    use universalmotif::stats::fisher_greater;
+    let want = |strands: u64| fisher_greater(6, 1, 41 * 5 * strands - 5 + 1, 40 * 5 * strands + 1);
+    assert!((both[0].pvalue - want(2)).abs() < 1e-12);
+    assert!((plus[0].pvalue - want(1)).abs() < 1e-12);
+}
+
+#[test]
+fn palindromes_count_once_without_overlaps() {
+    use universalmotif::Strand;
+    use universalmotif::scan::{NoOverlaps, ScanOptions, scan_table};
+    let seq = format!("{}CCACGTGG{}", "A".repeat(20), "T".repeat(20));
+    let m = dna("CCACGTGG", Strand::Both);
+    let o = ScanOptions {
+        pvalue: 1e-3,
+        ..Default::default()
+    };
+    assert_eq!(
+        scan_table(std::slice::from_ref(&m), &[seq.as_str()], &o)
+            .unwrap()
+            .len(),
+        2
+    );
+    let once = ScanOptions {
+        no_overlaps: Some(NoOverlaps::default()),
+        ..o.clone()
+    };
+    assert!(NoOverlaps::default().ignore_strand);
+    assert_eq!(
+        scan_table(std::slice::from_ref(&m), &[seq.as_str()], &once)
+            .unwrap()
+            .len(),
+        1
+    );
+    let by_strand = ScanOptions {
+        no_overlaps: Some(NoOverlaps {
+            ignore_strand: false,
+            ..Default::default()
+        }),
+        ..o
+    };
+    assert_eq!(
+        scan_table(&[m], &[seq.as_str()], &by_strand).unwrap().len(),
+        2
+    );
+}
+
+#[test]
+fn gapped_pvalues_are_corrected_by_default() {
+    use universalmotif::Strand;
+    use universalmotif::scan::{ScanOptions, scan_table};
+    assert!(ScanOptions::default().correct_gaps);
+    let m = universalmotif::ops::add_gap(&dna("TTGACCAAT", Strand::Both), Some(&[3]), &[0], &[3])
+        .unwrap();
+    let seq = format!(
+        "{}TTGACCAAT{}TTGAACCAAT{}",
+        "A".repeat(30),
+        "C".repeat(30),
+        "G".repeat(30)
+    );
+    let base = ScanOptions {
+        pvalue: 1e-2,
+        rc: false,
+        ..Default::default()
+    };
+    let plain = ScanOptions {
+        correct_gaps: false,
+        pvalue: 1e-2 / 4.0,
+        ..base.clone()
+    };
+    let corrected = scan_table(std::slice::from_ref(&m), &[seq.as_str()], &base).unwrap();
+    let raw = scan_table(std::slice::from_ref(&m), &[seq.as_str()], &plain).unwrap();
+    // Four gap sizes, so four times the P-value at a quarter of the cutoff.
+    assert!(!corrected.is_empty());
+    assert_eq!(corrected.start, raw.start);
+    for (c, r) in corrected.pvalue.iter().zip(&raw.pvalue) {
+        assert!((c / r - 4.0).abs() < 1e-9 || *c == 1.0, "{c} {r}");
+    }
+    // Motifs without gaps are untouched.
+    let ungapped = dna("TTGACCAAT", Strand::Both);
+    let a = scan_table(std::slice::from_ref(&ungapped), &[seq.as_str()], &base).unwrap();
+    let b = scan_table(
+        &[ungapped],
+        &[seq.as_str()],
+        &ScanOptions {
+            correct_gaps: false,
+            ..base
+        },
+    )
+    .unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn complete_linkage_keeps_chains_apart() {
+    use universalmotif::create::random;
+    use universalmotif::merge::{MergeLinkage, MergeSimilarOptions, merge_similar};
+    let sites = [
+        "GATTACAGCATGCA",
+        "CAGCATGCATTGAC",
+        "ATGCATTGACCGTA",
+        "TTGACCGTAGGTCA",
+    ];
+    let mut motifs: Vec<_> = sites
+        .iter()
+        .map(|s| dna(s, universalmotif::Strand::Both))
+        .collect();
+    motifs.extend((0..8).map(|i| random(10, Alphabet::Dna, &opts(), i).unwrap()));
+    let run = |linkage| {
+        let o = MergeSimilarOptions {
+            linkage,
+            ..Default::default()
+        };
+        merge_similar(&motifs, &o).unwrap()
+    };
+    let single = run(MergeLinkage::Single);
+    assert_eq!(&single.clusters[..5], [0, 0, 0, 0, 1]);
+    assert_eq!(single.warnings.len(), 1);
+    assert!(
+        single.warnings[0].contains("cluster 0 holds 4 of the 12 motifs"),
+        "{}",
+        single.warnings[0]
+    );
+    let complete = run(MergeLinkage::Complete);
+    assert_eq!(&complete.clusters[..5], [0, 1, 1, 1, 2]);
+    assert!(complete.warnings.is_empty());
+    assert_eq!(complete.motifs.len(), 10);
+    // Every pair within a complete-linkage cluster is linked, so the first
+    // and last motifs of the chain are not.
+    assert_ne!(complete.clusters[0], complete.clusters[3]);
+    assert_eq!(
+        "complete".parse::<MergeLinkage>().unwrap(),
+        MergeLinkage::Complete
+    );
+    assert!("average".parse::<MergeLinkage>().is_err());
+}
+
+#[test]
+fn fasta_names_are_trimmed_to_their_first_word() {
+    use universalmotif::io::fasta::{first_word, trim_names};
+    assert_eq!(first_word("chr1 some description"), "chr1");
+    assert_eq!(first_word("chr1\tx"), "chr1");
+    assert_eq!(first_word(""), "");
+    let names = vec!["a x".to_string(), "b".into()];
+    assert_eq!(trim_names(names).unwrap(), ["a", "b"]);
+    let e = trim_names(vec!["chr1 a".into(), "chr1 b".into()]).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("the sequence name 'chr1' appears more than once"),
+        "{e}"
+    );
+}
+
+#[test]
+fn shuffles_keep_dinucleotides_by_default() {
+    use universalmotif::shuffle::{ShuffleOptions, shuffle_sequences};
+    let seq = "ACGCGTTAGCATCGATCGGGCATTACGCGATATCGCGATCGATCGCGCTAGCTAGG";
+    let out = shuffle_sequences(&[seq], &ShuffleOptions::default()).unwrap();
+    let pairs = |s: &str| {
+        let mut v: Vec<String> = (0..s.len() - 1).map(|i| s[i..i + 2].to_string()).collect();
+        v.sort_unstable();
+        v
+    };
+    assert_ne!(out[0], seq);
+    assert_eq!(pairs(&out[0]), pairs(seq));
+}
+
+#[test]
+fn motifs_found_on_one_strand_are_for_that_strand() {
+    use universalmotif::Strand;
+    use universalmotif::finder::{FinderOptions, motif_finder};
+    let site = "TTGACCAT";
+    let seqs: Vec<String> = (0..20)
+        .map(|i| {
+            let bkg =
+                universalmotif::shuffle::create_sequences(&['A', 'C', 'G', 'T'], 1, 92, None, i, 1)
+                    .unwrap()
+                    .remove(0);
+            format!("{}{site}{}", &bkg[..46], &bkg[46..])
+        })
+        .collect();
+    for (rc, strand) in [(true, Strand::Both), (false, Strand::Plus)] {
+        let o = FinderOptions {
+            min_width: 6,
+            max_width: 8,
+            rc,
+            ..Default::default()
+        };
+        let found = motif_finder(&seqs, None, &o).unwrap();
+        assert!(!found.is_empty(), "rc {rc}");
+        assert!(found.iter().all(|f| f.motif.strand == strand), "rc {rc}");
+    }
+}

@@ -32,13 +32,14 @@ copied, and are not listed here. The other differences are below.
   empirical null.
 - **Gapped scanning.** `scan_sequences_lite()` ignores gaps. The port scans
   gapped motifs as the full `scan_sequences()` does: every combination of
-  gap sizes is tried, matched letters show the gaps as dots, and P-values
-  are those of the motif without its gaps, so they are not adjusted for the
-  number of combinations. The port can Bonferroni-correct them for it
-  (`correct_gaps`), which the R package cannot. Each piece between gaps is
-  scored once per
-  position and the combinations are built from those scores, which is
-  about twice as fast as scanning every combination separately.
+  gap sizes is tried and matched letters show the gaps as dots. The R
+  package gives each hit the P-value of the motif without its gaps, which
+  lets several times too many chance hits through; the port
+  Bonferroni-corrects P-values and cutoffs for the number of combinations
+  by default, and `correct_gaps` turns this off. Each piece between gaps is
+  scored once per position and the combinations are built from those
+  scores, which is about twice as fast as scanning every combination
+  separately.
 - **Complete comparison scores.** With `CompareOptions::complete`,
   comparisons score whole queries rather than overlaps, as TOMTOM does by
   default: each query column is scored against the median of its
@@ -47,6 +48,23 @@ copied, and are not listed here. The other differences are below.
   of all the alignments tried rather than a Bonferroni correction. The
   Python package's `compare_motifs(complete=True)` agrees with TOMTOM's
   P-values to a correlation of 0.999.
+- **Comparison options.** Besides Pearson correlation, comparisons can
+  use the Euclidean distance between columns (`method = "EUCL"` in the
+  Python package), with exact P-values from either null, and can compare
+  columns hanging over either motif's ends with the background
+  (`overhang = "background"`), so that every alignment counts the same
+  number of column scores.
+- **Merging without chains.** `merge_similar()` can join motifs with
+  complete linkage, so that every pair in a cluster is similar, where the
+  connected groups of `merge_similar_lite()` can chain unlike motifs
+  together, and it warns
+  when one cluster holds more than a quarter of the motifs.
+- **First hits only.** Scans can keep only the first hit of each motif in
+  each sequence and stop scanning that sequence for the motif after it.
+- **Package-wide threads.** The Python package's `set_nthreads()`, or the
+  `UNIVERSALMOTIF_NTHREADS` environment variable, sets the threads used by
+  every function whose `nthreads` is left out, where the R package takes
+  `nthreads` per call only.
 - **Motif match matrices.** `scan::motif_matches` summarizes the hits of
   each motif in each sequence as a sparse matrix of matches, hit counts or
   best scores without keeping the hits, for annotating the peaks of
@@ -105,6 +123,35 @@ copied, and are not listed here. The other differences are below.
   calls them k-mers, the more common term, so `count_klets()` and
   `get_klets()` are `count_kmers()` and `get_kmers()`, and `get_bkg()`
   names its first column `kmer` rather than `klet`.
+
+## Defaults
+
+These defaults differ from the R package's, to suit most uses better.
+
+- **FASTA names.** Sequences read from FASTA files are named by the first
+  word of the header, as genomes on disk are and as most tools do, and a
+  name that repeats is an error; `trim_names = False` keeps whole headers.
+- **Overlapping hits.** Removing overlapping hits, with `no_overlaps` or
+  the Python package's `dedup_hits()`, compares hits on both strands by
+  default, so that a palindromic site counts once, where the R package's
+  `no.overlaps` works on each strand apart.
+- **Strands.** Scans respect each motif's strand, so a motif for the `+`
+  or `-` strand is only searched on that strand, where the R package
+  searches both strands whenever `RC = TRUE`. The Python package scans RNA
+  on one strand by default, and MEME files without a `strands:` line give
+  DNA and RNA motifs for both strands, where the R package assumes `+`.
+  Motifs found by `motif_finder()` on one strand are for that strand.
+- **Shuffling.** `shuffle_sequences()` keeps dinucleotides by default
+  (`k = 2`), as backgrounds usually should, where the R package keeps
+  single letters.
+- **Q-value filtering.** The Python package's `enrich_motifs()`,
+  `motif_peaks()` and `motif_proximity()` return every motif unless
+  `qvalue` is given, where the R package keeps only those with q-values up
+  to 0.1 by default.
+- **Logos of contribution matrices.** The Python package's `view_motifs()`
+  draws CWMs as contributions by default, and other motifs as information
+  content, where the R package draws every motif as information content
+  unless told otherwise.
 
 ## Conventions
 

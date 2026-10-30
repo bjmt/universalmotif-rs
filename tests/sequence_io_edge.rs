@@ -471,12 +471,11 @@ fn single_letter_shuffles_keep_composition() {
     assert_ne!(out[0], seq);
     assert_eq!(sorted_letters(&out[0]), sorted_letters(&seq));
     // A single letter or a one-letter alphabet has nothing to move.
-    let opts = ShuffleOptions {
-        k: 2,
-        ..Default::default()
-    };
+    let opts = ShuffleOptions::default();
+    assert_eq!(opts.k, 2);
+    let k1 = ShuffleOptions { k: 1, ..opts };
     assert_eq!(
-        shuffle_sequences(&["G", "TTTTTT"], &ShuffleOptions::default()).unwrap(),
+        shuffle_sequences(&["G", "TTTTTT"], &k1).unwrap(),
         ["G", "TTTTTT"]
     );
     assert_eq!(shuffle_sequences(&["AAAAAA"], &opts).unwrap(), ["AAAAAA"]);
@@ -2037,12 +2036,12 @@ fn meme_reader_header_variants() {
         "MOTIF m alt\nletter-probability matrix: alength= 4 w= 1 nsites=5\n0.1 0.2 0.3 0.4\n";
     let read =
         |head: &str| meme::read(&format!("{head}{body}"), &meme::ReadOptions::default()).unwrap();
-    // No alphabet means DNA, no strands line means +, no background means
-    // uniform.
+    // No alphabet means DNA, no strands line means both strands, no
+    // background means uniform.
     let m = &read("MEME version 4\n")[0];
     assert_eq!(
         (m.alphabet.clone(), m.strand),
-        (Alphabet::Dna, Strand::Plus)
+        (Alphabet::Dna, Strand::Both)
     );
     assert_eq!(m.bkg, [0.25; 4]);
     assert_eq!(
@@ -2051,6 +2050,7 @@ fn meme_reader_header_variants() {
     );
     assert!(m.extrainfo.is_empty());
     assert_eq!(read("strands: -\n")[0].strand, Strand::Minus);
+    assert_eq!(read("strands: +\n")[0].strand, Strand::Plus);
     assert_eq!(read("strands: + -\n")[0].strand, Strand::Both);
     // Backgrounds over several lines, with letters the alphabet does not
     // know, are taken in order.
@@ -2066,12 +2066,23 @@ fn meme_reader_header_variants() {
     )
     .unwrap();
     assert_eq!(rna[0].alphabet, Alphabet::Rna);
+    assert_eq!(rna[0].strand, Strand::Both);
+    let aa = meme::read(
+        "ALPHABET= ACDEFGHIKLMNPQRSTVWY\nMOTIF p\nletter-probability matrix: w= 1\n1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+        &meme::ReadOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        (aa[0].alphabet.clone(), aa[0].strand),
+        (Alphabet::Aa, Strand::Plus)
+    );
     let custom = meme::read(
         "ALPHABET \"mine\"\nb ~ 1\nZ\nEND ALPHABET\nMOTIF c\nletter-probability matrix: w= 1\n0.2 0.3 0.5\n",
         &meme::ReadOptions::default(),
     )
     .unwrap();
     assert_eq!(custom[0].alphabet, Alphabet::custom("1Zb".chars()).unwrap());
+    assert_eq!(custom[0].strand, Strand::Plus);
     // The file lists Z, b, 1; the alphabet sorts them as 1, Z, b.
     assert_matrix_close(
         &custom[0].matrix,

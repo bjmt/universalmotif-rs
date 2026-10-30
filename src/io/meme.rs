@@ -91,6 +91,9 @@ fn parse_header(lines: &[&str]) -> Result<Header> {
                 (s.first().copied().unwrap_or("+")).parse::<Strand>()?
             }
         }
+        // Without the line, motifs of alphabets with two strands apply
+        // to both.
+        None if alphabet.is_nucleotide() => Strand::Both,
         None => Strand::Plus,
     };
 
@@ -219,6 +222,9 @@ pub struct ReadOptions {
 }
 
 /// Read MEME-formatted motifs.
+///
+/// The `strands:` line sets every motif's strand. Without it, DNA and RNA
+/// motifs apply to both strands and motifs of other alphabets to one.
 ///
 /// # Example
 ///

@@ -182,7 +182,7 @@ fn first_hit_in_other_alphabets_and_fasta_files() {
         ..Default::default()
     };
     let want = scan_table(&dna, &dna_seqs, &opts).unwrap();
-    let f = scan_fasta(&dna, &path, &opts).unwrap();
+    let f = scan_fasta(&dna, &path, &opts, true).unwrap();
     assert_eq!(f.table, want);
     for i in 0..want.len() {
         assert_eq!(f.matched(i), want.matched(i, &dna_seqs));

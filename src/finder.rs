@@ -16,7 +16,7 @@ use crate::alphabet::Alphabet;
 use crate::create::{CreateOptions, from_matrix};
 use crate::error::{Result, arg_err};
 use crate::matrix::Matrix;
-use crate::motif::{Motif, MotifType};
+use crate::motif::{Motif, MotifType, Strand};
 use crate::pvalue::with_threads;
 use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffle_sequences};
 
@@ -621,7 +621,8 @@ pub struct FinderOptions {
     /// Fraction of shared site positions above which the less significant
     /// of two motifs is dropped.
     pub dedup_overlap: f64,
-    /// Search both strands.
+    /// Search both strands. Motifs found without it are for the forward
+    /// strand only, which [`crate::scan`] then respects.
     pub rc: bool,
     /// Shuffling for negative sequences when none are given.
     pub shuffle_k: usize,
@@ -876,6 +877,8 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
             bkg: Some(bkg.to_vec()),
             pval: Some(ln_pv.exp()),
             eval: Some(qv),
+            // A motif found on one strand is only scanned on that strand.
+            strand: if opts.rc { Strand::Both } else { Strand::Plus },
             ..Default::default()
         };
         let motif = from_matrix(

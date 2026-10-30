@@ -2242,7 +2242,7 @@ fn fasta_scans_match_the_table() {
         pvalue: 1e-2,
         ..Default::default()
     };
-    let fasta = scan_fasta(&motifs, &path, &opts);
+    let fasta = scan_fasta(&motifs, &path, &opts, true);
     let none = scan_fasta(
         from_ref(&motifs[0]),
         &path,
@@ -2250,6 +2250,7 @@ fn fasta_scans_match_the_table() {
             pvalue: 1e-12,
             ..Default::default()
         },
+        true,
     );
     std::fs::remove_file(&path).unwrap();
     let fasta = fasta.unwrap();

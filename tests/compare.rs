@@ -7,7 +7,9 @@ use serde_json::Value;
 use universalmotif::Motif;
 use universalmotif::cluster::{Linkage, TreeOptions, hclust, motif_tree};
 use universalmotif::compare::{CompareOptions, NullModel, compare_matrix, compare_motifs};
-use universalmotif::merge::{MergeOptions, MergeSimilarOptions, merge_motifs, merge_similar};
+use universalmotif::merge::{
+    MergeLinkage, MergeOptions, MergeSimilarOptions, merge_motifs, merge_similar,
+};
 
 fn set(name: &str) -> Vec<Motif> {
     load_key("compare.json", name)
@@ -210,6 +212,7 @@ fn merge_similar_matches_r() {
             rc: c.rc,
             bkg: c.bkg,
             weighted: a.get("weighted").and_then(Value::as_bool).unwrap_or(false),
+            linkage: MergeLinkage::Single,
             nthreads: 1,
         };
         let res = merge_similar(&motifs, &opts).unwrap();

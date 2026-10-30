@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+Breaking changes:
+
+- `scan::scan_fasta()` takes `trim_names`, and `MergeSimilarOptions` and
+  `MergedClusters` have new fields, so struct literals need them or
+  `..Default::default()`.
+
+Changes in behaviour:
+
+- `ScanOptions::default()` Bonferroni-corrects gapped motifs' P-values for
+  the gap sizes tried (`correct_gaps: true`), which let several times too
+  many chance hits through before.
+- `NoOverlaps::default()` compares hits on both strands, so a palindromic
+  site is kept once.
+- Scans respect each motif's strand: motifs for the `+` or `-` strand are
+  searched on that strand only, whatever `rc` says, and enrichment's site
+  test counts positions on the strands searched.
+- `ShuffleOptions::default()` keeps dinucleotides (`k: 2`).
+- MEME files without a `strands:` line give DNA and RNA motifs for both
+  strands.
+- `motif_finder()` with `rc: false` gives motifs for the `+` strand.
+- `Genome` and `scan_fasta(trim_names = true)` name sequences by the first
+  word of the header, and a repeated name is an error.
+
+Other changes:
+
+- `MergeSimilarOptions::linkage` with `MergeLinkage::Complete` joins only
+  motifs that are all similar to each other, and `MergedClusters::warnings`
+  names a cluster holding more than a quarter of the motifs.
+- `fasta::first_word()` and `fasta::trim_names()`.
+
 ## 0.3.0 (2026-10-29)
 
 Breaking changes:

@@ -18,7 +18,10 @@ pub struct CreateOptions {
     pub motif_type: MotifType,
     /// The motif's name; `"motif"` by default.
     pub name: String,
-    /// The pseudocount used in conversions; 0 by default.
+    /// The pseudocount used in conversions; 0 by default, so that a motif
+    /// keeps the frequencies it was made from. This differs from the
+    /// pseudocount of 1 that [`crate::motif::Motif::builder`] starts with,
+    /// which is meant for matrices from elsewhere that may hold zero counts.
     pub pseudocount: f64,
     /// The number of sites. Counts are scaled to it, and probabilities from
     /// consensus strings are rounded to it.
