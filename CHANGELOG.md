@@ -31,6 +31,9 @@ Other changes:
   motifs that are all similar to each other, and `MergedClusters::warnings`
   names a cluster holding more than a quarter of the motifs.
 - `fasta::first_word()` and `fasta::trim_names()`.
+- `mask::mask_complexity()` and `mask::dust_intervals()` find low-complexity
+  regions with symmetric DUST, giving the same regions as dustmasker, and
+  mask them, along with lowercase letters if asked.
 
 ## 0.3.0 (2026-10-29)
 
