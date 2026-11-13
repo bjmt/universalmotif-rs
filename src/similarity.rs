@@ -267,28 +267,38 @@ fn prepare_all(
 /// Bins for each query column's products with the pooled columns.
 const PVALUE_BINS: usize = 201;
 
-/// A query's per-column score distributions against the pooled columns, in
-/// each orientation, on one grid of `PVALUE_BINS` bins from `lo` in steps
-/// of `step`.
+/// A query's per-column score distributions against the pooled columns, on
+/// one grid of `PVALUE_BINS` bins from `lo` in steps of `step`.
 struct QueryNull {
     lo: f64,
     step: f64,
-    /// `pmf[orientation][column]`, orientation 0 forward and 1 reversed.
+    /// `pmf[orientation][column]`, orientation 0 forward and 1 reverse
+    /// complemented.
     pmf: [Vec<Vec<f64>>; 2],
 }
 
-fn query_null(q: &Prepared, qrc: Option<&Prepared>, pool: &[Vec<f64>]) -> QueryNull {
-    let products = |col: &[f64]| -> Vec<f64> {
-        pool.iter()
-            .map(|p| p.iter().zip(col).map(|(a, b)| a * b).sum())
-            .collect()
-    };
-    let fwd: Vec<Vec<f64>> = q.cols.iter().map(|c| products(c)).collect();
-    let rev: Vec<Vec<f64>> = qrc
-        .map(|r| r.cols.iter().map(|c| products(c)).collect())
-        .unwrap_or_default();
+impl QueryNull {
+    fn bin(&self, v: f64) -> usize {
+        (((v - self.lo) / self.step).round().max(0.0) as usize).min(PVALUE_BINS - 1)
+    }
+}
+
+/// The distributions of a query's column products with the pooled columns.
+/// With `rc`, the pool holds the complement of each of its columns, so the
+/// reverse complemented query's products are the forward ones in reverse
+/// column order.
+fn query_null(q: &Prepared, rc: bool, pool: &[Vec<f64>]) -> QueryNull {
+    let products: Vec<Vec<f64>> = q
+        .cols
+        .iter()
+        .map(|col| {
+            pool.iter()
+                .map(|p| p.iter().zip(col).map(|(a, b)| a * b).sum())
+                .collect()
+        })
+        .collect();
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    for v in fwd.iter().chain(&rev).flatten() {
+    for v in products.iter().flatten() {
         lo = lo.min(*v);
         hi = hi.max(*v);
     }
@@ -297,125 +307,98 @@ fn query_null(q: &Prepared, qrc: Option<&Prepared>, pool: &[Vec<f64>]) -> QueryN
     } else {
         1.0
     };
-    let bin = |v: f64| (((v - lo) / step).round().max(0.0) as usize).min(PVALUE_BINS - 1);
-    let to_pmf = |vals: &Vec<f64>| {
-        let mut pmf = vec![0.0; PVALUE_BINS];
-        for &v in vals {
-            pmf[bin(v)] += 1.0 / vals.len() as f64;
-        }
-        pmf
-    };
-    QueryNull {
+    let mut null = QueryNull {
         lo,
         step,
-        pmf: [
-            fwd.iter().map(to_pmf).collect(),
-            rev.iter().map(to_pmf).collect(),
-        ],
-    }
+        pmf: [Vec::new(), Vec::new()],
+    };
+    let fwd: Vec<Vec<f64>> = products
+        .iter()
+        .map(|vals| {
+            let mut pmf = vec![0.0; PVALUE_BINS];
+            for &v in vals {
+                pmf[null.bin(v)] += 1.0;
+            }
+            let inv = 1.0 / vals.len() as f64;
+            pmf.iter_mut().for_each(|p| *p *= inv);
+            pmf
+        })
+        .collect();
+    let rev = if rc {
+        fwd.iter().rev().cloned().collect()
+    } else {
+        Vec::new()
+    };
+    null.pmf = [fwd, rev];
+    null
 }
 
-/// The Bonferroni-corrected P-value of a cosine alignment against the pooled
-/// null of [`compare_cwms`].
+/// The Bonferroni-corrected P-values of a query's alignments against the
+/// pooled null of [`compare_cwms`].
 ///
-/// The column distributions are convolved one at a time, keeping only the
-/// partial sums that could still end on either side of the observed score:
-/// those too low to reach it even with the highest remaining bins are
-/// dropped, and those certain to reach it even with the lowest are added to
-/// the tail at once. This gives the same tail as the full convolution.
-fn cosine_pvalue(
+/// The null of an alignment is the sum of the distributions of the query
+/// columns it covers. Alignments are grouped by orientation and first query
+/// column, and from each first column the distributions are convolved one
+/// column at a time, so that every alignment's tail is read from the sum it
+/// needs without convolving the same columns again. Only one sum is kept at a
+/// time, so memory stays small for wide motifs.
+fn cosine_pvalues(
     null: &QueryNull,
-    q: &Prepared,
-    t: &Prepared,
-    a: &CwmAlignment,
-    n_tested: usize,
-) -> f64 {
-    if a.overlap == 0 {
-        return f64::NAN;
+    q: [&Prepared; 2],
+    targets: &[&Prepared],
+    aligned: &[CwmAlignment],
+    tested: &[usize],
+) -> Vec<f64> {
+    let mut pvalues = vec![f64::NAN; aligned.len()];
+    // Each alignment's orientation, first query column, overlap and
+    // observed bin.
+    let mut keys: Vec<(usize, usize, usize, usize, usize)> = Vec::new();
+    for (t, a) in aligned.iter().enumerate() {
+        if a.overlap == 0 {
+            continue;
+        }
+        let o = usize::from(a.strand == Strand::Minus);
+        let lo = (-a.offset).max(0) as usize;
+        let observed: usize = targets[t]
+            .cols
+            .iter()
+            .enumerate()
+            .skip(lo)
+            .take(a.overlap)
+            .map(|(j, tc)| {
+                let qc = &q[o].cols[(j as i64 + a.offset) as usize];
+                null.bin(qc.iter().zip(tc).map(|(x, y)| x * y).sum())
+            })
+            .sum();
+        keys.push((o, a.offset.max(0) as usize, a.overlap, observed, t));
     }
-    let o = usize::from(a.strand == Strand::Minus);
-    let lo = (-a.offset).max(0) as usize;
-    let cols: Vec<&Vec<f64>> = (lo..lo + a.overlap)
-        .map(|j| &null.pmf[o][(j as i64 + a.offset) as usize])
-        .collect();
-    let mut observed = 0usize;
-    for (j, tc) in t.cols.iter().enumerate().skip(lo).take(a.overlap) {
-        let qc = (j as i64 + a.offset) as usize;
-        let v: f64 = q.cols[qc].iter().zip(tc).map(|(x, y)| x * y).sum();
-        observed += (((v - null.lo) / null.step).round().max(0.0) as usize).min(PVALUE_BINS - 1);
-    }
-    // The lowest and highest bin of each column, and their sums over the
-    // columns still to come.
-    let range = |c: &Vec<f64>| {
-        let first = c.iter().position(|&v| v > 0.0).unwrap_or(0);
-        let last = c.iter().rposition(|&v| v > 0.0).unwrap_or(0);
-        (first, last)
-    };
-    let ranges: Vec<(usize, usize)> = cols.iter().map(|c| range(c)).collect();
-    let k = cols.len();
-    let mut rest_min = vec![0usize; k + 1];
-    let mut rest_max = vec![0usize; k + 1];
-    for i in (0..k).rev() {
-        rest_min[i] = rest_min[i + 1] + ranges[i].0;
-        rest_max[i] = rest_max[i + 1] + ranges[i].1;
-    }
-    let mut tail = 0.0;
-    // Partial sums as (offset of index 0, probabilities).
-    let mut base = 0usize;
-    let mut pmf = vec![1.0];
-    for (i, col) in cols.iter().enumerate() {
-        let (cmin, cmax) = ranges[i];
-        let mut next = vec![0.0; pmf.len() + cmax - cmin];
-        for (x, &p) in pmf.iter().enumerate() {
-            if p == 0.0 {
-                continue;
+    keys.sort_unstable();
+    let mut i = 0;
+    while i < keys.len() {
+        let (o, start, ..) = keys[i];
+        let mut pmf = vec![1.0];
+        let mut len = 0;
+        while i < keys.len() && keys[i].0 == o && keys[i].1 == start {
+            let overlap = keys[i].2;
+            while len < overlap {
+                pmf = crate::compare::convolve(&pmf, &null.pmf[o][start + len]);
+                len += 1;
             }
-            for (y, &c) in col[cmin..=cmax].iter().enumerate() {
-                next[x + y] += p * c;
+            // The chance of each bin or above, summed from the top so that
+            // small tails keep their precision.
+            let mut tail = vec![0.0; pmf.len() + 1];
+            for b in (0..pmf.len()).rev() {
+                tail[b] = tail[b + 1] + pmf[b];
+            }
+            while i < keys.len() && keys[i].0 == o && keys[i].1 == start && keys[i].2 == overlap {
+                let (.., observed, t) = keys[i];
+                let p = tail[observed.min(pmf.len())].min(1.0);
+                pvalues[t] = (p * tested[t] as f64).min(1.0);
+                i += 1;
             }
         }
-        base += cmin;
-        // Keep the band whose fate the remaining columns can still decide.
-        let (rmin, rmax) = (rest_min[i + 1], rest_max[i + 1]);
-        let mut keep_lo = next.len();
-        let mut keep_hi = 0;
-        for (x, &p) in next.iter().enumerate() {
-            if p == 0.0 {
-                continue;
-            }
-            let idx = base + x;
-            if idx + rmax < observed {
-                continue;
-            }
-            if idx + rmin >= observed {
-                tail += p;
-                continue;
-            }
-            keep_lo = keep_lo.min(x);
-            keep_hi = keep_hi.max(x + 1);
-        }
-        if keep_lo >= keep_hi {
-            pmf = Vec::new();
-            break;
-        }
-        let mut band = next[keep_lo..keep_hi].to_vec();
-        for (x, v) in band.iter_mut().enumerate() {
-            let idx = base + keep_lo + x;
-            if idx + rmax < observed || idx + rmin >= observed {
-                *v = 0.0;
-            }
-        }
-        base += keep_lo;
-        pmf = band;
     }
-    // Whatever is left has been through every column.
-    tail += pmf
-        .iter()
-        .enumerate()
-        .filter(|(x, _)| base + x >= observed)
-        .map(|(_, p)| p)
-        .sum::<f64>();
-    (tail * n_tested as f64).min(1.0)
+    pvalues
 }
 
 /// The number of alignments tried between two motifs.
@@ -480,85 +463,77 @@ pub fn compare_cwms(
     let prep = prepare_all(motifs, opts, rc);
     let letters = motif_letters(motifs)?;
     let n = motifs.len();
-    let pairs: Vec<(usize, usize)> = queries
-        .iter()
-        .flat_map(|&q| (0..n).map(move |t| (q, t)))
-        .collect();
     let cosine = opts.metric == CwmMetric::Cosine;
-    let nulls: Vec<Option<QueryNull>> = if cosine {
-        // The pooled columns, scaled as their motifs are and with their
-        // complements when the reverse strand is searched.
-        let mut pool: Vec<Vec<f64>> = prep.iter().flat_map(|p| p.0.cols.iter().cloned()).collect();
+    // The pooled columns, scaled as their motifs are and with their
+    // complements when the reverse strand is searched.
+    let pool: Vec<Vec<f64>> = if cosine {
+        let fwd = prep.iter().flat_map(|p| p.0.cols.iter().cloned());
+        let comp = prep
+            .iter()
+            .flat_map(|p| p.0.cols.iter().map(|c| c.iter().rev().copied().collect()));
         if rc {
-            let comp: Vec<Vec<f64>> = pool
-                .iter()
-                .map(|c| c.iter().rev().copied().collect())
-                .collect();
-            pool.extend(comp);
+            fwd.chain(comp).collect()
+        } else {
+            fwd.collect()
         }
-        let mut wanted = vec![false; n];
-        for &q in queries {
-            wanted[q] = true;
-        }
-        with_threads(opts.nthreads, || {
-            (0..n)
-                .into_par_iter()
-                .map(|q| wanted[q].then(|| query_null(&prep[q].0, prep[q].1.as_ref(), &pool)))
-                .collect()
-        })?
     } else {
-        (0..n).map(|_| None).collect()
+        Vec::new()
     };
-    let mut rows: Vec<Comparison> = with_threads(opts.nthreads, || {
-        pairs
+    let targets: Vec<&Prepared> = prep.iter().map(|p| &p.0).collect();
+    let per_query: Vec<Vec<Comparison>> = with_threads(opts.nthreads, || {
+        queries
             .par_iter()
-            .map(|&(q, t)| {
-                let a = best_cwm_alignment(&prep[q].0, prep[q].1.as_ref(), &prep[t].0, opts);
-                let pvalue = match &nulls[q] {
-                    Some(null) => {
-                        let oq = if a.strand == Strand::Minus {
-                            prep[q].1.as_ref().unwrap()
-                        } else {
-                            &prep[q].0
-                        };
-                        let tested = n_alignments(motifs[q].width(), motifs[t].width(), opts, rc);
-                        cosine_pvalue(null, oq, &prep[t].0, &a, tested)
-                    }
-                    None => f64::NAN,
-                };
-                let wq = motifs[q].width() as i64;
-                let q_start = a.offset.max(0);
-                // The query's consensus is given in its own orientation.
-                let q_start = if a.strand == Strand::Minus {
-                    wq - q_start - a.overlap as i64
-                } else {
-                    q_start
-                };
-                Comparison {
-                    query: q,
-                    target: t,
-                    offset: a.offset,
-                    strand: a.strand,
-                    overlap: a.overlap,
-                    score: a.score,
-                    pvalue,
-                    qvalue: f64::NAN,
-                    query_consensus: consensus_range(&letters[q], q_start, a.overlap),
-                    target_consensus: consensus_range(&letters[t], (-a.offset).max(0), a.overlap),
+            .map(|&q| {
+                let (fwd, rev) = (&prep[q].0, prep[q].1.as_ref());
+                let aligned: Vec<CwmAlignment> = (0..n)
+                    .into_par_iter()
+                    .map(|t| best_cwm_alignment(fwd, rev, &prep[t].0, opts))
+                    .collect();
+                let mut pvalues = vec![f64::NAN; n];
+                let mut qvalues = vec![f64::NAN; n];
+                if cosine {
+                    let null = query_null(fwd, rc, &pool);
+                    let tested: Vec<usize> = (0..n)
+                        .map(|t| n_alignments(motifs[q].width(), motifs[t].width(), opts, rc))
+                        .collect();
+                    let oriented = [fwd, rev.unwrap_or(fwd)];
+                    pvalues = cosine_pvalues(&null, oriented, &targets, &aligned, &tested);
+                    qvalues = crate::stats::p_adjust_bh(&pvalues);
                 }
+                let wq = motifs[q].width() as i64;
+                aligned
+                    .iter()
+                    .enumerate()
+                    .map(|(t, a)| {
+                        let q_start = a.offset.max(0);
+                        // The query's consensus is given in its own orientation.
+                        let q_start = if a.strand == Strand::Minus {
+                            wq - q_start - a.overlap as i64
+                        } else {
+                            q_start
+                        };
+                        Comparison {
+                            query: q,
+                            target: t,
+                            offset: a.offset,
+                            strand: a.strand,
+                            overlap: a.overlap,
+                            score: a.score,
+                            pvalue: pvalues[t],
+                            qvalue: qvalues[t],
+                            query_consensus: consensus_range(&letters[q], q_start, a.overlap),
+                            target_consensus: consensus_range(
+                                &letters[t],
+                                (-a.offset).max(0),
+                                a.overlap,
+                            ),
+                        }
+                    })
+                    .collect()
             })
             .collect()
     })?;
-    if cosine {
-        for chunk in rows.chunks_mut(n) {
-            let adj =
-                crate::stats::p_adjust_bh(&chunk.iter().map(|c| c.pvalue).collect::<Vec<_>>());
-            for (c, v) in chunk.iter_mut().zip(adj) {
-                c.qvalue = v;
-            }
-        }
-    }
-    Ok(rows)
+    Ok(per_query.into_iter().flatten().collect())
 }
 
 /// The similarity of every pair of CWMs, indexed `[query][target]`, as

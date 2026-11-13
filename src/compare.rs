@@ -841,7 +841,7 @@ fn align_with<C: Col, S: Scorer>(
     })
 }
 
-fn convolve(a: &[f64], b: &[f64]) -> Vec<f64> {
+pub(crate) fn convolve(a: &[f64], b: &[f64]) -> Vec<f64> {
     let mut out = vec![0.0; a.len() + b.len() - 1];
     // Zero products add nothing, so only the span of nonzero bins of `b` is
     // visited.
