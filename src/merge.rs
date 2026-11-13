@@ -1,4 +1,7 @@
 //! Merging motifs with [`merge_motifs`] and [`merge_similar`].
+//!
+//! Gaps are not used: gapped motifs are aligned with their columns running
+//! together, and merged motifs have no gaps.
 
 use crate::alphabet::Alphabet;
 use crate::cluster::{Linkage, hclust};

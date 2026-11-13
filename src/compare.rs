@@ -15,7 +15,9 @@
 //! too.
 //!
 //! Motifs of any alphabet can be compared. Reverse complements are only tried,
-//! and the parametric null is only available, for DNA and RNA.
+//! and the parametric null is only available, for DNA and RNA. The gaps of
+//! gapped motifs are not used: their columns are compared as if they followed
+//! one another.
 
 use rayon::prelude::*;
 

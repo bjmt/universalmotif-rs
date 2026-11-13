@@ -48,6 +48,9 @@ impl Default for ContribThreshold {
 pub struct ContribScanOptions {
     /// Also match the reverse complement of each CWM.
     pub rc: bool,
+    /// Match gapped CWMs with their gaps; otherwise their columns are
+    /// matched as if they followed one another.
+    pub use_gaps: bool,
     /// Threads to use, at least 1.
     pub nthreads: usize,
 }
@@ -56,10 +59,14 @@ impl Default for ContribScanOptions {
     fn default() -> Self {
         ContribScanOptions {
             rc: true,
+            use_gaps: true,
             nthreads: 1,
         }
     }
 }
+
+/// Combinations of gap sizes beyond which a gapped CWM is refused.
+const MAX_GAP_COMBOS: usize = 1 << 16;
 
 /// A window of a sequence's scores matching a CWM.
 #[derive(Debug, Clone, PartialEq)]
@@ -83,18 +90,91 @@ pub struct ContribHit {
     pub similarity: f64,
     /// The sum of the window's absolute scores.
     pub importance: f64,
+    /// The size of each gap of a gapped CWM in this hit, in the CWM's own
+    /// order, and empty otherwise.
+    pub gaps: Vec<usize>,
 }
 
 /// A CWM ready for scanning: its columns scaled to unit norm, as `width * 4`
-/// values position by position, for each strand searched.
+/// values position by position, for each strand searched, in pieces of
+/// `widths` columns with a gap of one of `sizes` after each piece but the
+/// last.
 struct Filter {
-    width: usize,
+    widths: Vec<usize>,
+    sizes: Vec<(usize, usize)>,
     strands: Vec<(Strand, Vec<f32>)>,
     min_similarity: f64,
     min_importance: f64,
 }
 
-fn filters(cwms: &[Motif], thresholds: &[ContribThreshold], rc: bool) -> Result<Vec<Filter>> {
+impl Filter {
+    /// Every combination of gap sizes, in the CWM's own order.
+    fn combos(&self) -> Vec<Vec<usize>> {
+        let mut out = vec![Vec::new()];
+        for &(lo, hi) in &self.sizes {
+            out = out
+                .into_iter()
+                .flat_map(|c| {
+                    (lo..=hi).map(move |g| {
+                        let mut c = c.clone();
+                        c.push(g);
+                        c
+                    })
+                })
+                .collect();
+        }
+        out
+    }
+}
+
+/// Piece widths, and the smallest and largest size of the gap after each
+/// piece but the last.
+type Pieces = (Vec<usize>, Vec<(usize, usize)>);
+
+/// The pieces of a CWM between its gaps, and the smallest and largest size
+/// of each gap; a CWM without gaps, or scanned without them, is one piece.
+fn pieces(m: &Motif, use_gaps: bool) -> Result<Pieces> {
+    let g = &m.gap;
+    let w = m.width();
+    if !use_gaps || !g.isgapped || g.gaploc.is_empty() {
+        return Ok((vec![w], Vec::new()));
+    }
+    if g.gaploc.windows(2).any(|p| p[0] >= p[1]) || g.gaploc.iter().any(|&l| l == 0 || l >= w) {
+        return arg_err(format!(
+            "the gap locations of {} must be increasing and within the motif",
+            m.name
+        ));
+    }
+    let mut bounds = vec![0];
+    bounds.extend(&g.gaploc);
+    bounds.push(w);
+    let sizes: Vec<(usize, usize)> = g
+        .mingap
+        .iter()
+        .copied()
+        .zip(g.maxgap.iter().copied())
+        .collect();
+    if sizes.len() != g.gaploc.len() || sizes.iter().any(|(lo, hi)| lo > hi) {
+        return arg_err(format!(
+            "the gap sizes of {} do not fit its gap locations",
+            m.name
+        ));
+    }
+    let combos: usize = sizes.iter().map(|(lo, hi)| hi - lo + 1).product();
+    if combos > MAX_GAP_COMBOS {
+        return arg_err(format!(
+            "{} has {combos} combinations of gap sizes, more than {MAX_GAP_COMBOS} can be matched",
+            m.name
+        ));
+    }
+    Ok((bounds.windows(2).map(|b| b[1] - b[0]).collect(), sizes))
+}
+
+fn filters(
+    cwms: &[Motif],
+    thresholds: &[ContribThreshold],
+    opts: &ContribScanOptions,
+) -> Result<Vec<Filter>> {
     if thresholds.len() != 1 && thresholds.len() != cwms.len() {
         return arg_err(format!(
             "give one threshold or one per motif, not {} for {} motifs",
@@ -116,6 +196,7 @@ fn filters(cwms: &[Motif], thresholds: &[ContribThreshold], rc: bool) -> Result<
             }
             let t = thresholds[if thresholds.len() == 1 { 0 } else { i }];
             let width = m.width();
+            let (widths, sizes) = pieces(m, opts.use_gaps)?;
             let mut fwd = Vec::with_capacity(width * 4);
             for col in m.matrix.columns() {
                 fwd.extend(col.iter().map(|&v| v as f32));
@@ -131,7 +212,7 @@ fn filters(cwms: &[Motif], thresholds: &[ContribThreshold], rc: bool) -> Result<
                     .for_each(|v| *v = (f64::from(*v) / norm) as f32);
             }
             let mut strands = Vec::with_capacity(2);
-            if rc {
+            if opts.rc {
                 // Columns in reverse order, each with its letters complemented.
                 let rev: Vec<f32> = fwd
                     .as_chunks::<4>()
@@ -146,7 +227,8 @@ fn filters(cwms: &[Motif], thresholds: &[ContribThreshold], rc: bool) -> Result<
                 strands.push((Strand::Plus, fwd));
             }
             Ok(Filter {
-                width,
+                widths,
+                sizes,
                 strands,
                 min_similarity: t.min_similarity,
                 min_importance: t.min_importance * l1,
@@ -197,37 +279,82 @@ fn scan_one(
     }
     let mut hits = Vec::new();
     for (m, f) in filters.iter().enumerate() {
-        let w = f.width;
-        if w == 0 || w > len {
-            continue;
-        }
-        for p in 0..=len - w {
-            let importance = abs[p + w] - abs[p];
-            if importance < f.min_importance {
-                continue;
+        let combos = f.combos();
+        for (strand, filt) in &f.strands {
+            // On the minus strand the pieces and gaps come in reverse order.
+            let minus = *strand == Strand::Minus;
+            let widths: Vec<usize> = if minus {
+                f.widths.iter().rev().copied().collect()
+            } else {
+                f.widths.clone()
+            };
+            let mut columns = vec![0usize; widths.len()];
+            for k in 1..widths.len() {
+                columns[k] = columns[k - 1] + widths[k - 1];
             }
-            let ss = sq[p + w] - sq[p];
-            if ss <= 0.0 {
-                continue;
-            }
-            let norm = ss.sqrt();
-            let window = &xt[p * 4..(p + w) * 4];
-            for (strand, filt) in &f.strands {
-                let score = f64::from(dot(window, filt));
-                let similarity = score / norm;
-                if similarity >= f.min_similarity {
-                    hits.push(ContribHit {
+            // The best combination of gap sizes at each start.
+            let mut best: Vec<Option<ContribHit>> = vec![None; len];
+            for gaps in &combos {
+                let between: Vec<usize> = if minus {
+                    gaps.iter().rev().copied().collect()
+                } else {
+                    gaps.clone()
+                };
+                let mut offsets = vec![0usize; widths.len()];
+                for k in 1..widths.len() {
+                    offsets[k] = offsets[k - 1] + widths[k - 1] + between[k - 1];
+                }
+                let span = offsets[widths.len() - 1] + widths[widths.len() - 1];
+                if span == 0 || span > len {
+                    continue;
+                }
+                for p in 0..=len - span {
+                    let sum = |acc: &[f64]| -> f64 {
+                        offsets
+                            .iter()
+                            .zip(&widths)
+                            .map(|(&o, &w)| acc[p + o + w] - acc[p + o])
+                            .sum()
+                    };
+                    let importance = sum(&abs);
+                    if importance < f.min_importance {
+                        continue;
+                    }
+                    let ss = sum(&sq);
+                    if ss <= 0.0 {
+                        continue;
+                    }
+                    let score: f64 = offsets
+                        .iter()
+                        .zip(&widths)
+                        .zip(&columns)
+                        .map(|((&o, &w), &c)| {
+                            f64::from(dot(
+                                &xt[(p + o) * 4..(p + o + w) * 4],
+                                &filt[c * 4..(c + w) * 4],
+                            ))
+                        })
+                        .sum();
+                    let similarity = score / ss.sqrt();
+                    if similarity < f.min_similarity
+                        || best[p].as_ref().is_some_and(|h| h.score >= score)
+                    {
+                        continue;
+                    }
+                    best[p] = Some(ContribHit {
                         motif: m,
                         sequence,
                         start: p,
-                        end: p + w,
+                        end: p + span,
                         strand: *strand,
                         score,
                         similarity,
                         importance,
+                        gaps: gaps.clone(),
                     });
                 }
             }
+            hits.extend(best.into_iter().flatten());
         }
     }
     hits
@@ -244,6 +371,12 @@ fn scan_one(
 /// threshold, given once for every motif or once per motif. A window that
 /// matches both strands is a hit on both. Hits come in the order of the
 /// motifs, then of the sequences, then of the starts, with `+` before `-`.
+///
+/// A gapped CWM, with `opts.use_gaps`, is matched with every combination of
+/// its gap sizes. The letters in a gap belong to no column of the CWM, so
+/// they count towards neither the similarity nor the importance, and of the
+/// combinations that reach the thresholds at a start, the one with the
+/// highest score is kept, its gap sizes given in [`ContribHit::gaps`].
 ///
 /// # Example
 ///
@@ -292,7 +425,7 @@ pub fn scan_contributions(
             "a sequence of length {l} is longer than the {width} positions of the scores"
         ));
     }
-    let filters = filters(cwms, thresholds, opts.rc)?;
+    let filters = filters(cwms, thresholds, opts)?;
     let per_seq: Vec<Vec<ContribHit>> = with_threads(opts.nthreads, || {
         lengths
             .par_iter()
@@ -461,6 +594,75 @@ mod tests {
         // A shorter sequence leaves the second site out.
         let hits = scan_contributions(&motifs, &x, &[9], width, &[low], &opts).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn gapped_cwms() {
+        // GATA, a gap of 2 to 6 letters, then CACGTG.
+        let core = "GATACACGTG";
+        let cols: Vec<[f64; 4]> = core
+            .chars()
+            .map(|c| {
+                let mut col = [0.0; 4];
+                col["ACGT".find(c).unwrap()] = 1.0;
+                col
+            })
+            .collect();
+        let m = crate::ops::add_gap(&cwm(&cols, "gapped"), Some(&[4]), &[2], &[6]).unwrap();
+        // The sites with a gap of 4, whose letters score highly but belong to
+        // no column, and its reverse complement in a second sequence.
+        let fwd = "TTGATATTTTCACGTGTT";
+        let rev: String = fwd
+            .chars()
+            .rev()
+            .map(|c| match c {
+                'A' => 'T',
+                'C' => 'G',
+                'G' => 'C',
+                _ => 'A',
+            })
+            .collect();
+        let width = fwd.len();
+        let mut vals = vec![0.01f32; width];
+        vals[2..16].fill(0.5);
+        let mut x = project(fwd, &vals, width);
+        let rev_vals: Vec<f32> = vals.iter().rev().copied().collect();
+        x.extend(project(&rev, &rev_vals, width));
+        let strict = ContribThreshold {
+            min_similarity: 0.99,
+            min_importance: 0.0,
+        };
+        let opts = ContribScanOptions::default();
+        let hits = scan_contributions(
+            std::slice::from_ref(&m),
+            &x,
+            &[width, width],
+            width,
+            &[strict],
+            &opts,
+        )
+        .unwrap();
+        let got: Vec<(usize, usize, usize, Strand, Vec<usize>)> = hits
+            .iter()
+            .map(|h| (h.sequence, h.start, h.end, h.strand, h.gaps.clone()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (0, 2, 16, Strand::Plus, vec![4]),
+                (1, 2, 16, Strand::Minus, vec![4])
+            ]
+        );
+        // The gap's letters count towards neither measure.
+        assert!((hits[0].similarity - 1.0).abs() < 1e-6);
+        assert!((hits[0].importance - 5.0).abs() < 1e-5);
+        // Without the gaps the columns run together and match nothing.
+        let flat = ContribScanOptions {
+            use_gaps: false,
+            ..Default::default()
+        };
+        let hits = scan_contributions(&[m], &x, &[width, width], width, &[strict], &flat).unwrap();
+        assert!(hits.is_empty());
     }
 
     #[test]

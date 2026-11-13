@@ -46,7 +46,7 @@ Other changes:
   `ignore_sign` is set.
 - `contributions::scan_contributions()` finds motif hits in the
   contribution scores of a sequence model, by the similarity and importance
-  of each window against CWMs.
+  of each window against CWMs, gapped CWMs included.
 - `shuffle::shuffle_codes()` makes several k-mer-preserving shuffles of
   each of a set of sequences given as letter codes, keeping unknown
   letters in place, with each shuffle seeded by its sequence's place in

@@ -6,7 +6,8 @@
 //! sum to 1. That loses the sign of negative patterns and lets columns
 //! carrying almost no contribution count as much as the core. The measures
 //! here work on the whole signed matrices instead, as TF-MoDISco and the
-//! tools around it compare patterns.
+//! tools around it compare patterns. As in [`crate::compare`], the gaps of
+//! gapped CWMs are not used.
 
 use std::str::FromStr;
 
