@@ -54,6 +54,11 @@ copied, and are not listed here. The other differences are below.
   columns hanging over either motif's ends with the background
   (`overhang = "background"`), so that every alignment counts the same
   number of column scores.
+- **Contribution matrices.** CWMs are compared by the cosine similarity
+  of their signed contributions by default, or by TF-MoDISco's continuous
+  Jaccard similarity, so that a negative pattern does not match the
+  positive one with the same letters, and they are merged and clustered
+  as CWMs.
 - **Merging without chains.** `merge_similar()` can join motifs with
   complete linkage, so that every pair in a cluster is similar, where the
   connected groups of `merge_similar_lite()` can chain unlike motifs

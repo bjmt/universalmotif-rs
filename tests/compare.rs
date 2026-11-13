@@ -214,6 +214,7 @@ fn merge_similar_matches_r() {
             weighted: a.get("weighted").and_then(Value::as_bool).unwrap_or(false),
             linkage: MergeLinkage::Single,
             nthreads: 1,
+            ..Default::default()
         };
         let res = merge_similar(&motifs, &opts).unwrap();
         let (clusters, merged) = (res.clusters, res.motifs);

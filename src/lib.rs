@@ -104,6 +104,7 @@ pub mod sample;
 pub mod scan;
 pub mod scoring;
 pub mod shuffle;
+pub mod similarity;
 #[doc(hidden)]
 pub mod stats;
 

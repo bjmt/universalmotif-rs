@@ -22,6 +22,10 @@ Changes in behaviour:
 - MEME files without a `strands:` line give DNA and RNA motifs for both
   strands.
 - `motif_finder()` with `rc: false` gives motifs for the `+` strand.
+- `merge::merge_motifs()` merges CWMs as CWMs, averaging their signed
+  contributions over alignments found by cosine similarity, and
+  `merge::merge_similar()` groups CWMs by cosine similarity reaching
+  `MergeSimilarOptions::min_score` rather than by q-value.
 - `Genome` and `scan_fasta(trim_names = true)` name sequences by the first
   word of the header, and a repeated name is an error.
 
@@ -34,6 +38,10 @@ Other changes:
 - `mask::mask_complexity()` and `mask::dust_intervals()` find low-complexity
   regions with symmetric DUST, giving the same regions as dustmasker, and
   mask them, along with lowercase letters if asked.
+- `similarity::compare_cwms()` and `similarity::cwm_similarity_matrix()`
+  compare CWMs by cosine similarity, with P-values, or by TF-MoDISco's
+  continuous Jaccard similarity, keeping their signs unless
+  `ignore_sign` is set.
 
 ## 0.3.0 (2026-10-29)
 

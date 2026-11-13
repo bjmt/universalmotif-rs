@@ -1288,8 +1288,17 @@ fn column_letters<C: Col>(cols: &[Vec<C>], alphabet: &Alphabet) -> Vec<Vec<char>
         .collect()
 }
 
+/// The consensus letter of each column of each motif, read from its PPM.
+pub(crate) fn motif_letters(motifs: &[Motif]) -> Result<Vec<Vec<char>>> {
+    fn letters<C: Col>(motifs: &[Motif], alphabet: &Alphabet) -> Result<Vec<Vec<char>>> {
+        Ok(column_letters(&columns::<C>(motifs)?, alphabet))
+    }
+    let alphabet = shared_alphabet(motifs)?;
+    by_alphabet!(alphabet, letters(motifs, &alphabet))
+}
+
 /// The consensus of `len` columns from `start`, clipped to the motif.
-fn consensus_range(letters: &[char], start: i64, len: usize) -> String {
+pub(crate) fn consensus_range(letters: &[char], start: i64, len: usize) -> String {
     let start = (start.max(0) as usize).min(letters.len());
     let len = len.min(letters.len() - start);
     letters[start..start + len].iter().collect()

@@ -8,6 +8,7 @@ use crate::create::{CreateOptions, from_typed_matrix};
 use crate::error::{Result, arg_err};
 use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType, Strand};
+use crate::similarity::{CwmCompareOptions, CwmMetric, align_cwm_pair, cwm_similarity_matrix};
 
 /// Options for [`merge_motifs`].
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +58,11 @@ fn shared_alphabet(motifs: &[Motif]) -> Result<Alphabet> {
 /// is a PPM whose `nsites` is the sum of the motifs', counting 1 for motifs
 /// without one, with the average background and the anchor's pseudocount.
 ///
+/// When every motif is a CWM, the result is a CWM instead: the anchor is the
+/// motif with the largest total contribution, motifs are aligned to it by
+/// the cosine of [`crate::similarity`], keeping their sign, and the aligned
+/// contributions are averaged, with positions covered by no motif left at 0.
+///
 /// # Example
 ///
 /// ```
@@ -89,6 +95,9 @@ pub struct MergedMotif {
 /// [`merge_motifs`], also reporting which motifs went into the merge.
 pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<MergedMotif> {
     let alphabet = shared_alphabet(motifs)?;
+    if motifs.iter().all(|m| m.motif_type == MotifType::Cwm) {
+        return merge_cwms(motifs, alphabet, opts);
+    }
     let nl = alphabet.len();
     if motifs.len() == 1 {
         let mut p = convert_type(&motifs[0], MotifType::Ppm, None, false)?.into_parts();
@@ -216,6 +225,103 @@ pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<Me
     })
 }
 
+/// [`merge_motifs_detailed`] for CWMs, keeping their sign.
+fn merge_cwms(motifs: &[Motif], alphabet: Alphabet, opts: &MergeOptions) -> Result<MergedMotif> {
+    let nl = alphabet.len();
+    let nsites: Vec<f64> = motifs
+        .iter()
+        .map(|m| m.nsites.filter(|n| *n > 0.0).unwrap_or(1.0))
+        .collect();
+    let mass: Vec<f64> = motifs
+        .iter()
+        .map(|m| m.matrix.as_slice().iter().map(|v| v.abs()).sum())
+        .collect();
+    let mut anchor = 0;
+    for (i, &v) in mass.iter().enumerate().skip(1) {
+        if v > mass[anchor] + 1e-9 * mass[anchor].abs().max(1.0) {
+            anchor = i;
+        }
+    }
+    let copts = CwmCompareOptions {
+        min_overlap: opts.min_overlap,
+        rc: opts.rc,
+        nthreads: opts.nthreads,
+        ..Default::default()
+    };
+    // Each motif's matrix, oriented to the anchor, and the anchor column
+    // its first column faces.
+    let mut used: Vec<(usize, Matrix, i64)> = Vec::new();
+    for (i, m) in motifs.iter().enumerate() {
+        if i == anchor {
+            used.push((i, m.matrix.clone(), 0));
+            continue;
+        }
+        let a = align_cwm_pair(m, &motifs[anchor], &copts)?;
+        if a.overlap < opts.min_overlap {
+            continue;
+        }
+        let matrix = if a.strand == Strand::Minus {
+            m.matrix.reversed()
+        } else {
+            m.matrix.clone()
+        };
+        used.push((i, matrix, -a.offset));
+    }
+    let lo = used.iter().map(|u| u.2).min().unwrap();
+    let hi = used.iter().map(|u| u.2 + u.1.ncol() as i64).max().unwrap();
+    let mut cols = Vec::with_capacity((hi - lo) as usize);
+    for frame in lo..hi {
+        let mut sum = vec![0.0; nl];
+        let mut wsum = 0.0;
+        for u in &used {
+            let local = frame - u.2;
+            if local < 0 || local >= u.1.ncol() as i64 {
+                continue;
+            }
+            let w = if opts.weighted { nsites[u.0] } else { 1.0 };
+            for (s, v) in sum.iter_mut().zip(u.1.col(local as usize)) {
+                *s += w * v;
+            }
+            wsum += w;
+        }
+        cols.push(if wsum == 0.0 {
+            sum
+        } else {
+            sum.iter().map(|s| s / wsum).collect()
+        });
+    }
+    let mut bkg = vec![0.0; nl];
+    for u in &used {
+        for (b, v) in bkg.iter_mut().zip(&motifs[u.0].bkg) {
+            *b += v / used.len() as f64;
+        }
+    }
+    let name = opts.name.clone().unwrap_or_else(|| {
+        let names: Vec<&str> = used.iter().map(|u| motifs[u.0].name.as_str()).collect();
+        format!("merged_{}", names.join("+"))
+    });
+    let copts = CreateOptions {
+        motif_type: MotifType::Cwm,
+        name,
+        nsites: Some(used.iter().map(|u| nsites[u.0]).sum()),
+        bkg: Some(bkg),
+        ..Default::default()
+    };
+    let merged = from_typed_matrix(
+        Matrix::from_columns(&cols)?,
+        None,
+        Some(alphabet),
+        MotifType::Cwm,
+        &copts,
+    )?;
+    let mut used_idx: Vec<usize> = used.iter().map(|u| u.0).collect();
+    used_idx.sort_unstable();
+    Ok(MergedMotif {
+        motif: merged,
+        used: used_idx,
+    })
+}
+
 /// Clusters of similar motifs and the motif made from each, from
 /// [`merge_similar`].
 #[derive(Debug, Clone, PartialEq)]
@@ -288,6 +394,17 @@ pub struct MergeSimilarOptions {
     pub bkg: [f64; 4],
     /// Weight each motif by its `nsites` when merging.
     pub weighted: bool,
+    /// How CWMs are compared when every motif is one; the cosine by default.
+    /// Other motifs are compared by column correlation and linked by
+    /// q-value.
+    pub cwm_metric: CwmMetric,
+    /// Compare CWMs by their absolute values, so that a pattern and its
+    /// opposite are alike.
+    pub ignore_sign: bool,
+    /// The similarity at which CWMs are linked, by default
+    /// [`CwmMetric::default_min_score`]. Unused for other motifs, which are
+    /// linked by `qvalue`.
+    pub min_score: Option<f64>,
     /// How clusters grow from the links; single linkage by default.
     pub linkage: MergeLinkage,
     /// Threads to use; 0 means all available.
@@ -303,6 +420,9 @@ impl Default for MergeSimilarOptions {
             rc: true,
             bkg: [0.25; 4],
             weighted: false,
+            cwm_metric: CwmMetric::Cosine,
+            ignore_sign: false,
+            min_score: None,
             linkage: MergeLinkage::Single,
             nthreads: 1,
         }
@@ -312,10 +432,13 @@ impl Default for MergeSimilarOptions {
 /// Cluster similar motifs and merge each cluster.
 ///
 /// Motifs are linked when their comparison q-value is within `opts.qvalue` in
-/// either direction. With [`MergeLinkage::Single`] clusters are the connected
-/// groups, and with [`MergeLinkage::Complete`] every pair within a cluster is
-/// linked. Single motifs are kept as they were, and larger clusters merged
-/// with [`merge_motifs`].
+/// either direction. When every motif is a CWM, they are linked instead when
+/// their similarity, by [`crate::similarity`] with `opts.cwm_metric` and
+/// `opts.ignore_sign`, reaches `opts.min_score`, which keeps the sign and
+/// magnitude of their contributions. With [`MergeLinkage::Single`] clusters
+/// are the connected groups, and with [`MergeLinkage::Complete`] every pair
+/// within a cluster is linked. Single motifs are kept as they were, and
+/// larger clusters merged with [`merge_motifs`], which keeps CWMs as CWMs.
 ///
 /// A cluster of more than two motifs that holds over a quarter of them has
 /// likely grown from chains of partial likenesses, and is named in
@@ -330,7 +453,8 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
         });
     }
     shared_alphabet(motifs)?;
-    if !(opts.qvalue > 0.0 && opts.qvalue <= 1.0) {
+    let cwms = motifs.iter().all(|m| m.motif_type == MotifType::Cwm);
+    if !cwms && !(opts.qvalue > 0.0 && opts.qvalue <= 1.0) {
         return arg_err("qvalue must be in (0, 1]");
     }
     let n = motifs.len();
@@ -341,35 +465,10 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
             warnings: Vec::new(),
         });
     }
-    let copts = CompareOptions {
-        min_overlap: opts.min_overlap,
-        rc: opts.rc,
-        null: opts.null,
-        bkg: opts.bkg,
-        nthreads: opts.nthreads,
-        ..Default::default()
-    };
-    let q = compare_matrix(motifs, &copts, true)?.qvalues;
-
-    // The smaller q-value of each pair, with pairs that cannot be compared
-    // never linked.
-    let link = |i: usize, j: usize| {
-        let qij = q[i][j].min(q[j][i]);
-        if qij.is_nan() { f64::INFINITY } else { qij }
-    };
-    let clusters = match opts.linkage {
-        MergeLinkage::Single => connected_groups(n, |i, j| link(i, j) <= opts.qvalue),
-        MergeLinkage::Complete => {
-            // Above any q-value, so that motifs not linked stay apart.
-            let dist: Vec<Vec<f64>> = (0..n)
-                .map(|i| {
-                    (0..n)
-                        .map(|j| if i == j { 0.0 } else { link(i, j).min(2.0) })
-                        .collect()
-                })
-                .collect();
-            hclust(&dist, Linkage::Complete)?.cutree_height(opts.qvalue)?
-        }
+    let clusters = if cwms {
+        cwm_clusters(motifs, opts)?
+    } else {
+        qvalue_clusters(motifs, opts)?
     };
     let n_clusters = clusters.iter().max().map_or(0, |&c| c + 1);
     let mut sizes = vec![0usize; n_clusters];
@@ -384,9 +483,11 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
         && size > 2
         && size * 4 > n
     {
-        let advice = match opts.linkage {
-            MergeLinkage::Single => "a smaller qvalue or complete linkage",
-            MergeLinkage::Complete => "a smaller qvalue",
+        let advice = match (cwms, opts.linkage) {
+            (false, MergeLinkage::Single) => "a smaller qvalue or complete linkage",
+            (false, MergeLinkage::Complete) => "a smaller qvalue",
+            (true, MergeLinkage::Single) => "a higher min_score or complete linkage",
+            (true, MergeLinkage::Complete) => "a higher min_score",
         };
         warnings.push(format!(
             "cluster {big} holds {size} of the {n} motifs, which suggests that unlike motifs \
@@ -418,6 +519,85 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
         clusters,
         motifs: merged,
         warnings,
+    })
+}
+
+/// Clusters of motifs linked by comparison q-values.
+fn qvalue_clusters(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Vec<usize>> {
+    let n = motifs.len();
+    let copts = CompareOptions {
+        min_overlap: opts.min_overlap,
+        rc: opts.rc,
+        null: opts.null,
+        bkg: opts.bkg,
+        nthreads: opts.nthreads,
+        ..Default::default()
+    };
+    let q = compare_matrix(motifs, &copts, true)?.qvalues;
+
+    // The smaller q-value of each pair, with pairs that cannot be compared
+    // never linked.
+    let link = |i: usize, j: usize| {
+        let qij = q[i][j].min(q[j][i]);
+        if qij.is_nan() { f64::INFINITY } else { qij }
+    };
+    Ok(match opts.linkage {
+        MergeLinkage::Single => connected_groups(n, |i, j| link(i, j) <= opts.qvalue),
+        MergeLinkage::Complete => {
+            // Above any q-value, so that motifs not linked stay apart.
+            let dist: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| if i == j { 0.0 } else { link(i, j).min(2.0) })
+                        .collect()
+                })
+                .collect();
+            hclust(&dist, Linkage::Complete)?.cutree_height(opts.qvalue)?
+        }
+    })
+}
+
+/// Clusters of CWMs linked by their similarity.
+fn cwm_clusters(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Vec<usize>> {
+    let n = motifs.len();
+    let min_score = opts
+        .min_score
+        .unwrap_or_else(|| opts.cwm_metric.default_min_score());
+    if !min_score.is_finite() {
+        return arg_err("min_score must be a number");
+    }
+    let s = cwm_similarity_matrix(
+        motifs,
+        &CwmCompareOptions {
+            metric: opts.cwm_metric,
+            ignore_sign: opts.ignore_sign,
+            min_overlap: opts.min_overlap,
+            rc: opts.rc,
+            nthreads: opts.nthreads,
+        },
+    )?;
+    let link = |i: usize, j: usize| {
+        let v = s[i][j].max(s[j][i]);
+        if v.is_nan() { f64::NEG_INFINITY } else { v }
+    };
+    Ok(match opts.linkage {
+        MergeLinkage::Single => connected_groups(n, |i, j| link(i, j) >= min_score),
+        MergeLinkage::Complete => {
+            let dist: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| {
+                            if i == j {
+                                0.0
+                            } else {
+                                (1.0 - link(i, j)).clamp(0.0, 3.0)
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            hclust(&dist, Linkage::Complete)?.cutree_height(1.0 - min_score)?
+        }
     })
 }
 
