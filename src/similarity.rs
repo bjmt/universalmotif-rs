@@ -339,9 +339,9 @@ fn cosine_pvalue(
         .map(|j| &null.pmf[o][(j as i64 + a.offset) as usize])
         .collect();
     let mut observed = 0usize;
-    for j in lo..lo + a.overlap {
+    for (j, tc) in t.cols.iter().enumerate().skip(lo).take(a.overlap) {
         let qc = (j as i64 + a.offset) as usize;
-        let v: f64 = q.cols[qc].iter().zip(&t.cols[j]).map(|(x, y)| x * y).sum();
+        let v: f64 = q.cols[qc].iter().zip(tc).map(|(x, y)| x * y).sum();
         observed += (((v - null.lo) / null.step).round().max(0.0) as usize).min(PVALUE_BINS - 1);
     }
     // The lowest and highest bin of each column, and their sums over the

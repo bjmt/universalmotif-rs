@@ -1467,8 +1467,8 @@ fn many_motifs_compare_and_cluster_consistently() {
     let bits =
         |v: &Vec<Vec<f64>>| -> Vec<u64> { v.iter().flatten().map(|x| x.to_bits()).collect() };
     assert_eq!(bits(&m1.scores), bits(&m4.scores));
-    for i in 0..motifs.len() {
-        assert!((m1.scores[i][i] - 1.0).abs() < 1e-9, "self comparison {i}");
+    for (i, row) in m1.scores.iter().enumerate() {
+        assert!((row[i] - 1.0).abs() < 1e-9, "self comparison {i}");
     }
 
     // A tree of all 200 is the clustering of the comparison scores.
