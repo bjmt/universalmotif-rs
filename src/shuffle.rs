@@ -446,6 +446,143 @@ pub fn create_sequences(
     })
 }
 
+/// A generator for copy `j` of item `i` of a seeded batch, which does not
+/// depend on how many copies are made or on threading.
+fn rng_for_copy(seed: u64, i: u64, j: u64) -> StdRng {
+    // SplitMix64's finalizer, applied in turn to the item and the copy.
+    let mix = |mut z: u64| {
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let a = mix(seed ^ i.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    StdRng::seed_from_u64(mix(a ^ j
+        .wrapping_add(1)
+        .wrapping_mul(0xD6E8_FEB8_6659_FD93)))
+}
+
+/// Options for [`shuffle_codes`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodeShuffleOptions {
+    /// Size of the k-mers to preserve, 2 by default.
+    pub k: usize,
+    /// The shuffling method; the Euler walk by default.
+    pub method: ShuffleMethod,
+    /// Seed for the shuffles.
+    pub seed: u64,
+    /// The index of the first sequence among all those shuffled with this
+    /// seed, so that shuffling a large set in batches gives the same
+    /// shuffles as shuffling it at once.
+    pub offset: u64,
+    /// A code for unknown letters, such as N, which stay where they are; the
+    /// letters between them are shuffled stretch by stretch.
+    pub unknown: Option<u8>,
+    /// Threads to use, at least 1.
+    pub nthreads: usize,
+}
+
+impl Default for CodeShuffleOptions {
+    fn default() -> Self {
+        CodeShuffleOptions {
+            k: 2,
+            method: ShuffleMethod::Euler,
+            seed: 1,
+            offset: 0,
+            unknown: None,
+            nthreads: 1,
+        }
+    }
+}
+
+/// Several shuffles of each of a set of sequences of equal length, given as
+/// letter codes, such as the references that DeepLIFT and DeepSHAP compare
+/// each input with.
+///
+/// `codes` holds `codes.len() / length` sequences one after another, and the
+/// result holds `n` shuffles of each in turn, `sequences * n * length`
+/// codes. With the Euler method, each shuffle keeps the exact counts of every
+/// k-mer of its sequence, along with its first `k - 1` letters and its last
+/// letter, and is drawn uniformly from all the sequences that do. Positions
+/// holding `opts.unknown` stay where they are, and each stretch of letters
+/// between them is shuffled on its own, so that k-mers touching them are
+/// kept too. Copy `j` of sequence `i` depends only on `opts.seed`,
+/// `opts.offset + i` and `j`, not on `n` or the number of threads.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::shuffle::{CodeShuffleOptions, shuffle_codes};
+///
+/// // ACGTTGCA and AACCNNGT, as codes 0 to 3, with 4 for N.
+/// let codes = [0, 1, 2, 3, 3, 2, 1, 0, 0, 0, 1, 1, 4, 4, 2, 3];
+/// let opts = CodeShuffleOptions { unknown: Some(4), ..Default::default() };
+/// let out = shuffle_codes(&codes, 8, 3, &opts)?;
+/// assert_eq!(out.len(), 2 * 3 * 8);
+/// // The Ns of the second sequence stay where they are.
+/// for copy in out[24..].chunks(8) {
+///     assert_eq!(&copy[4..6], &[4, 4]);
+/// }
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
+pub fn shuffle_codes(
+    codes: &[u8],
+    length: usize,
+    n: usize,
+    opts: &CodeShuffleOptions,
+) -> Result<Vec<u8>> {
+    if opts.k < 1 {
+        return arg_err("k must be at least 1");
+    }
+    if length == 0 {
+        return if codes.is_empty() {
+            Ok(Vec::new())
+        } else {
+            arg_err("sequences of length 0 cannot hold any codes")
+        };
+    }
+    if !codes.len().is_multiple_of(length) {
+        return arg_err(format!(
+            "{} codes do not divide into sequences of length {length}",
+            codes.len()
+        ));
+    }
+    let shuffle_seq = |seq: &[u8], rng: &mut StdRng| -> Vec<u8> {
+        let mut out = seq.to_vec();
+        let mut start = 0;
+        while start < seq.len() {
+            if opts.unknown == Some(seq[start]) {
+                start += 1;
+                continue;
+            }
+            let end = seq[start..]
+                .iter()
+                .position(|&c| opts.unknown == Some(c))
+                .map_or(seq.len(), |p| start + p);
+            let part = &seq[start..end];
+            if part.len() >= opts.k.max(2) {
+                out[start..end].copy_from_slice(&shuffle_one(part, opts.k, opts.method, rng));
+            }
+            start = end;
+        }
+        out
+    };
+    let parts: Vec<Vec<u8>> = with_threads(opts.nthreads, || {
+        codes
+            .par_chunks(length)
+            .enumerate()
+            .map(|(i, seq)| {
+                let mut out = Vec::with_capacity(n * length);
+                for j in 0..n {
+                    let mut rng = rng_for_copy(opts.seed, opts.offset + i as u64, j as u64);
+                    out.extend(shuffle_seq(seq, &mut rng));
+                }
+                out
+            })
+            .collect()
+    })?;
+    Ok(parts.concat())
+}
+
 /// Shuffle blocks of `k` items, keeping any leftover items at the two ends.
 fn shuffle_blocks_keep_ends(n: usize, k: usize, rng: &mut StdRng) -> Vec<usize> {
     let idx: Vec<usize> = (0..n).collect();
@@ -517,4 +654,125 @@ pub fn shuffle_motifs(motifs: &[Motif], k: usize, seed: u64) -> Result<Vec<Motif
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counts(seq: &[u8], k: usize) -> std::collections::BTreeMap<Vec<u8>, usize> {
+        let mut m = std::collections::BTreeMap::new();
+        for w in seq.windows(k) {
+            *m.entry(w.to_vec()).or_insert(0) += 1;
+        }
+        m
+    }
+
+    #[test]
+    fn code_shuffles_keep_kmers_and_unknowns() {
+        let seqs: Vec<u8> = b"ACGTTGCAAGGCTTACNNGATTACAGGATTCCAGN"
+            .iter()
+            .map(|c| b"ACGTN".iter().position(|x| x == c).unwrap() as u8)
+            .collect();
+        let length = seqs.len();
+        for k in [1, 2, 3] {
+            let opts = CodeShuffleOptions {
+                k,
+                unknown: Some(4),
+                ..Default::default()
+            };
+            let out = shuffle_codes(&seqs, length, 20, &opts).unwrap();
+            let mut differ = 0;
+            for copy in out.chunks(length) {
+                assert_eq!(counts(copy, k), counts(&seqs, k));
+                for (a, b) in copy.iter().zip(&seqs) {
+                    assert_eq!(*a == 4, *b == 4);
+                }
+                if k > 1 {
+                    // Each stretch keeps its first k - 1 letters and its last.
+                    assert_eq!(copy[..k - 1], seqs[..k - 1]);
+                    assert_eq!(copy[15], seqs[15]);
+                    assert_eq!(copy[18..18 + k - 1], seqs[18..18 + k - 1]);
+                }
+                differ += usize::from(copy != seqs.as_slice());
+            }
+            assert!(differ > 0);
+        }
+    }
+
+    #[test]
+    fn code_shuffles_are_reproducible_in_batches() {
+        let seqs: Vec<u8> = (0..6 * 40).map(|i| ((i * 7 + i / 3) % 4) as u8).collect();
+        let opts = CodeShuffleOptions {
+            seed: 7,
+            nthreads: 2,
+            ..Default::default()
+        };
+        let all = shuffle_codes(&seqs, 40, 5, &opts).unwrap();
+        let first = shuffle_codes(&seqs[..2 * 40], 40, 5, &opts).unwrap();
+        let rest = shuffle_codes(
+            &seqs[2 * 40..],
+            40,
+            5,
+            &CodeShuffleOptions {
+                offset: 2,
+                nthreads: 1,
+                ..opts.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!([first, rest].concat(), all);
+        // More copies extend the earlier ones.
+        let more = shuffle_codes(&seqs[..40], 40, 8, &opts).unwrap();
+        assert_eq!(more[..5 * 40], all[..5 * 40]);
+        let other = shuffle_codes(&seqs, 40, 5, &CodeShuffleOptions { seed: 8, ..opts }).unwrap();
+        assert_ne!(other, all);
+    }
+
+    #[test]
+    fn code_shuffles_are_uniform() {
+        // ACGTACGATCGA has 15 distinct shuffles keeping its dinucleotides.
+        let seq: Vec<u8> = b"ACGTACGATCGA"
+            .iter()
+            .map(|c| b"ACGT".iter().position(|x| x == c).unwrap() as u8)
+            .collect();
+        let n = 6000;
+        let out = shuffle_codes(&seq, seq.len(), n, &CodeShuffleOptions::default()).unwrap();
+        let mut seen = std::collections::HashMap::new();
+        for copy in out.chunks(seq.len()) {
+            *seen.entry(copy.to_vec()).or_insert(0usize) += 1;
+        }
+        let expected = n as f64 / seen.len() as f64;
+        assert_eq!(seen.len(), 15);
+        for &c in seen.values() {
+            assert!(
+                (c as f64 - expected).abs() < 5.0 * expected.sqrt(),
+                "{c} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn code_shuffle_checks() {
+        let opts = CodeShuffleOptions::default();
+        assert!(shuffle_codes(&[0, 1, 2], 2, 1, &opts).is_err());
+        assert!(
+            shuffle_codes(
+                &[0, 1],
+                2,
+                1,
+                &CodeShuffleOptions {
+                    k: 0,
+                    ..opts.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(shuffle_codes(&[], 0, 3, &opts).unwrap().is_empty());
+        assert!(
+            shuffle_codes(&[0, 1, 2, 3], 4, 0, &opts)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

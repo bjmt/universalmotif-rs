@@ -47,6 +47,10 @@ Other changes:
 - `contributions::scan_contributions()` finds motif hits in the
   contribution scores of a sequence model, by the similarity and importance
   of each window against CWMs.
+- `shuffle::shuffle_codes()` makes several k-mer-preserving shuffles of
+  each of a set of sequences given as letter codes, keeping unknown
+  letters in place, with each shuffle seeded by its sequence's place in
+  the whole set.
 
 ## 0.3.0 (2026-10-29)
 

@@ -4,16 +4,16 @@
 //! After TF-MoDISco has gathered a model's contribution scores into patterns,
 //! the next step is usually to find where each pattern occurs, by matching
 //! its contribution weight matrix (CWM) against the scores of every input.
-//! Each window is scored by two measures, as FiNeMo and TF-MoDISco's own hit
-//! caller score their hits: its similarity, the cosine between the window's
-//! scores and the CWM, which says whether the contributions have the shape of
-//! the pattern, and its importance, the sum of the window's absolute scores,
-//! which says whether there is much contribution there at all. A window is a
-//! hit when both reach the motif's thresholds.
+//! Each window is scored by two measures, as hit callers for TF-MoDISco
+//! patterns usually score their hits: its similarity, the cosine between the
+//! window's scores and the CWM, which says whether the contributions have the
+//! shape of the pattern, and its importance, the sum of the window's absolute
+//! scores, which says whether there is much contribution there at all. A
+//! window is a hit when both reach the motif's thresholds.
 //!
 //! Every motif is scored on its own, in a single pass, so motifs that share a
-//! site all have hits there; FiNeMo instead fits all the motifs to each input
-//! at once, so that they compete for the same scores.
+//! site all have hits there, where a caller that fits all the motifs to each
+//! input at once makes them compete for the same scores.
 
 use rayon::prelude::*;
 
@@ -45,7 +45,6 @@ impl Default for ContribThreshold {
 
 /// Options for [`scan_contributions`].
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub struct ContribScanOptions {
     /// Also match the reverse complement of each CWM.
     pub rc: bool,
