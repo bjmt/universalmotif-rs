@@ -901,9 +901,21 @@ pub struct Layout {
 /// `motifs[anchor]`. Motifs that do not overlap the anchor by at least
 /// `opts.min_overlap` columns, lowered to the width of the narrower of the
 /// two as in comparisons, are placed at the anchor's left edge.
+///
+/// When every motif is a CWM, they are aligned by the cosine of their
+/// contributions instead, as [`crate::similarity::cwm_anchor_layout`] does.
 pub fn anchor_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> Result<Layout> {
     if anchor >= motifs.len() {
         return arg_err("anchor index out of range");
+    }
+    if motifs.iter().all(|m| m.motif_type == MotifType::Cwm) {
+        let cwm_opts = crate::similarity::CwmCompareOptions {
+            min_overlap: opts.min_overlap,
+            rc: opts.rc,
+            nthreads: opts.nthreads,
+            ..Default::default()
+        };
+        return crate::similarity::cwm_anchor_layout(motifs, anchor, &cwm_opts);
     }
     let pairs: Vec<(usize, usize)> = (0..motifs.len()).map(|t| (anchor, t)).collect();
     let al = align(motifs, &pairs, opts)?;
@@ -929,20 +941,26 @@ pub fn anchor_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> 
             frame[i] = q_start - t_start;
         }
     }
+    Ok(layout_from_frames(&frame, &rc, &widths))
+}
+
+/// A layout from each motif's first column in the anchor's frame, which may
+/// be negative, shifted so that the leftmost motif starts at column 0.
+pub(crate) fn layout_from_frames(frame: &[i64], rc: &[bool], widths: &[i64]) -> Layout {
     let lo = *frame.iter().min().unwrap();
-    let hi = frame.iter().zip(&widths).map(|(f, w)| f + w).max().unwrap();
+    let hi = frame.iter().zip(widths).map(|(f, w)| f + w).max().unwrap();
     let placements = frame
         .iter()
         .zip(rc)
-        .map(|(&f, rc)| Placement {
+        .map(|(&f, &rc)| Placement {
             left: (f - lo) as usize,
             rc,
         })
         .collect();
-    Ok(Layout {
+    Layout {
         placements,
         width: (hi - lo) as usize,
-    })
+    }
 }
 
 /// Bonferroni-corrected P-values of alignments. The parametric null is only

@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 use rayon::prelude::*;
 
-use crate::compare::{Comparison, consensus_range, motif_letters};
+use crate::compare::{Comparison, Layout, consensus_range, layout_from_frames, motif_letters};
 use crate::error::{Error, Result, arg_err};
 use crate::motif::{Motif, MotifType, Strand};
 use crate::pvalue::with_threads;
@@ -561,6 +561,71 @@ pub fn cwm_similarity_matrix(motifs: &[Motif], opts: &CwmCompareOptions) -> Resu
 }
 
 /// The best alignment of motif `t` to the anchor `q`, for merging.
+/// Lay CWMs out in a common column frame by aligning each one to
+/// `motifs[anchor]` by their similarity, as [`compare_cwms`] does, keeping
+/// their signs unless `opts.ignore_sign` is set. Motifs that align better as
+/// reverse complements are flipped. Every alignment covers at least
+/// `opts.min_overlap` columns, lowered to the width of the narrower motif,
+/// so every motif is placed against the anchor, however unlike it.
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::Alphabet;
+/// use universalmotif::create::{CreateOptions, from_typed_matrix};
+/// use universalmotif::matrix::Matrix;
+/// use universalmotif::motif::MotifType;
+/// use universalmotif::similarity::{CwmCompareOptions, cwm_anchor_layout};
+///
+/// let cwm = |cols: &[[f64; 4]], name: &str| {
+///     let opts = CreateOptions { name: name.into(), motif_type: MotifType::Cwm, ..Default::default() };
+///     from_typed_matrix(Matrix::from_columns(cols)?, None, Some(Alphabet::Dna), MotifType::Cwm, &opts)
+/// };
+/// // GAT and, one column further on, ATC: the reverse complement of GAT.
+/// let gat = cwm(&[[0.0, 0.0, 0.9, 0.0], [0.8, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.7]], "gat")?;
+/// let atc = cwm(&[[0.0, 0.0, 0.0, 0.2], [0.7, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.8], [0.0, 0.9, 0.0, 0.0]], "atc")?;
+/// let layout = cwm_anchor_layout(&[gat, atc], 0, &CwmCompareOptions { min_overlap: 3, ..Default::default() })?;
+/// assert_eq!(layout.width, 4);
+/// assert!(layout.placements[1].rc);
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
+pub fn cwm_anchor_layout(
+    motifs: &[Motif],
+    anchor: usize,
+    opts: &CwmCompareOptions,
+) -> Result<Layout> {
+    if anchor >= motifs.len() {
+        return arg_err("anchor index out of range");
+    }
+    let rc = check(motifs, opts)?;
+    let prep = prepare_all(motifs, opts, rc);
+    let wa = motifs[anchor].width() as i64;
+    let widths: Vec<i64> = motifs.iter().map(|m| m.width() as i64).collect();
+    let (fwd, rev) = (&prep[anchor].0, prep[anchor].1.as_ref());
+    let aligned: Vec<CwmAlignment> = with_threads(opts.nthreads, || {
+        prep.par_iter()
+            .map(|(t, _)| best_cwm_alignment(fwd, rev, t, opts))
+            .collect()
+    })?;
+    let mut frame = vec![0i64; motifs.len()];
+    let mut flip = vec![false; motifs.len()];
+    for (i, a) in aligned.iter().enumerate() {
+        if i == anchor || a.overlap == 0 {
+            continue;
+        }
+        // Target column 0 faces column `offset` of the oriented anchor; on the
+        // minus strand, the flipped target then starts at the forward
+        // anchor's column `wa - wt - offset`.
+        if a.strand == Strand::Minus {
+            frame[i] = wa - widths[i] - a.offset;
+            flip[i] = true;
+        } else {
+            frame[i] = a.offset;
+        }
+    }
+    Ok(layout_from_frames(&frame, &flip, &widths))
+}
+
 pub(crate) fn align_cwm_pair(
     q: &Motif,
     t: &Motif,
@@ -580,6 +645,7 @@ pub(crate) fn align_cwm_pair(
 mod tests {
     use super::*;
     use crate::alphabet::Alphabet;
+    use crate::compare::CompareOptions;
     use crate::create::{CreateOptions, from_typed_matrix};
     use crate::matrix::Matrix;
 
@@ -861,5 +927,32 @@ mod tests {
         let c = cwm(&[[0.0, 0.0, 0.9, 0.0]; 5], "c");
         assert!(compare_cwms(&[c, ppm], &[0], &CwmCompareOptions::default()).is_err());
         assert!("cosine".parse::<CwmMetric>().is_ok() && "PCC".parse::<CwmMetric>().is_err());
+    }
+
+    #[test]
+    fn cwm_layouts() {
+        let one = |l: usize, v: f64| {
+            let mut c = [0.0; 4];
+            c[l] = v;
+            c
+        };
+        // GATAAG, its reverse complement after two weak columns, and itself
+        // after three.
+        let fwd: Vec<[f64; 4]> = [(2, 0.9), (0, 0.8), (3, 0.7), (0, 0.6), (0, 0.5), (2, 0.4)]
+            .iter()
+            .map(|&(l, v)| one(l, v))
+            .collect();
+        let mut rev = vec![one(0, 0.05); 2];
+        rev.extend(fwd.iter().rev().map(|c| [c[3], c[2], c[1], c[0]]));
+        let mut shifted = vec![one(3, 0.05); 3];
+        shifted.extend(fwd.iter().copied());
+        let motifs = [cwm(&fwd, "a"), cwm(&rev, "b"), cwm(&shifted, "c")];
+        let layout = cwm_anchor_layout(&motifs, 0, &CwmCompareOptions::default()).unwrap();
+        let got: Vec<(usize, bool)> = layout.placements.iter().map(|p| (p.left, p.rc)).collect();
+        assert_eq!(got, [(3, false), (3, true), (0, false)]);
+        assert_eq!(layout.width, 11);
+        // anchor_layout() hands CWMs to it.
+        let same = crate::compare::anchor_layout(&motifs, 0, &CompareOptions::default()).unwrap();
+        assert_eq!(same.placements, layout.placements);
     }
 }

@@ -26,6 +26,8 @@ Changes in behaviour:
   contributions over alignments found by cosine similarity, and
   `merge::merge_similar()` groups CWMs by cosine similarity reaching
   `MergeSimilarOptions::min_score` rather than by q-value.
+- `compare::anchor_layout()` aligns CWMs by the cosine of their
+  contributions, through the new `similarity::cwm_anchor_layout()`.
 - `Genome` and `scan_fasta(trim_names = true)` name sequences by the first
   word of the header, and a repeated name is an error.
 
