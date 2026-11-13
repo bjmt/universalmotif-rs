@@ -59,6 +59,10 @@ copied, and are not listed here. The other differences are below.
   Jaccard similarity, so that a negative pattern does not match the
   positive one with the same letters, and they are merged and clustered
   as CWMs.
+- **Hits in contribution scores.** `scan_contributions()` finds where a
+  sequence model relied on each CWM, matching the CWMs against the model's
+  contribution scores rather than against the sequence, with thresholds
+  from each TF-MoDISco pattern's seqlets in the Python package.
 - **Merging without chains.** `merge_similar()` can join motifs with
   complete linkage, so that every pair in a cluster is similar, where the
   connected groups of `merge_similar_lite()` can chain unlike motifs

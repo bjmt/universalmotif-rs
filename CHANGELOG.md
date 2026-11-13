@@ -44,6 +44,9 @@ Other changes:
   compare CWMs by cosine similarity, with P-values, or by TF-MoDISco's
   continuous Jaccard similarity, keeping their signs unless
   `ignore_sign` is set.
+- `contributions::scan_contributions()` finds motif hits in the
+  contribution scores of a sequence model, by the similarity and importance
+  of each window against CWMs.
 
 ## 0.3.0 (2026-10-29)
 

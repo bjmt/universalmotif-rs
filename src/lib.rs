@@ -87,6 +87,7 @@ pub mod cdf;
 pub mod cluster;
 pub mod compare;
 pub mod complexity;
+pub mod contributions;
 pub mod coocc;
 pub mod dedup;
 pub mod enrich;
