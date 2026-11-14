@@ -22,6 +22,10 @@ Changes in behaviour:
 - MEME files without a `strands:` line give DNA and RNA motifs for both
   strands.
 - `motif_finder()` with `rc: false` gives motifs for the `+` strand.
+- `sample::sample_sites()` and `sample::implant_motifs()` give gapped
+  motifs' sites a spacer in each gap, of a size drawn within its range,
+  rather than leaving the gaps out; implants keep the sequence's letters
+  in their spacers.
 - `create::from_strings()` refuses dots and dashes among DNA, RNA or amino
   acid letters when guessing the alphabet, rather than making a custom
   alphabet of them.

@@ -19,12 +19,76 @@ fn sample_site(ppm: &Motif, rng: &mut StdRng) -> String {
         .collect()
 }
 
+/// A gap size for each gap of a gapped motif, drawn uniformly within its
+/// range; none for an ungapped motif, which then draws nothing.
+fn draw_gaps(m: &Motif, rng: &mut StdRng) -> Vec<usize> {
+    if !m.gap.isgapped {
+        return Vec::new();
+    }
+    m.gap
+        .mingap
+        .iter()
+        .zip(&m.gap.maxgap)
+        .map(|(&lo, &hi)| rng.random_range(lo..=hi.max(lo)))
+        .collect()
+}
+
+/// A sampled site laid out with its gaps: the motif's letters, and `None`
+/// for each position of a gap.
+fn lay_out(m: &Motif, site: &str, gaps: &[usize]) -> Vec<Option<char>> {
+    let mut out = Vec::with_capacity(site.len() + gaps.iter().sum::<usize>());
+    for (i, c) in site.chars().enumerate() {
+        if let Some(k) = m.gap.gaploc.iter().position(|&l| l == i)
+            && let Some(&g) = gaps.get(k)
+        {
+            out.extend(std::iter::repeat_n(None, g));
+        }
+        out.push(Some(c));
+    }
+    out
+}
+
+/// Check that a gapped motif's gaps can be drawn.
+fn check_gaps(m: &Motif) -> Result<()> {
+    let g = &m.gap;
+    if g.isgapped
+        && (g.mingap.len() != g.gaploc.len()
+            || g.maxgap.len() != g.gaploc.len()
+            || g.mingap.iter().zip(&g.maxgap).any(|(lo, hi)| lo > hi)
+            || g.gaploc.iter().any(|&l| l == 0 || l >= m.width()))
+    {
+        return arg_err(format!(
+            "the gaps of motif '{}' are not well formed",
+            m.name
+        ));
+    }
+    Ok(())
+}
+
 /// Draw `n` sites from a motif, one letter per position with the motif's
-/// probabilities.
+/// probabilities. A gapped motif's sites have a spacer in each gap, of a size
+/// drawn uniformly within its range, filled with letters drawn from the
+/// motif's background.
 pub fn sample_sites(motif: &Motif, n: usize, seed: u64) -> Result<Vec<String>> {
+    check_gaps(motif)?;
     let ppm = convert_type(motif, MotifType::Ppm, None, false)?;
+    let letters = ppm.alphabet.letters();
     let mut rng = rng_for(seed, 0);
-    Ok((0..n).map(|_| sample_site(&ppm, &mut rng)).collect())
+    Ok((0..n)
+        .map(|_| {
+            let site = sample_site(&ppm, &mut rng);
+            if !motif.gap.isgapped {
+                return site;
+            }
+            let gaps = draw_gaps(motif, &mut rng);
+            lay_out(motif, &site, &gaps)
+                .into_iter()
+                .map(|c| {
+                    c.unwrap_or_else(|| letters[weighted_index(&mut rng, &ppm.bkg).unwrap_or(0)])
+                })
+                .collect()
+        })
+        .collect())
 }
 
 /// How many sites [`implant_motifs`] places in each sequence.
@@ -106,7 +170,10 @@ fn collides(s: usize, e: usize, placed: &[(usize, usize)], gap: usize) -> bool {
 
 /// Plant sites sampled from DNA or RNA motifs into sequences. Each implant uses
 /// a motif chosen at random when there are several, and overwrites the sequence
-/// at its position.
+/// at its position. A gapped motif's site gets a spacer in each gap, of a size
+/// drawn uniformly within its range, and the spacer keeps the sequence's own
+/// letters, so that only the motif's columns are written; the width of an
+/// implant includes its spacers.
 pub fn implant_motifs<S: AsRef<str>>(
     motifs: &[Motif],
     sequences: &[S],
@@ -135,6 +202,9 @@ pub fn implant_motifs<S: AsRef<str>>(
         && (r.is_nan() || r < 0.0)
     {
         return arg_err("rate must be non-negative");
+    }
+    for m in motifs {
+        check_gaps(m)?;
     }
     let rna = first.alphabet == crate::alphabet::Alphabet::Rna;
     let ppms: Vec<Motif> = motifs
@@ -184,7 +254,8 @@ pub fn implant_motifs<S: AsRef<str>>(
             } else {
                 rng.random_range(0..motifs.len())
             };
-            let w = widths[m];
+            let gaps = draw_gaps(&motifs[m], &mut rng);
+            let w = widths[m] + gaps.iter().sum::<usize>();
             if w > len {
                 continue;
             }
@@ -227,11 +298,36 @@ pub fn implant_motifs<S: AsRef<str>>(
                     }
                 }
             };
-            let mut site = sample_site(&ppms[m], &mut rng);
-            if minus {
-                site = reverse_complement_seq(&site, rna);
+            let site = sample_site(&ppms[m], &mut rng);
+            let site = if gaps.is_empty() {
+                if minus {
+                    reverse_complement_seq(&site, rna)
+                } else {
+                    site
+                }
+            } else {
+                // Only the motif's columns are written; the spacers keep the
+                // sequence's letters.
+                let mut layout = lay_out(&motifs[m], &site, &gaps);
+                if minus {
+                    layout.reverse();
+                    for c in layout.iter_mut().flatten() {
+                        *c = reverse_complement_seq(&c.to_string(), rna)
+                            .chars()
+                            .next()
+                            .unwrap();
+                    }
+                }
+                for (k, c) in layout.into_iter().enumerate() {
+                    if let Some(c) = c {
+                        chars[start + k] = c;
+                    }
+                }
+                chars[start..start + w].iter().collect()
+            };
+            if gaps.is_empty() {
+                chars.splice(start..start + w, site.chars());
             }
-            chars.splice(start..start + w, site.chars());
             placed.push((start, start + w - 1));
             out.implants.push(Implant {
                 sequence: i,

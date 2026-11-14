@@ -279,3 +279,69 @@ fn implants_are_placed_and_spaced() {
     let mean = r.implants.len() as f64 / 30.0;
     assert!((1.0..3.0).contains(&mean), "{mean}");
 }
+
+#[test]
+fn gapped_sites_get_spacers() {
+    // GATA, a gap of 2 to 5 letters, then CACGTG.
+    let opts = CreateOptions::default();
+    let core = from_strings(&["GATACACGTG"], Some(Alphabet::Dna), &opts).unwrap();
+    let m = universalmotif::ops::add_gap(&core, Some(&[4]), &[2], &[5]).unwrap();
+    let sites = sample_sites(&m, 200, 3).unwrap();
+    let mut sizes = std::collections::BTreeSet::new();
+    for s in &sites {
+        assert!(s.starts_with("GATA") && s.ends_with("CACGTG"), "{s}");
+        let g = s.len() - 10;
+        assert!((2..=5).contains(&g));
+        sizes.insert(g);
+    }
+    assert_eq!(sizes.len(), 4);
+    // Ungapped motifs draw exactly as before.
+    assert_eq!(
+        sample_sites(&core, 5, 3).unwrap(),
+        sample_sites(&core, 5, 3).unwrap()
+    );
+    // Implants write only the motif's columns; the spacer keeps the sequence.
+    let seqs = vec!["T".repeat(60); 40];
+    let res = implant_motifs(
+        std::slice::from_ref(&m),
+        &seqs,
+        &ImplantOptions {
+            seed: 4,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut strands = std::collections::BTreeSet::new();
+    for imp in &res.implants {
+        let planted = &res.sequences[imp.sequence][imp.start..imp.start + imp.width];
+        assert_eq!(planted, imp.planted);
+        assert!((12..=15).contains(&imp.width));
+        let site = if imp.minus_strand {
+            planted
+                .chars()
+                .rev()
+                .map(|c| match c {
+                    'A' => 'T',
+                    'C' => 'G',
+                    'G' => 'C',
+                    _ => 'A',
+                })
+                .collect()
+        } else {
+            planted.to_string()
+        };
+        let spacer = &site[4..site.len() - 6];
+        assert!(
+            site.starts_with("GATA") && site.ends_with("CACGTG"),
+            "{site}"
+        );
+        assert!(
+            spacer
+                .chars()
+                .all(|c| c == if imp.minus_strand { 'A' } else { 'T' }),
+            "{site}"
+        );
+        strands.insert(imp.minus_strand);
+    }
+    assert_eq!(strands.len(), 2);
+}
