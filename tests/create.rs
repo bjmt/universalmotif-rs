@@ -108,3 +108,27 @@ fn create_matches_r() {
         }
     }
 }
+
+#[test]
+fn dots_and_dashes_are_not_letters() {
+    let opts = CreateOptions::default();
+    for seqs in [vec!["GATA..CACGTG"], vec!["GATA--CACGTG", "GATATTCACGTG"]] {
+        let err = from_strings(&seqs, None, &opts).unwrap_err().to_string();
+        assert!(
+            err.contains("not a DNA letter") && err.contains("custom alphabet"),
+            "{err}"
+        );
+    }
+    // Given as letters of a custom alphabet, they are counted.
+    let custom = universalmotif::Alphabet::custom("-ACGT".chars()).unwrap();
+    let m = from_strings(&["GATA--CACGTG", "GATATTCACGTG"], Some(custom), &opts).unwrap();
+    assert_eq!(m.alphabet.len(), 5);
+    // Strings of other symbols still make a custom alphabet.
+    assert_eq!(
+        from_strings(&["*.#", "#.*"], None, &opts)
+            .unwrap()
+            .alphabet
+            .len(),
+        3
+    );
+}

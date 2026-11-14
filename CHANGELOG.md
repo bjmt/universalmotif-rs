@@ -22,6 +22,9 @@ Changes in behaviour:
 - MEME files without a `strands:` line give DNA and RNA motifs for both
   strands.
 - `motif_finder()` with `rc: false` gives motifs for the `+` strand.
+- `create::from_strings()` refuses dots and dashes among DNA, RNA or amino
+  acid letters when guessing the alphabet, rather than making a custom
+  alphabet of them.
 - `merge::merge_motifs()` merges CWMs as CWMs, averaging their signed
   contributions over alignments found by cosine similarity, and
   `merge::merge_similar()` groups CWMs by cosine similarity reaching

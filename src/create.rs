@@ -225,6 +225,35 @@ pub fn guess_strings_alphabet(seqs: &[&str]) -> Result<Alphabet> {
 }
 
 fn guess_string_alphabet(letters: &[char]) -> Result<Alphabet> {
+    // Dots and dashes among the letters of a known alphabet stand for gaps,
+    // not for letters of a custom alphabet, which they would otherwise make.
+    let marks: String = letters.iter().filter(|&&l| l == '.' || l == '-').collect();
+    if !marks.is_empty() {
+        let rest: Vec<char> = letters
+            .iter()
+            .copied()
+            .filter(|&l| l != '.' && l != '-')
+            .collect();
+        if let Ok(known) = guess_string_alphabet(&rest)
+            && !matches!(known, Alphabet::Custom(_))
+        {
+            let (what, them) = if marks.len() == 1 {
+                (
+                    format!("'{marks}' is not a {known} letter"),
+                    "it as a letter",
+                )
+            } else {
+                (
+                    format!("'{marks}' are not {known} letters"),
+                    "them as letters",
+                )
+            };
+            return arg_err(format!(
+                "{what}; for a gap of variable size, create the motif from the letters on \
+                 either side of it and add the gap, or give a custom alphabet to count {them}"
+            ));
+        }
+    }
     let all_in = |set: &str| letters.iter().all(|&l| set.contains(l));
     if all_in(DNA_IUPAC) {
         Ok(Alphabet::Dna)
@@ -261,7 +290,9 @@ fn check_string_letters(letters: &[char], alphabet: &Alphabet) -> Result<()> {
 /// as aligned sites and counted; `nsites` then defaults to the number of
 /// strings. The alphabet is guessed from the letters when `None`: DNA with
 /// IUPAC codes, then RNA, then amino acids, and otherwise a custom alphabet of
-/// the letters present.
+/// the letters present. Dots and dashes among the letters of DNA, RNA or amino
+/// acids are refused rather than made letters of a custom alphabet, since
+/// they usually mean gaps.
 ///
 /// # Example
 ///
