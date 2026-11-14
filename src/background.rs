@@ -23,6 +23,22 @@ pub fn gc_fraction(seq: &str) -> f64 {
     gc as f64 / seq.len().max(1) as f64
 }
 
+/// The fraction of G and C in a sequence, as [`gc_fraction`] gives it, and
+/// the fraction of letters other than A, C, G, T and U, such as N, either
+/// case counted.
+pub fn composition(seq: &str) -> (f64, f64) {
+    let (mut gc, mut other) = (0usize, 0usize);
+    for b in seq.bytes() {
+        match b {
+            b'G' | b'C' | b'g' | b'c' => gc += 1,
+            b'A' | b'T' | b'U' | b'a' | b't' | b'u' => {}
+            _ => other += 1,
+        }
+    }
+    let n = seq.len().max(1) as f64;
+    (gc as f64 / n, other as f64 / n)
+}
+
 /// How a matching axis is binned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinType {
@@ -307,6 +323,37 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
     if universe.iter().any(|s| s.as_ref().is_empty()) {
         return arg_err("the universe must not contain empty sequences");
     }
+    let gc_t: Vec<f64> = targets.iter().map(|s| gc_fraction(s.as_ref())).collect();
+    let gc_u: Vec<f64> = universe.iter().map(|s| gc_fraction(s.as_ref())).collect();
+    let len_t: Vec<f64> = targets.iter().map(|s| s.as_ref().len() as f64).collect();
+    let len_u: Vec<f64> = universe.iter().map(|s| s.as_ref().len() as f64).collect();
+    match_bkg_values(gc_t, len_t, gc_u, len_u, covariates, opts)
+}
+
+/// [`match_bkg`] from the GC fraction and length of each target and
+/// universe sequence rather than the sequences themselves, such as those of
+/// genomic windows measured with [`crate::genome::Genome::composition_many`]
+/// without holding them all in memory.
+pub fn match_bkg_values(
+    gc_t: Vec<f64>,
+    len_t: Vec<f64>,
+    gc_u: Vec<f64>,
+    len_u: Vec<f64>,
+    covariates: &[Covariate],
+    opts: &MatchOptions,
+) -> Result<Matched> {
+    if gc_t.is_empty() {
+        return arg_err("no target sequences given");
+    }
+    if gc_u.is_empty() {
+        return arg_err("the universe is empty");
+    }
+    if len_t.len() != gc_t.len() || len_u.len() != gc_u.len() {
+        return arg_err("give one GC fraction and one length per sequence");
+    }
+    if len_u.iter().any(|&l| l <= 0.0) {
+        return arg_err("the universe must not contain empty sequences");
+    }
     if opts.n_per_target < 1 {
         return arg_err("n_per_target must be at least 1");
     }
@@ -314,7 +361,7 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
         return arg_err("every axis needs at least 2 bins");
     }
     for c in covariates {
-        if c.targets.len() != targets.len() || c.universe.len() != universe.len() {
+        if c.targets.len() != gc_t.len() || c.universe.len() != gc_u.len() {
             return arg_err(format!(
                 "covariate '{}' needs one value per target and per universe sequence",
                 c.name
@@ -327,10 +374,6 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
             ));
         }
     }
-    let gc_t: Vec<f64> = targets.iter().map(|s| gc_fraction(s.as_ref())).collect();
-    let gc_u: Vec<f64> = universe.iter().map(|s| gc_fraction(s.as_ref())).collect();
-    let len_t: Vec<f64> = targets.iter().map(|s| s.as_ref().len() as f64).collect();
-    let len_u: Vec<f64> = universe.iter().map(|s| s.as_ref().len() as f64).collect();
     let mut axes = vec![
         match_axis(
             &gc_t,
@@ -362,7 +405,7 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
     // draws need not be unique), so a draw only touches a ring's few cells.
     let mut cell_ids: HashMap<usize, usize> = HashMap::new();
     let mut all: Vec<Vec<usize>> = Vec::new();
-    for i in 0..universe.len() {
+    for i in 0..gc_u.len() {
         let coords: Vec<usize> = axes.iter().map(|a| a.bin_universe[i]).collect();
         let id = *cell_ids.entry(key(&coords)).or_insert_with(|| {
             all.push(Vec::new());
@@ -375,9 +418,9 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
     let rings: Vec<Vec<Vec<i64>>> = (0..=max_ring).map(|r| ring_offsets(r, n_axes)).collect();
 
     let mut rng = rng_for(opts.seed, 0);
-    let mut out = Vec::with_capacity(targets.len() * opts.n_per_target);
+    let mut out = Vec::with_capacity(gc_t.len() * opts.n_per_target);
     let mut fallbacks = 0;
-    for t in 0..targets.len() {
+    for t in 0..gc_t.len() {
         let home: Vec<i64> = axes.iter().map(|a| a.bin_targets[t] as i64).collect();
         let mut picked: Vec<usize> = Vec::new();
         let mut searched: Vec<usize> = Vec::new();
@@ -424,7 +467,7 @@ pub fn match_bkg<S: AsRef<str>, U: AsRef<str>>(
             let total: usize = searched.iter().map(|&c| all[c].len()).sum();
             for _ in 0..need {
                 picked.push(if total == 0 {
-                    rng.random_range(0..universe.len())
+                    rng.random_range(0..gc_u.len())
                 } else {
                     let (c, k) = locate(&searched, &all, rng.random_range(0..total));
                     all[c][k]
@@ -506,6 +549,31 @@ pub fn genome_windows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matching_values_is_matching_sequences() {
+        let targets = ["GGCCAATT", "ATATATAT", "GCGCGCGA", "ACGTACGT"];
+        let universe: Vec<String> = (0..60)
+            .map(|i| {
+                (0..8)
+                    .map(|j| b"ACGT"[(i * 7 + j * 3 + i / 5) % 4] as char)
+                    .collect()
+            })
+            .collect();
+        let opts = MatchOptions {
+            n_per_target: 3,
+            seed: 4,
+            ..Default::default()
+        };
+        let a = match_bkg(&targets, &universe, &[], &opts).unwrap();
+        let gc = |v: &[&str]| v.iter().map(|s| gc_fraction(s)).collect::<Vec<_>>();
+        let lens = |v: &[&str]| v.iter().map(|s| s.len() as f64).collect::<Vec<_>>();
+        let u: Vec<&str> = universe.iter().map(String::as_str).collect();
+        let b =
+            match_bkg_values(gc(&targets), lens(&targets), gc(&u), lens(&u), &[], &opts).unwrap();
+        assert_eq!(a.universe_index, b.universe_index);
+        assert!(match_bkg_values(vec![0.5], vec![], vec![0.5], vec![8.0], &[], &opts).is_err());
+    }
 
     #[test]
     fn distinct_positions_cover_the_range_evenly() {

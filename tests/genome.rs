@@ -289,3 +289,31 @@ fn tempdir() -> std::path::PathBuf {
     assert!(Path::new(&dir).exists());
     dir
 }
+
+#[test]
+fn composition_of_many_windows() {
+    let dir = tempdir();
+    let mut rng = StdRng::seed_from_u64(5);
+    let chroms = random_chroms(&mut rng);
+    let path = dir.join("comp.fa");
+    std::fs::write(&path, fasta_text(&chroms, 60, false)).unwrap();
+    let genome = Genome::open(&path).unwrap();
+    let ranges: Vec<GRange> = (0..300)
+        .map(|k| {
+            let chrom = k % 2;
+            let len = chroms[chrom].1.len() as i64;
+            let start = rng.random_range(0..len - 50);
+            GRange::new(chrom, start, start + rng.random_range(1..50))
+        })
+        .collect();
+    let comp = genome.composition_many(&ranges, 2).unwrap();
+    let pieces = genome.fetch_many(&ranges, 1).unwrap();
+    for (c, p) in comp.iter().zip(&pieces) {
+        assert_eq!(*c, universalmotif::background::composition(p));
+    }
+    // N counts as other letters, and either case of G and C as GC.
+    assert_eq!(
+        universalmotif::background::composition("GCgcATNn"),
+        (0.5, 0.25)
+    );
+}

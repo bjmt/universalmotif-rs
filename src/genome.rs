@@ -159,6 +159,25 @@ impl Genome {
     /// position, so pieces close together in a bgzip file share the work of
     /// decompressing it.
     pub fn fetch_many(&self, ranges: &[GRange], nthreads: usize) -> Result<Vec<String>> {
+        self.map_many(ranges, nthreads, |seq| seq)
+    }
+
+    /// The fraction of G and C and the fraction of other letters than A, C,
+    /// G, T and U, such as N, in many pieces, as
+    /// [`crate::background::composition`] gives them. Pieces are read as by
+    /// [`Genome::fetch_many`] but only one per thread is held at a time, so
+    /// that millions of windows can be measured in little memory.
+    pub fn composition_many(&self, ranges: &[GRange], nthreads: usize) -> Result<Vec<(f64, f64)>> {
+        self.map_many(ranges, nthreads, |seq| crate::background::composition(&seq))
+    }
+
+    /// Read many pieces and turn each into a value with `f` as it is read.
+    fn map_many<T: Send + Default + Clone>(
+        &self,
+        ranges: &[GRange],
+        nthreads: usize,
+        f: impl Fn(String) -> T + Sync,
+    ) -> Result<Vec<T>> {
         use rayon::prelude::*;
         let mut tuples = Vec::with_capacity(ranges.len());
         for r in ranges {
@@ -187,15 +206,15 @@ impl Genome {
                     ks.iter()
                         .map(|&k| {
                             let (i, s, e) = ranges[k];
-                            Ok((k, self.read_with(&mut cursor, i, s, e)?))
+                            Ok((k, f(self.read_with(&mut cursor, i, s, e)?)))
                         })
-                        .collect::<Result<Vec<(usize, String)>>>()
+                        .collect::<Result<Vec<(usize, T)>>>()
                 })
                 .collect::<Result<Vec<_>>>()
         })??;
-        let mut out = vec![String::new(); ranges.len()];
-        for (k, seq) in pieces.into_iter().flatten() {
-            out[k] = seq;
+        let mut out = vec![T::default(); ranges.len()];
+        for (k, v) in pieces.into_iter().flatten() {
+            out[k] = v;
         }
         Ok(out)
     }

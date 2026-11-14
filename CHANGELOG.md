@@ -47,6 +47,10 @@ Other changes:
 - `contributions::scan_contributions()` finds motif hits in the
   contribution scores of a sequence model, by the similarity and importance
   of each window against CWMs, gapped CWMs included.
+- `background::match_bkg_values()` matches on GC fractions and lengths
+  rather than sequences, `background::composition()` gives the GC and N
+  fractions of a sequence, and `genome::Genome::composition_many()` measures
+  many windows without holding them.
 - `shuffle::shuffle_codes()` makes several k-mer-preserving shuffles of
   each of a set of sequences given as letter codes, keeping unknown
   letters in place, with each shuffle seeded by its sequence's place in
