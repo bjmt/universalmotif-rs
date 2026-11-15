@@ -188,26 +188,45 @@ pub fn score_match<S: AsRef<str>>(
         .collect()
 }
 
-/// Every possible score of the motif, highest first. There are as many as the alphabet size to the power of
-/// the width, so this is only for small motifs.
+/// The most scores [`get_scores`] lists, 4^12 or about 16.8 million, as each
+/// takes memory.
+const MAX_LISTED_SCORES: f64 = 16_777_216.0;
+
+/// Every possible score of the motif, highest first. There are as many as
+/// the alphabet size to the power of the width, so this is only for small
+/// motifs: at most 16,777,216 scores, as for a DNA motif of 12 columns.
 pub fn get_scores(motif: &Motif, allow_nonfinite: bool) -> Result<Vec<f64>> {
     let cols = grid_columns(&scoring_pwm(motif, allow_nonfinite)?);
     let n = (motif.alphabet.len() as f64).powi(cols.len() as i32);
-    if n > i32::MAX as f64 {
+    if n > MAX_LISTED_SCORES {
         return arg_err(format!(
-            "the motif has {n:.0} possible scores, too many to list; use a narrower motif"
+            "the motif has {n:.0} possible scores, more than the {MAX_LISTED_SCORES} that can be \
+             listed; use a narrower motif"
         ));
     }
-    let mut scores: Vec<Option<i64>> = vec![Some(0)];
+    // Scores on the integer grid, with i64::MIN for those that include an
+    // infinite weight.
+    let mut scores: Vec<i64> = Vec::with_capacity(n as usize);
+    scores.push(0);
     for c in &cols {
-        scores = c
-            .iter()
-            .flat_map(|&v| scores.iter().map(move |&s| s.zip(v).map(|(a, b)| a + b)))
-            .collect();
+        let mut next = Vec::with_capacity(scores.len() * c.len());
+        for &v in c {
+            next.extend(scores.iter().map(|&s| match v {
+                Some(b) if s != i64::MIN => s + b,
+                _ => i64::MIN,
+            }));
+        }
+        scores = next;
     }
     let mut out: Vec<f64> = scores
         .into_iter()
-        .map(|s| s.map_or(f64::NEG_INFINITY, |s| s as f64 / 1000.0))
+        .map(|s| {
+            if s == i64::MIN {
+                f64::NEG_INFINITY
+            } else {
+                s as f64 / 1000.0
+            }
+        })
         .collect();
     out.sort_unstable_by(|a, b| b.total_cmp(a));
     Ok(out)

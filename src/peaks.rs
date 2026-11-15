@@ -150,7 +150,14 @@ fn test_motif(
     let mid = lenf / 2.0 - 1.0;
     let (mut best_p, mut best_w, mut best_c, mut best_k) = (1.0, None, None, 0);
     let mut n_tests = 0usize;
-    let count = |c: f64, half: f64| centres.iter().filter(|&&x| (x - c).abs() <= half).count();
+    // Hit centres in order, so that those within a window are found by two
+    // bisections; centres and windows fall on half positions, so the bounds
+    // are exact.
+    let mut sorted = centres.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let count = |c: f64, half: f64| {
+        sorted.partition_point(|&x| x <= c + half) - sorted.partition_point(|&x| x < c - half)
+    };
     for &w in widths {
         let half = w as f64 / 2.0;
         let p = w as f64 / lenf;
@@ -240,22 +247,16 @@ pub fn motif_peaks(
             }
         }
     }
+    // The kept hits grouped by motif, in one pass over them sorted.
     let mut kept: Vec<usize> = best.iter().map(|b| b.2).collect();
-    kept.sort_unstable();
-    let mut motif_ids: Vec<usize> = kept.iter().map(|&i| hits[i].motif).collect();
-    motif_ids.sort_unstable();
-    motif_ids.dedup();
-    let groups: Vec<(usize, Vec<f64>)> = motif_ids
-        .iter()
-        .map(|&m| {
-            let c = kept
-                .iter()
-                .filter(|&&i| hits[i].motif == m)
-                .map(|&i| hits[i].centre)
-                .collect();
-            (m, c)
-        })
-        .collect();
+    kept.sort_unstable_by_key(|&i| (hits[i].motif, i));
+    let mut groups: Vec<(usize, Vec<f64>)> = Vec::new();
+    for &i in &kept {
+        match groups.last_mut() {
+            Some((m, c)) if *m == hits[i].motif => c.push(hits[i].centre),
+            _ => groups.push((hits[i].motif, vec![hits[i].centre])),
+        }
+    }
     let mut out: Vec<MotifPeak> = with_threads(opts.nthreads, || {
         groups
             .par_iter()

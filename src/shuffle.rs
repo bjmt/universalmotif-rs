@@ -146,6 +146,9 @@ fn encode<T: Copy + Ord>(seq: &[T]) -> (Vec<T>, Vec<u32>) {
     (alph, ints)
 }
 
+/// The most entries a table of k-mer counts may have, about 268 million.
+const MAX_KMER_TABLE: f64 = 268_435_456.0;
+
 fn kmer_counts(ints: &[u32], k: usize, n: usize) -> Vec<usize> {
     let mut counts = vec![0; n.pow(k as u32)];
     for w in ints.windows(k) {
@@ -313,6 +316,17 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
 ) -> Result<Vec<String>> {
     if opts.k < 1 {
         return arg_err("k must be at least 1");
+    }
+    // The Euler and Markov methods count every k-mer of a sequence's letters
+    // in a table of that many entries.
+    if opts.k > 1 && opts.method != ShuffleMethod::Linear {
+        let n = crate::kmer::sequence_letters(seqs).len() as f64;
+        if n.powi(opts.k as i32) > MAX_KMER_TABLE {
+            return arg_err(format!(
+                "k ({}) is too large for {n} letters: their k-mers would not fit in memory",
+                opts.k
+            ));
+        }
     }
     let mut plans: Vec<Vec<(usize, usize)>> = Vec::with_capacity(seqs.len());
     for s in seqs {

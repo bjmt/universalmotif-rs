@@ -10,7 +10,7 @@
 //! anchors and a one-sided Kolmogorov-Smirnov test of the distances to the
 //! nearest anchor are also available.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rand::RngExt;
 use rayon::prelude::*;
@@ -509,37 +509,51 @@ fn permute_anchors(
     per_chrom: bool,
     rng: &mut rand::rngs::StdRng,
 ) -> Result<Vec<GRange>> {
+    // The segments an anchor can go in and how many places each offers
+    // depend only on its width and, per chromosome, its chromosome, so they
+    // are worked out once for each, with running totals to draw from.
+    type Places = (Vec<usize>, Vec<f64>, Vec<f64>);
+    let mut cache: HashMap<(Option<usize>, i64), Places> = HashMap::new();
     let mut out = Vec::with_capacity(anchors.len());
     for a in anchors {
         let w = a.width();
-        let segs: Vec<&GRange> = u
-            .segments
-            .iter()
-            .filter(|s| !per_chrom || s.chrom == a.chrom)
-            .collect();
-        let legal: Vec<f64> = segs
-            .iter()
-            .map(|s| (s.width() - w + 1).max(0) as f64)
-            .collect();
-        let total: f64 = legal.iter().sum();
+        let key = (per_chrom.then_some(a.chrom), w);
+        let (segs, legal, running) = cache.entry(key).or_insert_with(|| {
+            let segs: Vec<usize> = (0..u.segments.len())
+                .filter(|&i| !per_chrom || u.segments[i].chrom == a.chrom)
+                .collect();
+            let legal: Vec<f64> = segs
+                .iter()
+                .map(|&i| (u.segments[i].width() - w + 1).max(0) as f64)
+                .collect();
+            let mut total = 0.0;
+            let running = legal
+                .iter()
+                .map(|l| {
+                    total += l;
+                    total
+                })
+                .collect();
+            (segs, legal, running)
+        });
+        let total = running.last().copied().unwrap_or(0.0);
         if total <= 0.0 {
             return arg_err(format!(
                 "could not place an anchor of width {w} in the universe; the universe is too small"
             ));
         }
-        let mut r = rng.random::<f64>() * total;
-        let mut pick = legal.len() - 1;
-        for (i, &l) in legal.iter().enumerate() {
-            if r < l {
-                pick = i;
-                break;
-            }
-            r -= l;
+        let r = rng.random::<f64>() * total;
+        // The first segment whose running total passes the draw, skipping
+        // segments with no room.
+        let mut pick = running.partition_point(|&t| t <= r).min(legal.len() - 1);
+        while legal[pick] == 0.0 && pick + 1 < legal.len() {
+            pick += 1;
         }
         let off = (rng.random::<f64>() * legal[pick]).floor() as i64;
-        let start = segs[pick].start + off;
+        let seg = &u.segments[segs[pick]];
+        let start = seg.start + off;
         out.push(GRange {
-            chrom: segs[pick].chrom,
+            chrom: seg.chrom,
             start,
             end: start + w,
             strand: a.strand,
@@ -634,21 +648,17 @@ pub fn motif_proximity(
         (opts.method == ProximityMethod::Ks).then(|| NullCdf::new(&anchors, &u, opts.orientation));
     let index = AnchorIndex::new(&anchors);
 
-    let motif_ids: Vec<usize> = hits
-        .iter()
-        .map(|h| h.motif)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    // Each motif's hits, gathered in one pass.
+    let mut by_motif: BTreeMap<usize, Vec<GRange>> = BTreeMap::new();
+    for h in hits {
+        by_motif.entry(h.motif).or_default().push(h.range);
+    }
+    let motif_ids: Vec<usize> = by_motif.keys().copied().collect();
     let mut out: Vec<Proximity> = with_threads(opts.nthreads, || {
         motif_ids
             .par_iter()
             .map(|&m| -> Result<Proximity> {
-                let hm: Vec<GRange> = hits
-                    .iter()
-                    .filter(|h| h.motif == m)
-                    .map(|h| h.range)
-                    .collect();
+                let hm: &Vec<GRange> = &by_motif[&m];
                 let mut sorted = hm.clone();
                 sorted.sort_by_key(|h| (h.chrom, h.start, h.end));
                 let mut res = Proximity {
@@ -667,7 +677,7 @@ pub fn motif_proximity(
                     pvalue: 1.0,
                     qvalue: 1.0,
                     ks_d: None,
-                    dist_to_nearest: signed_distances(&hm, &anchors, &index),
+                    dist_to_nearest: signed_distances(hm, &anchors, &index),
                 };
                 let fill = |res: &mut Proximity, sc: &Scan, p: f64| {
                     res.best_dist = sc.d;

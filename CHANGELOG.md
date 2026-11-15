@@ -41,9 +41,17 @@ Changes in behaviour:
   their whole width, as comparisons do, rather than leaving them out.
 - Gap locations must be in increasing order; `ops::add_gap()` refuses
   others, which made printing the motif panic.
+- `scoring::get_scores()` lists at most 16,777,216 scores, as for a DNA
+  motif of 12 columns, where wider motifs ran out of memory, and
+  `shuffle::shuffle_sequences()` refuses a k whose k-mer counts would not
+  fit in memory.
 
 Other changes:
 
+- Faster: comparisons with `complete: true` (from quadratic in the number
+  of motifs to linear for a few queries), removing overlapping hits in
+  dense clusters, positional enrichment, proximity permutations and
+  deduplication in `finder::motif_finder()`.
 - `gapped::gapped_motif_finder()` discovers motifs made of two parts with a
   spacer of varying length, testing each in sequences held out from the
   search, from pairs of k-mers counted at every spacing by

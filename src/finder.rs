@@ -460,13 +460,59 @@ struct Evaluation {
     sites_neg: u64,
     seqs_pos: u64,
     seqs_neg: u64,
-    covered: Vec<Vec<bool>>,
+    covered: Coverage,
+}
+
+/// The positions of a set of sequences covered by a motif's sites, a bit
+/// each.
+struct Coverage {
+    /// Where each sequence's bits begin.
+    starts: Vec<usize>,
+    bits: Vec<u64>,
+}
+
+impl Coverage {
+    fn new(seqs: &[Vec<u8>]) -> Coverage {
+        let mut starts = Vec::with_capacity(seqs.len());
+        let mut total = 0;
+        for s in seqs {
+            starts.push(total);
+            total += s.len();
+        }
+        Coverage {
+            starts,
+            bits: vec![0; total.div_ceil(64)],
+        }
+    }
+
+    fn fill(&mut self, seq: usize, from: usize, len: usize) {
+        for p in self.starts[seq] + from..self.starts[seq] + from + len {
+            self.bits[p / 64] |= 1 << (p % 64);
+        }
+    }
+
+    fn contains(&self, seq: usize, pos: usize) -> bool {
+        let p = self.starts[seq] + pos;
+        self.bits[p / 64] & (1 << (p % 64)) != 0
+    }
+
+    fn count(&self) -> u64 {
+        self.bits.iter().map(|w| w.count_ones() as u64).sum()
+    }
+
+    fn shared(&self, other: &Coverage) -> u64 {
+        self.bits
+            .iter()
+            .zip(&other.bits)
+            .map(|(a, b)| (a & b).count_ones() as u64)
+            .sum()
+    }
 }
 
 fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool, lf: &LogFact) -> Evaluation {
     let thr = m.threshold - 1;
     let w = m.size;
-    let mut covered: Vec<Vec<bool>> = pos.iter().map(|s| vec![false; s.len()]).collect();
+    let mut covered = Coverage::new(pos);
     let (mut sites_pos, mut seqs_pos, mut sites_neg, mut seqs_neg) = (0, 0, 0, 0);
     for (si, s) in pos.iter().enumerate() {
         if s.len() < w {
@@ -479,7 +525,7 @@ fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool, lf: &LogFact
                 if found {
                     hit = true;
                     sites_pos += 1;
-                    covered[si][off..off + w].fill(true);
+                    covered.fill(si, off, w);
                 }
             }
         }
@@ -572,9 +618,9 @@ fn discover_for_width(
             if eval.ln_pvalue > stop_pval.ln() {
                 continue;
             }
-            for (s, c) in work.iter_mut().zip(&eval.covered) {
-                for (b, &cov) in s.iter_mut().zip(c) {
-                    if cov {
+            for (si, s) in work.iter_mut().enumerate() {
+                for (p, b) in s.iter_mut().enumerate() {
+                    if eval.covered.contains(si, p) {
                         *b = b'N';
                     }
                 }
@@ -828,6 +874,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     // Of two motifs covering the same sites, the one more enriched keeps them.
     found.sort_by(|a, b| a.eval.ln_pvalue.total_cmp(&b.eval.ln_pvalue));
     let mut dropped = vec![false; found.len()];
+    let counts: Vec<u64> = found.iter().map(|f| f.eval.covered.count()).collect();
     for i in 0..found.len() {
         if dropped[i] {
             continue;
@@ -836,15 +883,8 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
             if dropped[j] {
                 continue;
             }
-            let (mut inter, mut si, mut sj) = (0u64, 0u64, 0u64);
-            for (ci, cj) in found[i].eval.covered.iter().zip(&found[j].eval.covered) {
-                for (&a, &b) in ci.iter().zip(cj) {
-                    inter += (a && b) as u64;
-                    si += a as u64;
-                    sj += b as u64;
-                }
-            }
-            let smin = si.min(sj);
+            let inter = found[i].eval.covered.shared(&found[j].eval.covered);
+            let smin = counts[i].min(counts[j]);
             if smin > 0 && inter as f64 / smin as f64 > opts.dedup_overlap {
                 dropped[j] = true;
             }

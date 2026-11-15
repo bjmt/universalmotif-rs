@@ -5,6 +5,8 @@
 //! hits are taken in order of priority, with ties going to the earlier hit, and
 //! kept unless they overlap a hit already kept.
 
+use std::collections::BTreeMap;
+
 use crate::motif::Strand;
 
 /// A hit as seen by [`dedup`]. Positions are half-open, and a higher
@@ -54,12 +56,16 @@ pub fn dedup(hits: &[Interval], ignore_strand: bool, ignore_motif: bool) -> Vec<
                 .total_cmp(&hits[a].priority)
                 .then(a.cmp(&b))
         });
-        let mut kept: Vec<(i64, i64)> = Vec::new();
+        // Kept hits never overlap each other, so their ends rise with their
+        // starts, and a hit overlaps one of them exactly when the last to
+        // start before it ends runs past its start.
+        let mut kept: BTreeMap<i64, i64> = BTreeMap::new();
         for i in by_priority {
             let (s, e) = (hits[i].start, hits[i].end);
-            if !kept.iter().any(|&(ks, ke)| s < ke && ks < e) {
+            if !kept.range(..e).next_back().is_some_and(|(_, &ke)| ke > s) {
                 keep[i] = true;
-                kept.push((s, e));
+                let end = kept.entry(s).or_insert(e);
+                *end = (*end).max(e);
             }
         }
     };
@@ -86,4 +92,57 @@ pub fn dedup(hits: &[Interval], ignore_strand: bool, ignore_motif: bool) -> Vec<
         g = g_end;
     }
     keep
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The plain check of every kept hit, which `dedup` must agree with.
+    fn naive(hits: &[Interval]) -> Vec<bool> {
+        let mut ord: Vec<usize> = (0..hits.len()).collect();
+        ord.sort_by(|&a, &b| {
+            hits[b]
+                .priority
+                .total_cmp(&hits[a].priority)
+                .then(a.cmp(&b))
+        });
+        let mut keep = vec![false; hits.len()];
+        let mut kept: Vec<(i64, i64)> = Vec::new();
+        for i in ord {
+            let (s, e) = (hits[i].start, hits[i].end);
+            if !kept.iter().any(|&(ks, ke)| s < ke && ks < e) {
+                keep[i] = true;
+                kept.push((s, e));
+            }
+        }
+        keep
+    }
+
+    #[test]
+    fn agrees_with_checking_every_kept_hit() {
+        let mut x: u64 = 7;
+        let mut next = |m: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) % m
+        };
+        for _ in 0..200 {
+            let hits: Vec<Interval> = (0..60)
+                .map(|_| {
+                    let start = next(200) as i64;
+                    Interval {
+                        sequence: 0,
+                        motif: 0,
+                        strand: Strand::Plus,
+                        start,
+                        end: start + 1 + next(12) as i64,
+                        priority: next(5) as f64,
+                    }
+                })
+                .collect();
+            assert_eq!(dedup(&hits, true, true), naive(&hits));
+        }
+    }
 }

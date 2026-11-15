@@ -148,13 +148,16 @@ impl ScoreDistribution {
         if pvalue >= 1.0 {
             return self.score_min as f64 / 1000.0;
         }
-        for score in self.score_min..=self.score_max {
-            let index = (score as f64 - self.offset) as usize;
-            if self.cdf[index] <= pvalue {
-                return score as f64 / 1000.0;
-            }
+        // The tail probabilities only fall as the score rises, so the first
+        // score at or below the cutoff can be found by bisection.
+        let first = (self.score_min as f64 - self.offset) as usize;
+        let last = (self.score_max as f64 - self.offset) as usize;
+        let above = self.cdf[first..=last].partition_point(|&p| p > pvalue);
+        if first + above > last {
+            f64::INFINITY
+        } else {
+            (self.score_min + above as i64) as f64 / 1000.0
         }
-        f64::INFINITY
     }
 
     /// The lowest and highest possible scores.

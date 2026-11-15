@@ -506,6 +506,7 @@ fn bkg_column<C: Col>(opts: &CompareOptions, n: usize) -> C {
 /// complements are tried, or the parametric grid with its weights.
 fn column_medians<C: Col, S: Scorer>(
     cols: &[Vec<C>],
+    wanted: &[bool],
     opts: &CompareOptions,
     rc_ok: bool,
 ) -> Vec<Vec<f64>> {
@@ -530,8 +531,14 @@ fn column_medians<C: Col, S: Scorer>(
             v
         }
     };
+    // Each column is scored against the whole null, so only the motifs
+    // used as queries, whose medians are looked up, are worked out.
     cols.par_iter()
-        .map(|m| {
+        .zip(wanted.par_iter())
+        .map(|(m, &want)| {
+            if !want {
+                return Vec::new();
+            }
             m.iter()
                 .map(|q| {
                     let q = S::careful_prepare(q);
@@ -584,6 +591,7 @@ enum Extras {
 impl Extras {
     fn new<C: Col, S: Scorer>(
         cols: &[Vec<C>],
+        queries: &[bool],
         n_letters: usize,
         opts: &CompareOptions,
         rc_ok: bool,
@@ -593,7 +601,7 @@ impl Extras {
         };
         if opts.complete {
             Extras::Medians(
-                column_medians::<C, S>(cols, opts, rc_ok)
+                column_medians::<C, S>(cols, queries, opts, rc_ok)
                     .into_iter()
                     .map(|m| {
                         let rev = m.iter().rev().copied().collect();
@@ -804,7 +812,11 @@ fn align_with<C: Col, S: Scorer>(
         return arg_err("motif index out of range");
     }
     with_threads(opts.nthreads, || {
-        let extras = Extras::new::<C, S>(&cols, motifs[0].alphabet.len(), opts, rc_ok);
+        let mut queries = vec![false; cols.len()];
+        for &(q, _) in pairs {
+            queries[q] = true;
+        }
+        let extras = Extras::new::<C, S>(&cols, &queries, motifs[0].alphabet.len(), opts, rc_ok);
         pairs
             .par_iter()
             .map(|&(q, t)| {
@@ -1069,7 +1081,8 @@ fn alignment_pvalues_with<C: Col, S: Scorer>(
         Vec::new()
     };
     let per_query: Vec<Vec<(usize, f64)>> = with_threads(opts.nthreads, || {
-        let extras = Extras::new::<C, S>(&cols, n_letters, opts, rc_ok);
+        let queries: Vec<bool> = by_query.iter().map(|ks| !ks.is_empty()).collect();
+        let extras = Extras::new::<C, S>(&cols, &queries, n_letters, opts, rc_ok);
         by_query
             .par_iter()
             .enumerate()
