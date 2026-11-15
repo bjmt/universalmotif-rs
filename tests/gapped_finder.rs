@@ -77,6 +77,25 @@ fn finds_it_without_holding_sequences_out() {
 }
 
 #[test]
+fn takes_long_gaps_and_letters_outside_ascii() {
+    let mut seqs = direct_repeats(300, 7);
+    seqs[0].insert(0, 'é');
+    let found = find(
+        &seqs,
+        GappedFinderOptions {
+            max_gap: 100,
+            ..options()
+        },
+    );
+    assert_eq!(found.len(), 1);
+    assert!(found[0].motif.gap.isgapped);
+}
+
+fn find(seqs: &[String], opts: GappedFinderOptions) -> Vec<universalmotif::gapped::GappedMotif> {
+    gapped_motif_finder(seqs, None, &opts).unwrap()
+}
+
+#[test]
 fn finds_nothing_in_random_sequences() {
     let mut rng = Lcg(11);
     let seqs: Vec<String> = (0..300).map(|_| rng.dna(150)).collect();

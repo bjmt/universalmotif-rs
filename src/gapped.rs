@@ -289,12 +289,9 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
     if !(0.0..0.9).contains(&opts.holdout) {
         return arg_err("holdout must be in [0, 0.9)");
     }
-    let pos: Vec<String> = sequences
-        .iter()
-        .map(|s| s.as_ref().to_ascii_uppercase())
-        .collect();
+    let pos: Vec<String> = sequences.iter().map(|s| dna_text(s.as_ref())).collect();
     let neg: Vec<String> = match negatives {
-        Some(n) => n.iter().map(|s| s.as_ref().to_ascii_uppercase()).collect(),
+        Some(n) => n.iter().map(|s| dna_text(s.as_ref())).collect(),
         None => shuffle_sequences(
             &pos,
             &ShuffleOptions {
@@ -688,7 +685,7 @@ impl Search<'_> {
         let (lo, hi) = (self.opts.min_gap, self.opts.max_gap);
         // Spacings beyond those searched show how often the parts meet by
         // chance when they do not depend on each other.
-        let ext = 100.min(hi + 20.max(hi - lo + 1));
+        let ext = hi + 20.max(hi - lo + 1);
         let wide = normalize(&add_gap(motif, Some(&[wl]), &[lo], &[ext])?)?;
         let hp = self.scan_in(&wide, pos)?;
         let hn = self.scan_in(&wide, neg)?;
@@ -711,7 +708,7 @@ impl Search<'_> {
         // to the room the sequences leave for it, which the spacings beyond
         // those searched measure.
         let n_in = hi - lo + 1;
-        let flat = |seqs: &[String], counts: &[f64]| -> Vec<f64> {
+        let flat = |seqs: &[String], counts: &[f64]| -> Option<Vec<f64>> {
             let room: Vec<f64> = (lo..=ext)
                 .map(|g| {
                     seqs.iter()
@@ -721,12 +718,19 @@ impl Search<'_> {
                 .collect();
             let tail_hits: f64 = counts[n_in..].iter().sum();
             let tail_room: f64 = room[n_in..].iter().sum();
-            room.iter()
-                .map(|r| r * (tail_hits + 1.0) / tail_room.max(1.0))
-                .collect()
+            (tail_room > 0.0).then(|| {
+                room.iter()
+                    .map(|r| r * (tail_hits + 1.0) / tail_room)
+                    .collect()
+            })
         };
-        let flat_pos = flat(&pos.text, &cp);
-        let flat_neg = flat(&neg.text, &cn);
+        // Sequences too short for any spacing beyond those searched leave no
+        // way to tell a favoured spacing from chance.
+        let Some(flat_pos) = flat(&pos.text, &cp) else {
+            return Ok(None);
+        };
+        // Without that room in the negatives, their clustering is left out.
+        let flat_neg = flat(&neg.text, &cn).unwrap_or_else(|| cn.clone());
         // Parts made of letters that run together, as in A-rich stretches,
         // meet at short spacings more often than independent placement
         // allows, in the background as well; how much more, shrunk towards
@@ -1057,7 +1061,10 @@ fn strong_span(ic: &[f64], min_ic: f64) -> (usize, usize) {
 
 /// The natural log of P(X >= x) for X Poisson with mean mu.
 fn ln_poisson_upper(x: u64, mu: f64) -> f64 {
-    if x == 0 {
+    // At or below the mean the tail holds about half the distribution or
+    // more, and the terms summed below would miss most of it, so it is taken
+    // as 1.
+    if x == 0 || x as f64 <= mu {
         return 0.0;
     }
     let mu = mu.max(1e-12);
@@ -1067,6 +1074,20 @@ fn ln_poisson_upper(x: u64, mu: f64) -> f64 {
         .collect();
     let top = terms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     (top + terms.iter().map(|t| (t - top).exp()).sum::<f64>().ln()).min(0.0)
+}
+
+/// A sequence in upper case, with letters outside ASCII, which never match,
+/// as N, so that sites can be cut out by position.
+fn dna_text(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii() {
+                c.to_ascii_uppercase()
+            } else {
+                'N'
+            }
+        })
+        .collect()
 }
 
 fn n_unique(seqs: &[u32]) -> u64 {
@@ -1135,7 +1156,10 @@ mod tests {
 
     #[test]
     fn poisson_tail() {
-        assert!((ln_poisson_upper(1, 1.0) - (1.0 - (-1.0f64).exp()).ln()).abs() < 1e-9);
+        assert!((ln_poisson_upper(2, 1.0) - (1.0 - 2.0 * (-1.0f64).exp()).ln()).abs() < 1e-9);
         assert_eq!(ln_poisson_upper(0, 3.0), 0.0);
+        // Counts at or below the mean are no evidence at all.
+        assert_eq!(ln_poisson_upper(50, 500.0), 0.0);
+        assert_eq!(ln_poisson_upper(10, 1000.0), 0.0);
     }
 }
