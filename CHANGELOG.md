@@ -40,6 +40,10 @@ Changes in behaviour:
 
 Other changes:
 
+- `gapped::gapped_motif_finder()` discovers motifs made of two parts with a
+  spacer of varying length, testing each in sequences held out from the
+  search, from pairs of k-mers counted at every spacing by
+  `finder::spaced_pairs()`.
 - `MergeSimilarOptions::linkage` with `MergeLinkage::Complete` joins only
   motifs that are all similar to each other, and `MergedClusters::warnings`
   names a cluster holding more than a quarter of the motifs.

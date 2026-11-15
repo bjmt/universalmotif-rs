@@ -92,6 +92,7 @@ pub mod coocc;
 pub mod dedup;
 pub mod enrich;
 pub mod finder;
+pub mod gapped;
 pub mod genome;
 pub mod io;
 pub mod kmer;

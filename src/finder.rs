@@ -29,6 +29,7 @@ const MIN_REFINE_HITS: u64 = 20;
 const MIN_IC_BITS: f64 = 0.5;
 const AMBIGUITY_SCORE: i32 = -10_000_000;
 const MAX_CDF_SIZE: u64 = 2_097_152;
+const MAX_SPACED_PAIRS: usize = 65_536;
 const COMP4: [usize; 4] = [3, 2, 1, 0];
 
 const fn char_table() -> [u8; 256] {
@@ -921,5 +922,250 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
             log10_qvalue: ln_qv / std::f64::consts::LN_10,
         });
     }
+    Ok(out)
+}
+
+/// A pair of k-mers at a range of spacings, with the number of positive and
+/// negative sequences holding it and its enrichment.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct SpacedPair {
+    /// The first k-mer, two bits per letter in ACGT order, first letter
+    /// highest.
+    pub left: u64,
+    /// The second k-mer.
+    pub right: u64,
+    /// The fewest letters between them.
+    pub gap: usize,
+    /// The number of spacings, from `gap` up, that the pair may have.
+    pub width: usize,
+    /// Positive sequences holding the pair at one of these spacings.
+    pub positives: u32,
+    /// Negative sequences holding it.
+    pub negatives: u32,
+    /// The natural log of the one-sided Fisher's exact test P-value of the
+    /// pair being more common in the positive sequences.
+    pub ln_pvalue: f64,
+}
+
+/// Maps a pair and the index of its spacing to the slots it counts in.
+type Slots<'a> = dyn Fn(usize, usize, &mut dyn FnMut(usize)) + Sync + 'a;
+
+/// Count every pair of `k`-mers separated by `min_gap` to `max_gap` letters
+/// in each set of sequences, once per sequence, both at each spacing and
+/// within windows of 2, 4, 8 and 16 neighbouring spacings, so that a pair
+/// whose spacing varies is counted as a whole, and test the pairs found in
+/// at least `min_count` positive sequences for enrichment with Fisher's
+/// exact test, most enriched first. Windows wider than 2 start every half
+/// width. With `rc`, a pair and its reverse complement, the reverse
+/// complement of the second k-mer then of the first at the same spacing,
+/// count as one, given as the smaller of the two. Windows with letters
+/// other than A, C, G and T are skipped.
+///
+/// With `mismatch`, each pair also counts for every pair one letter away
+/// from it, so that a pair is counted in each sequence holding it with at
+/// most one mismatch.
+///
+/// Pairs are first counted over all spacings together, in the positive
+/// sequences only, and only those found in at least `min_count` of them are
+/// then counted spacing by spacing, which keeps memory to the pairs that can
+/// pass. If more than 65,536 pairs are that common, only the 65,536 most
+/// enriched over all spacings together are counted spacing by spacing.
+#[allow(clippy::too_many_arguments)]
+pub fn spaced_pairs<S: AsRef<str> + Sync>(
+    positives: &[S],
+    negatives: &[S],
+    k: usize,
+    min_gap: usize,
+    max_gap: usize,
+    rc: bool,
+    min_count: u32,
+    mismatch: bool,
+    nthreads: usize,
+) -> Result<Vec<SpacedPair>> {
+    if !(2..=6).contains(&k) {
+        return arg_err("k must be from 2 to 6");
+    }
+    if min_gap > max_gap || max_gap > 100 {
+        return arg_err("gaps must satisfy min_gap <= max_gap <= 100");
+    }
+    let min_count = min_count.max(1);
+    let n_gaps = max_gap - min_gap + 1;
+    // Windows of spacings, as (first spacing, width), each spacing's
+    // windows listed with it.
+    let mut windows: Vec<(usize, usize)> = Vec::new();
+    for w in [1usize, 2, 4, 8, 16] {
+        if w > n_gaps {
+            break;
+        }
+        let step = if w <= 2 { 1 } else { w / 2 };
+        let mut st = 0;
+        loop {
+            windows.push((st, w));
+            if st + w >= n_gaps {
+                break;
+            }
+            st = (st + step).min(n_gaps - w);
+        }
+    }
+    let n_windows = windows.len();
+    let of_gap: Vec<Vec<u32>> = (0..n_gaps)
+        .map(|g| {
+            windows
+                .iter()
+                .enumerate()
+                .filter(|(_, (st, w))| *st <= g && g < st + w)
+                .map(|(i, _)| i as u32)
+                .collect()
+        })
+        .collect();
+    let n_kmers = 1usize << (2 * k);
+    let n_pairs = n_kmers * n_kmers;
+    let threads = nthreads.max(1);
+    // Every pair in a sequence with the index of its spacing.
+    let each_pair = |seq: &S, codes: &mut Vec<Option<u64>>, f: &mut dyn FnMut(usize, usize)| {
+        let bytes = seq.as_ref().as_bytes();
+        if bytes.len() < 2 * k + min_gap {
+            return;
+        }
+        codes.clear();
+        codes.extend((0..=bytes.len() - k).map(|i| kmer_encode(bytes, k, i)));
+        for i in 0..codes.len() {
+            let Some(a) = codes[i] else { continue };
+            for g in min_gap..=max_gap {
+                let j = i + k + g;
+                if j >= codes.len() {
+                    break;
+                }
+                let Some(b) = codes[j] else { continue };
+                // The pair as one 2k-mer, whose reverse complement is the
+                // reverse complement of the second k-mer then of the first.
+                let pair = (a << (2 * k)) | b;
+                let rev = rc_kmer(pair, 2 * k);
+                let canon = |p: u64, r: u64| (if rc { p.min(r) } else { p }) as usize;
+                f(canon(pair, rev), g - min_gap);
+                if mismatch {
+                    // A letter changed at one end changes its complement at
+                    // the other end of the reverse complement the same way.
+                    for i in 0..2 * k {
+                        let (sh, rsh) = (2 * i, 2 * (2 * k - 1 - i));
+                        for x in 1..4u64 {
+                            f(canon(pair ^ (x << sh), rev ^ (x << rsh)), g - min_gap);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    // Presence counts over `len` slots, each slot counted once per sequence
+    // through a bit set cleared after each one, summed over chunks of
+    // sequences run in parallel.
+    let count = |seqs: &[S], len: usize, slots: &Slots| {
+        let chunk = seqs.len().div_ceil(threads).max(1);
+        let parts: Vec<Vec<u32>> = with_threads(threads, || {
+            seqs.par_chunks(chunk)
+                .map(|part| {
+                    let mut counts = vec![0u32; len];
+                    let mut seen = vec![0u64; len.div_ceil(64)];
+                    let mut touched: Vec<usize> = Vec::new();
+                    let mut codes: Vec<Option<u64>> = Vec::new();
+                    for seq in part {
+                        each_pair(seq, &mut codes, &mut |pair, gi| {
+                            slots(pair, gi, &mut |p| {
+                                let (word, bit) = (p / 64, 1u64 << (p % 64));
+                                if seen[word] & bit == 0 {
+                                    seen[word] |= bit;
+                                    touched.push(p);
+                                    counts[p] += 1;
+                                }
+                            })
+                        });
+                        for &p in &touched {
+                            seen[p / 64] = 0;
+                        }
+                        touched.clear();
+                    }
+                    counts
+                })
+                .collect()
+        })?;
+        let mut total = vec![0u32; len];
+        for part in parts {
+            for (t, v) in total.iter_mut().zip(part) {
+                *t += v;
+            }
+        }
+        Ok::<_, crate::error::Error>(total)
+    };
+    let (n_pos, n_neg) = (positives.len() as u64, negatives.len() as u64);
+    let lf = LogFact::new((n_pos + n_neg) as usize);
+    // Pairs at any spacing, in the positives.
+    let mut index = count(positives, n_pairs, &|pair, _, f| f(pair))?;
+    let n_kept = index.iter().filter(|&&c| c >= min_count).count();
+    let mut kept: Vec<usize> = Vec::with_capacity(n_kept);
+    kept.extend((0..n_pairs).filter(|&p| index[p] >= min_count));
+    if kept.len() > MAX_SPACED_PAIRS {
+        // Too many to count spacing by spacing: keep those most enriched
+        // over all spacings together.
+        let any_neg = count(negatives, n_pairs, &|pair, _, f| f(pair))?;
+        let mut scored: Vec<(f64, usize)> = Vec::with_capacity(kept.len());
+        scored.extend(kept.iter().map(|&p| {
+            let (c, d) = (index[p] as u64, any_neg[p] as u64);
+            (ln_fisher_greater(&lf, c, n_pos - c, d, n_neg - d), p)
+        }));
+        drop(any_neg);
+        scored.select_nth_unstable_by(MAX_SPACED_PAIRS - 1, |a, b| a.0.total_cmp(&b.0));
+        kept.clear();
+        kept.extend(scored[..MAX_SPACED_PAIRS].iter().map(|&(_, p)| p));
+        kept.sort_unstable();
+    }
+    index.fill(u32::MAX);
+    // A bit per pair, small enough to stay in cache, rules out most pairs
+    // before the index is read.
+    let mut is_kept = vec![0u64; n_pairs.div_ceil(64)];
+    for (i, &p) in kept.iter().enumerate() {
+        index[p] = i as u32;
+        is_kept[p / 64] |= 1 << (p % 64);
+    }
+    // The pairs kept, window by window.
+    let by_window = |pair: usize, gi: usize, f: &mut dyn FnMut(usize)| {
+        if is_kept[pair / 64] & (1 << (pair % 64)) == 0 {
+            return;
+        }
+        let i = index[pair];
+        if i != u32::MAX {
+            let base = i as usize * n_windows;
+            for &win in &of_gap[gi] {
+                f(base + win as usize);
+            }
+        }
+    };
+    let len = kept.len() * n_windows;
+    let pos = count(positives, len, &by_window)?;
+    let neg = count(negatives, len, &by_window)?;
+    // Sized up front: growing a vector this large by reallocation leaves
+    // memory behind with some allocators.
+    let mut out: Vec<SpacedPair> =
+        Vec::with_capacity(pos.iter().filter(|&&c| c >= min_count).count());
+    out.extend(
+        pos.iter()
+            .enumerate()
+            .filter(|&(_, &c)| c >= min_count)
+            .map(|(p, &c)| {
+                let (st, w) = windows[p % n_windows];
+                let pair = kept[p / n_windows];
+                let d = neg[p] as u64;
+                SpacedPair {
+                    left: (pair / n_kmers) as u64,
+                    right: (pair % n_kmers) as u64,
+                    gap: min_gap + st,
+                    width: w,
+                    positives: c,
+                    negatives: d as u32,
+                    ln_pvalue: ln_fisher_greater(&lf, c as u64, n_pos - c as u64, d, n_neg - d),
+                }
+            }),
+    );
+    out.sort_by(|a, b| a.ln_pvalue.total_cmp(&b.ln_pvalue));
     Ok(out)
 }
