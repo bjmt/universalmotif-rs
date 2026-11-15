@@ -1,4 +1,12 @@
 //! HOMER motif files.
+//!
+//! # References
+//!
+//! - Heinz S, Benner C, Spann N, Bertolino E, Lin YC, Laslo P, Cheng JX, Murre
+//!   C, et al. (2010). Simple combinations of lineage-determining transcription
+//!   factors prime cis-regulatory elements required for macrophage and B cell
+//!   identities. *Molecular Cell* 38(4):576–589.
+//!   <https://doi.org/10.1016/j.molcel.2010.05.004>
 
 use super::{content_lines, fmt_err, format_fixed, format_r_number, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;

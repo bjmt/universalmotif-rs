@@ -236,6 +236,13 @@ pub fn ln_fisher_greater(a: u64, b: u64, c: u64, d: u64) -> f64 {
 /// logs, counting `m` tests in all; tests not given are taken to have larger
 /// P-values. With `m` equal to the number given, these are the logs of
 /// [`p_adjust_bh`].
+///
+/// # References
+///
+/// - Benjamini Y, Hochberg Y (1995). Controlling the false discovery rate: a
+///   practical and powerful approach to multiple testing. *Journal of the Royal
+///   Statistical Society: Series B* 57(1):289–300.
+///   <https://doi.org/10.1111/j.2517-6161.1995.tb02031.x>
 pub fn ln_p_adjust_bh(ln_p: &[f64], m: f64) -> Vec<f64> {
     let n = ln_p.len();
     let mut order: Vec<usize> = (0..n).collect();
@@ -251,6 +258,13 @@ pub fn ln_p_adjust_bh(ln_p: &[f64], m: f64) -> Vec<f64> {
 }
 
 /// Benjamini-Hochberg adjusted P-values.
+///
+/// # References
+///
+/// - Benjamini Y, Hochberg Y (1995). Controlling the false discovery rate: a
+///   practical and powerful approach to multiple testing. *Journal of the Royal
+///   Statistical Society: Series B* 57(1):289–300.
+///   <https://doi.org/10.1111/j.2517-6161.1995.tb02031.x>
 pub fn p_adjust_bh(p: &[f64]) -> Vec<f64> {
     let n = p.len();
     let mut order: Vec<usize> = (0..n).collect();

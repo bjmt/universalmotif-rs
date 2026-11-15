@@ -14,6 +14,13 @@
 //! Every motif is scored on its own, in a single pass, so motifs that share a
 //! site all have hits there, where a caller that fits all the motifs to each
 //! input at once makes them compete for the same scores.
+//!
+//! # References
+//!
+//! - Shrikumar A, Tian K, Avsec Ž, Shcherbina A, Banerjee A, Sharmin M, Nair S,
+//!   Kundaje A (2018). Technical note on transcription factor motif discovery
+//!   from importance scores (TF-MoDISco) version 0.5.6.5. arXiv:1811.00416.
+//!   <https://doi.org/10.48550/arXiv.1811.00416>
 
 use rayon::prelude::*;
 

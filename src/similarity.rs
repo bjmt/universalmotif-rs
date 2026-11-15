@@ -8,6 +8,13 @@
 //! here work on the whole signed matrices instead, as TF-MoDISco and the
 //! tools around it compare patterns. As in [`crate::compare`], the gaps of
 //! gapped CWMs are not used.
+//!
+//! # References
+//!
+//! - Shrikumar A, Tian K, Avsec Ž, Shcherbina A, Banerjee A, Sharmin M, Nair S,
+//!   Kundaje A (2018). Technical note on transcription factor motif discovery
+//!   from importance scores (TF-MoDISco) version 0.5.6.5. arXiv:1811.00416.
+//!   <https://doi.org/10.48550/arXiv.1811.00416>
 
 use std::str::FromStr;
 

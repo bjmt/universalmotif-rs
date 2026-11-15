@@ -1,4 +1,5 @@
-//! De novo motif discovery with [`motif_finder`].
+//! De novo motif discovery with [`motif_finder`], a minimal STREME-like
+//! search (Bailey 2021).
 //!
 //! For each motif width, k-mer seeds enriched in the positive sequences, by
 //! Fisher's exact test on per-sequence presence, are grown into PPMs from their
@@ -724,6 +725,23 @@ pub(crate) fn finder_background<S: AsRef<str>>(pos: &[S], neg: &[S]) -> [f64; 4]
 /// q-values count every word tested at every width. This accounts for most of
 /// the search, though not for the refinement of each motif from its word, so
 /// the P-values remain somewhat optimistic.
+///
+/// Shuffled negatives suit sequences without much structure, but genomic
+/// sequences hold many loose repeats, such as GA-rich stretches, that
+/// shuffling breaks up, so such repeats come back as motifs enriched over the
+/// shuffles even in regions with nothing to find. For genomic sequences,
+/// negatives drawn from the genome and matched for composition, as from
+/// [`crate::background::match_bkg`], give far fewer false motifs.
+///
+/// # References
+///
+/// - Bailey TL (2021). STREME: accurate and versatile sequence motif discovery.
+///   *Bioinformatics* 37(18):2834–2840.
+///   <https://doi.org/10.1093/bioinformatics/btab203>
+/// - Benjamini Y, Hochberg Y (1995). Controlling the false discovery rate: a
+///   practical and powerful approach to multiple testing. *Journal of the Royal
+///   Statistical Society: Series B* 57(1):289–300.
+///   <https://doi.org/10.1111/j.2517-6161.1995.tb02031.x>
 pub fn motif_finder<S: AsRef<str> + Sync>(
     sequences: &[S],
     negatives: Option<&[S]>,

@@ -4,6 +4,14 @@
 //! fraction into equal-width bins over [0, 1], by length into quantile bins and
 //! by any extra covariates, and each target draws background sequences from its
 //! own bin, widening the search ring by ring when the bin runs short.
+//!
+//! # References
+//!
+//! - Heinz S, Benner C, Spann N, Bertolino E, Lin YC, Laslo P, Cheng JX, Murre
+//!   C, et al. (2010). Simple combinations of lineage-determining transcription
+//!   factors prime cis-regulatory elements required for macrophage and B cell
+//!   identities. *Molecular Cell* 38(4):576–589.
+//!   <https://doi.org/10.1016/j.molcel.2010.05.004>
 
 use std::collections::HashMap;
 

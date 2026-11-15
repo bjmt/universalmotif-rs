@@ -5,6 +5,11 @@
 //! motif was built from with [`read_sites`], the per-site P-values with
 //! [`read_site_pvalues`] and the combined block diagrams with
 //! [`read_combined`].
+//!
+//! # References
+//!
+//! - Bailey TL, Johnson J, Grant CE, Noble WS (2015). The MEME Suite. *Nucleic
+//!   Acids Research* 43(W1):W39–W49. <https://doi.org/10.1093/nar/gkv416>
 
 use super::{content_lines, fmt_err, format_fixed, format_r_number, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;

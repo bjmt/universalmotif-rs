@@ -1,4 +1,12 @@
 //! JASPAR count matrices.
+//!
+//! # References
+//!
+//! - Rauluseviciute I, Riudavets-Puig R, Blanc-Mathieu R, Castro-Mondragon JA,
+//!   Ferenc K, Kumar V, Lemma RB, Lucas J, et al. (2024). JASPAR 2024: 20th
+//!   anniversary of the open-access database of transcription factor binding
+//!   profiles. *Nucleic Acids Research* 52(D1):D174–D182.
+//!   <https://doi.org/10.1093/nar/gkad1059>
 
 use super::{content_lines, fmt_err, join_lines, num};
 use crate::alphabet::Alphabet;

@@ -47,6 +47,16 @@ pub(crate) fn shuffle_in_place<T>(rng: &mut StdRng, v: &mut [T]) {
 }
 
 /// How sequences are shuffled when `k > 1`.
+///
+/// # References
+///
+/// - Altschul SF, Erickson BW (1985). Significance of nucleotide sequence
+///   alignments: a method for random sequence permutation that preserves
+///   dinucleotide and codon usage. *Molecular Biology and Evolution*
+///   2(6):526–538. <https://doi.org/10.1093/oxfordjournals.molbev.a040370>
+/// - Jiang M, Anderson J, Gillespie J, Mayne M (2008). uShuffle: a useful tool
+///   for shuffling biological sequences while preserving the k-let counts. *BMC
+///   Bioinformatics* 9:192. <https://doi.org/10.1186/1471-2105-9-192>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum ShuffleMethod {
@@ -524,6 +534,16 @@ impl Default for CodeShuffleOptions {
 /// }
 /// # Ok::<(), universalmotif::Error>(())
 /// ```
+///
+/// # References
+///
+/// - Shrikumar A, Greenside P, Kundaje A (2017). Learning important features
+///   through propagating activation differences. *Proceedings of the 34th
+///   International Conference on Machine Learning*, PMLR 70:3145–3153.
+///   <https://proceedings.mlr.press/v70/shrikumar17a.html>
+/// - Lundberg SM, Lee SI (2017). A unified approach to interpreting model
+///   predictions. *Advances in Neural Information Processing Systems*
+///   30:4765–4774. <https://arxiv.org/abs/1705.07874>
 pub fn shuffle_codes(
     codes: &[u8],
     length: usize,

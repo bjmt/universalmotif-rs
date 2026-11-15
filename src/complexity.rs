@@ -10,6 +10,19 @@ use crate::kmer::windows;
 use crate::pvalue::with_threads;
 
 /// Complexity measure.
+///
+/// # References
+///
+/// - Wootton JC, Federhen S (1993). Statistics of local complexity in amino
+///   acid sequences and sequence databases. *Computers & Chemistry*
+///   17(2):149–163. <https://doi.org/10.1016/0097-8485(93)85006-X>
+/// - Trifonov EN (1990). Making sense of the human genome. In Sarma RH, Sarma
+///   MH (eds), *Structure & Methods, Volume 1: Human Genome Initiative & DNA
+///   Recombination*, 69–77. Adenine Press.
+/// - Morgulis A, Gertz EM, Schäffer AA, Agarwala R (2006). A fast and symmetric
+///   DUST implementation to mask low-complexity DNA sequences. *Journal of
+///   Computational Biology* 13(5):1028–1040.
+///   <https://doi.org/10.1089/cmb.2006.13.1028>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum ComplexityMethod {

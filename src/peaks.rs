@@ -6,6 +6,15 @@
 //! windows of several widths are tested, centred on the middle of the sequences
 //! or anywhere along them, and the best window's binomial P-value is
 //! Bonferroni-corrected for the number of windows tried.
+//!
+//! # References
+//!
+//! - Bailey TL, Machanick P (2012). Inferring direct DNA binding from ChIP-seq.
+//!   *Nucleic Acids Research* 40(17):e128. <https://doi.org/10.1093/nar/gks433>
+//! - Benjamini Y, Hochberg Y (1995). Controlling the false discovery rate: a
+//!   practical and powerful approach to multiple testing. *Journal of the Royal
+//!   Statistical Society: Series B* 57(1):289–300.
+//!   <https://doi.org/10.1111/j.2517-6161.1995.tb02031.x>
 
 use rayon::prelude::*;
 

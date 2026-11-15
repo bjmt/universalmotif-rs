@@ -1,4 +1,10 @@
 //! FASTA sequence files.
+//!
+//! # References
+//!
+//! - Pearson WR, Lipman DJ (1988). Improved tools for biological sequence
+//!   comparison. *Proceedings of the National Academy of Sciences*
+//!   85(8):2444–2448. <https://doi.org/10.1073/pnas.85.8.2444>
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};

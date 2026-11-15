@@ -1,4 +1,11 @@
 //! TRANSFAC matrices.
+//!
+//! # References
+//!
+//! - Matys V, Kel-Margoulis OV, Fricke E, et al. (2006). TRANSFAC and its
+//!   module TRANSCompel: transcriptional gene regulation in eukaryotes.
+//!   *Nucleic Acids Research* 34(suppl_1):D108–D110.
+//!   <https://doi.org/10.1093/nar/gkj143>
 
 use super::{content_lines, fmt_err, format_r_number, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;

@@ -1,4 +1,11 @@
 //! UniPROBE motif files.
+//!
+//! # References
+//!
+//! - Hume MA, Barrera LA, Gisselbrecht SS, Bulyk ML (2015). UniPROBE, update
+//!   2015: new tools and content for the online database of protein-binding
+//!   microarray data on protein–DNA interactions. *Nucleic Acids Research*
+//!   43(D1):D117–D122. <https://doi.org/10.1093/nar/gku1045>
 
 use super::{content_lines, fmt_err, format_shortest, join_lines, num};
 use crate::alphabet::Alphabet;

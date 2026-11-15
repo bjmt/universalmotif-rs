@@ -1,4 +1,11 @@
 //! CIS-BP motif files.
+//!
+//! # References
+//!
+//! - Weirauch MT, Yang A, Albu M, Cote AG, Montenegro-Montero A, Drewe P,
+//!   Najafabadi HS, Lambert SA, et al. (2014). Determination and inference of
+//!   eukaryotic transcription factor sequence specificity. *Cell*
+//!   158(6):1431–1443. <https://doi.org/10.1016/j.cell.2014.08.009>
 
 use super::{content_lines, fmt_err, format_shortest, join_lines, num, parse_num};
 use crate::alphabet::Alphabet;

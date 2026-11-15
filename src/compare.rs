@@ -327,6 +327,12 @@ pub enum Overhang {
 }
 
 /// Options for comparisons.
+///
+/// # References
+///
+/// - Gupta S, Stamatoyannopoulos JA, Bailey TL, Noble WS (2007). Quantifying
+///   similarity between motifs. *Genome Biology* 8(2):R24.
+///   <https://doi.org/10.1186/gb-2007-8-2-r24>
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompareOptions {
     /// Fewest overlapping columns an alignment may have, lowered to the width

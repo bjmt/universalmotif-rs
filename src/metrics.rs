@@ -9,6 +9,13 @@ use crate::error::{Result, arg_err};
 use crate::motif::{Motif, MotifType};
 
 /// A column similarity or distance metric.
+///
+/// # References
+///
+/// - Sandelin A, Wasserman WW (2004). Constrained binding site diversity within
+///   families of transcription factors enhances pattern discovery
+///   bioinformatics. *Journal of Molecular Biology* 338(2):207–215.
+///   <https://doi.org/10.1016/j.jmb.2004.02.048>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ColumnMetric {

@@ -355,6 +355,13 @@ fn dust_unchecked(seq: &[u8], opts: &DustOptions) -> Vec<(usize, usize)> {
 /// not overlap. Letters other than A, C, G, T and U, in either case, split
 /// the sequence into parts that are scored separately. With
 /// `opts.lowercase`, lowercase letters are included as well.
+///
+/// # References
+///
+/// - Morgulis A, Gertz EM, Schäffer AA, Agarwala R (2006). A fast and symmetric
+///   DUST implementation to mask low-complexity DNA sequences. *Journal of
+///   Computational Biology* 13(5):1028–1040.
+///   <https://doi.org/10.1089/cmb.2006.13.1028>
 pub fn dust_intervals(seq: &str, opts: &DustOptions) -> Result<Vec<(usize, usize)>> {
     check_dust(opts)?;
     Ok(dust_unchecked(seq.as_bytes(), opts))
