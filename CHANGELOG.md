@@ -38,25 +38,21 @@ Changes in behaviour:
   contributions over alignments found by cosine similarity, and
   `merge::merge_similar()` groups CWMs by cosine similarity reaching
   `MergeSimilarOptions::min_score` rather than by q-value.
+- `merge::merge_motifs()` aligns motifs narrower than `min_overlap` over
+  their whole width, as comparisons do, rather than leaving them out.
 - `compare::anchor_layout()` aligns CWMs by the cosine of their
   contributions, through the new `similarity::cwm_anchor_layout()`.
 - `Genome` and `scan_fasta(trim_names = true)` name sequences by the first
   word of the header, and a repeated name is an error.
-- `merge::merge_motifs()` aligns motifs narrower than `min_overlap` over
-  their whole width, as comparisons do, rather than leaving them out.
 - Gap locations must be in increasing order; `ops::add_gap()` refuses
   others, which made printing the motif panic.
 - `scoring::get_scores()` lists at most 16,777,216 scores, as for a DNA
-  motif of 12 columns, where wider motifs ran out of memory, and
-  `shuffle::shuffle_sequences()` refuses a k whose k-mer counts would not
+  motif of 12 columns, where wider motifs ran out of memory.
+- `shuffle::shuffle_sequences()` refuses a k whose k-mer counts would not
   fit in memory.
 
 Other changes:
 
-- Faster: comparisons with `complete: true` (from quadratic in the number
-  of motifs to linear for a few queries), removing overlapping hits in
-  dense clusters, positional enrichment, proximity permutations and
-  deduplication in `finder::motif_finder()`.
 - `gapped::gapped_motif_finder()` discovers motifs made of two parts with a
   spacer of varying length, testing each in sequences held out from the
   search, from pairs of k-mers counted at every spacing by
@@ -83,14 +79,18 @@ Other changes:
   each of a set of sequences given as letter codes, keeping unknown
   letters in place, with each shuffle seeded by its sequence's place in
   the whole set.
+- Faster: comparisons with `complete: true` (from quadratic in the number
+  of motifs to linear for a few queries), removing overlapping hits in
+  dense clusters, positional enrichment, proximity permutations and
+  deduplication in `finder::motif_finder()`.
 
 Fixes:
 
 - `finder::motif_finder()` names its motifs in order of rank, where one
   dropped by its q-value left a number out.
-- `motif_finder()`, `gapped_motif_finder()` and `enrich::enrich_motifs()`
-  leave sequences too short to shuffle as they are in the background they
-  shuffle, where one empty sequence made them fail.
+- `finder::motif_finder()` and `enrich::enrich_motifs()` leave sequences
+  too short to shuffle as they are in the backgrounds they shuffle, where
+  one empty sequence made them fail.
 - Windowed `shuffle::shuffle_sequences()` shuffles sequences shorter than
   the window whole, where it returned them unchanged.
 - `shuffle::create_sequences()` refuses more than one frequency for a
