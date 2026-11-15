@@ -365,8 +365,10 @@ fn build_fai<R: BufRead>(mut reader: R) -> io::Result<FaiIndex> {
     let mut offset = 0u64;
     let mut line = Vec::new();
     // For the record being read: its line layout so far and whether a short
-    // line, which must be its last, has been seen.
+    // line, which must be its last, or a blank line, after which no more
+    // sequence may follow, has been seen.
     let mut short_seen = false;
+    let mut blank_seen = false;
     loop {
         line.clear();
         let n = reader.read_until(b'\n', &mut line)? as u64;
@@ -387,6 +389,7 @@ fn build_fai<R: BufRead>(mut reader: R) -> io::Result<FaiIndex> {
                 line_width: 0,
             });
             short_seen = false;
+            blank_seen = false;
         } else if content > 0 {
             let Some(r) = records.last_mut() else {
                 return Err(bad("sequence before the first FASTA header"));
@@ -396,6 +399,7 @@ fn build_fai<R: BufRead>(mut reader: R) -> io::Result<FaiIndex> {
                 r.line_bases = content;
                 r.line_width = n;
             } else if short_seen
+                || blank_seen
                 || content > r.line_bases
                 // Only the last line of the file can lack its line ending.
                 || (n - content != r.line_width - r.line_bases && line.last() == Some(&b'\n'))
@@ -408,6 +412,9 @@ fn build_fai<R: BufRead>(mut reader: R) -> io::Result<FaiIndex> {
                 short_seen = true;
             }
             *lengths.last_mut().unwrap() += content;
+        } else if records.last().is_some_and(|r| r.line_bases > 0) {
+            // A blank line would put a gap in the offsets of what follows.
+            blank_seen = true;
         }
         offset += n;
     }

@@ -2046,7 +2046,7 @@ fn merge_motifs_with_reverse_complements() {
 }
 
 #[test]
-fn merge_motifs_extends_partial_overlaps_and_skips_short_ones() {
+fn merge_motifs_extends_partial_overlaps_and_keeps_short_ones() {
     let a = sharp_ppm("ACGTAC", 0.97, "a", 10.0);
     let b = sharp_ppm("GTACGG", 0.9, "b", 10.0);
     let merged = merge_motifs_detailed(
@@ -2077,10 +2077,12 @@ fn merge_motifs_extends_partial_overlaps_and_skips_short_ones() {
         },
     )
     .unwrap();
-    assert_eq!(merged.used, vec![0]);
-    assert_eq!(merged.motif.name, "merged_a");
-    assert_matrix_close(&merged.motif.matrix, &a.matrix);
-    assert_eq!(merged.motif.nsites, Some(10.0));
+    // A motif narrower than min_overlap is aligned over its whole width, as
+    // in comparisons, rather than left out.
+    assert_eq!(merged.used, vec![0, 1]);
+    assert_eq!(merged.motif.name, "merged_a+c");
+    assert_eq!(merged.motif.width(), 6);
+    assert_eq!(merged.motif.nsites, Some(20.0));
 }
 
 #[test]

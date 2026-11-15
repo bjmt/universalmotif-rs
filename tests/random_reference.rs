@@ -12,7 +12,7 @@ use universalmotif::complexity::{
 use universalmotif::convert::convert_type;
 use universalmotif::enrich::{EnrichOptions, EnrichTest, Enrichment, enrich_motifs};
 use universalmotif::kmer::{BkgOptions, WindowOptions, get_bkg};
-use universalmotif::merge::{MergeOptions, merge_motifs};
+use universalmotif::merge::{MergeOptions, merge_motifs, merge_motifs_detailed};
 use universalmotif::metrics::{Average, Column, ColumnMetric, average_ic, compare_columns};
 use universalmotif::ops::{TrimFrom, reverse_complement, round_motif, trim_motif};
 use universalmotif::pvalue::{PvalueOptions, motif_pvalue, pvalue_to_score};
@@ -683,6 +683,14 @@ fn merges_match_r() {
             nthreads: 1,
             ..Default::default()
         };
+        // The R package leaves out motifs narrower than min.overlap
+        // (port-bugs.md, "Motifs narrower than min.overlap are never
+        // merged"); the port merges them.
+        if ms.iter().any(|m| m.width() < opts.min_overlap) {
+            let got = merge_motifs_detailed(&ms, &opts).unwrap_or_else(|e| panic!("{ctx}: {e}"));
+            assert_eq!(got.used.len(), ms.len(), "{ctx}");
+            continue;
+        }
         let got = merge_motifs(&ms, &opts).unwrap_or_else(|e| panic!("{ctx}: {e}"));
         assert_motif_eq(&got, &case["motif"], &ctx);
     }

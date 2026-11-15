@@ -37,6 +37,10 @@ Changes in behaviour:
   contributions, through the new `similarity::cwm_anchor_layout()`.
 - `Genome` and `scan_fasta(trim_names = true)` name sequences by the first
   word of the header, and a repeated name is an error.
+- `merge::merge_motifs()` aligns motifs narrower than `min_overlap` over
+  their whole width, as comparisons do, rather than leaving them out.
+- Gap locations must be in increasing order; `ops::add_gap()` refuses
+  others, which made printing the motif panic.
 
 Other changes:
 
@@ -66,6 +70,20 @@ Other changes:
   each of a set of sequences given as letter codes, keeping unknown
   letters in place, with each shuffle seeded by its sequence's place in
   the whole set.
+
+Fixes:
+
+- `finder::motif_finder()` names its motifs in order of rank, where one
+  dropped by its q-value left a number out.
+- `motif_finder()`, `gapped_motif_finder()` and `enrich::enrich_motifs()`
+  leave sequences too short to shuffle as they are in the background they
+  shuffle, where one empty sequence made them fail.
+- Windowed `shuffle::shuffle_sequences()` shuffles sequences shorter than
+  the window whole, where it returned them unchanged.
+- `shuffle::create_sequences()` refuses more than one frequency for a
+  one-letter alphabet, where it looped forever.
+- `genome::Genome` refuses FASTA files with a blank line inside a record,
+  which it read with the bases after it shifted.
 
 ## 0.3.0 (2026-10-29)
 

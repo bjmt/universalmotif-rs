@@ -352,6 +352,12 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
                 if size < opts.k {
                     return arg_err("the window size must be at least k");
                 }
+                // A sequence shorter than the window is shuffled whole.
+                let (size, overlap) = if size > len {
+                    (len, 0)
+                } else {
+                    (size, overlap)
+                };
                 plans.push(windows(len, size, overlap, true));
             }
         }
@@ -391,6 +397,28 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
     })
 }
 
+/// Shuffled copies of sequences for a background, as [`shuffle_sequences`]
+/// gives, except that sequences shorter than `k`, which have nothing to
+/// shuffle, are copied as they are rather than refused.
+pub(crate) fn shuffled_background<S: AsRef<str> + Sync>(
+    seqs: &[S],
+    opts: &ShuffleOptions,
+) -> Result<Vec<String>> {
+    let long: Vec<usize> = (0..seqs.len())
+        .filter(|&i| seqs[i].as_ref().chars().count() >= opts.k)
+        .collect();
+    if long.len() == seqs.len() {
+        return shuffle_sequences(seqs, opts);
+    }
+    let picked: Vec<&str> = long.iter().map(|&i| seqs[i].as_ref()).collect();
+    let mut shuffled = shuffle_sequences(&picked, opts)?.into_iter();
+    let mut out: Vec<String> = seqs.iter().map(|s| s.as_ref().to_string()).collect();
+    for &i in &long {
+        out[i] = shuffled.next().unwrap();
+    }
+    Ok(out)
+}
+
 /// Random sequences of `alphabet` letters.
 ///
 /// `freqs` gives the probabilities of every k-mer of the alphabet in
@@ -412,10 +440,11 @@ pub fn create_sequences(
     let uniform = vec![1.0 / a as f64; a];
     let freqs = freqs.unwrap_or(&uniform);
     let mut k = 1usize;
-    while a.pow(k as u32) < freqs.len() {
+    // With one letter every power is 1, so only one frequency can fit.
+    while a > 1 && a.saturating_pow(k as u32) < freqs.len() {
         k += 1;
     }
-    if a.pow(k as u32) != freqs.len() {
+    if a.saturating_pow(k as u32) != freqs.len() {
         return arg_err("the number of frequencies must be a power of the alphabet size");
     }
     if freqs.iter().any(|f| !f.is_finite() || *f < 0.0) {

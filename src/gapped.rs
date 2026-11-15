@@ -23,7 +23,7 @@ use crate::motif::{Motif, MotifType};
 use crate::ops::{add_gap, normalize};
 use crate::packed::EncodedSequences;
 use crate::scan::{HitTable, NoOverlaps, ScanOptions, scan_encoded};
-use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffle_sequences};
+use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_background};
 use crate::stats::ln_fisher_greater;
 
 /// Options for [`gapped_motif_finder`].
@@ -292,7 +292,7 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
     let pos: Vec<String> = sequences.iter().map(|s| dna_text(s.as_ref())).collect();
     let neg: Vec<String> = match negatives {
         Some(n) => n.iter().map(|s| dna_text(s.as_ref())).collect(),
-        None => shuffle_sequences(
+        None => shuffled_background(
             &pos,
             &ShuffleOptions {
                 k: opts.shuffle_k,

@@ -148,7 +148,9 @@ pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<Me
         }
         let a = &al[i];
         let len = a.overlap as i64;
-        if a.overlap < opts.min_overlap {
+        // The alignment lowers min_overlap to the narrower motif's width, and
+        // so must this check, or narrow motifs would always be left out.
+        if a.overlap < opts.min_overlap.min(m.width()).min(ppms[anchor].width()) {
             continue;
         }
         let t_start = (-a.offset).max(0);
@@ -260,7 +262,7 @@ fn merge_cwms(motifs: &[Motif], alphabet: Alphabet, opts: &MergeOptions) -> Resu
             continue;
         }
         let a = align_cwm_pair(m, &motifs[anchor], &copts)?;
-        if a.overlap < opts.min_overlap {
+        if a.overlap < opts.min_overlap.min(m.width()).min(motifs[anchor].width()) {
             continue;
         }
         let matrix = if a.strand == Strand::Minus {

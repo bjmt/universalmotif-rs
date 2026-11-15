@@ -8,7 +8,8 @@ use universalmotif::Motif;
 use universalmotif::cluster::{Linkage, TreeOptions, hclust, motif_tree};
 use universalmotif::compare::{CompareOptions, NullModel, compare_matrix, compare_motifs};
 use universalmotif::merge::{
-    MergeLinkage, MergeOptions, MergeSimilarOptions, merge_motifs, merge_similar,
+    MergeLinkage, MergeOptions, MergeSimilarOptions, merge_motifs, merge_motifs_detailed,
+    merge_similar,
 };
 
 fn set(name: &str) -> Vec<Motif> {
@@ -193,6 +194,14 @@ fn merges_match_r() {
             weighted: a.get("weighted").and_then(Value::as_bool).unwrap_or(false),
             nthreads: 1,
         };
+        // The R package leaves out motifs narrower than min.overlap
+        // (port-bugs.md, "Motifs narrower than min.overlap are never
+        // merged"); the port merges them.
+        if motifs.iter().any(|m| m.width() < opts.min_overlap) {
+            let got = merge_motifs_detailed(&motifs, &opts).unwrap();
+            assert_eq!(got.used.len(), motifs.len(), "{ctx}");
+            continue;
+        }
         let got = merge_motifs(&motifs, &opts).unwrap();
         assert_motif_eq(&got, &case["motif"], &ctx);
     }

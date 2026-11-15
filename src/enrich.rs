@@ -8,7 +8,7 @@
 use crate::error::{Result, arg_err};
 use crate::motif::Motif;
 use crate::scan::{ScanOptions, scan_table};
-use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffle_sequences};
+use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_background};
 use std::f64::consts::LN_10;
 
 use crate::stats::{fisher_greater, ln_fisher_greater, ln_p_adjust_bh, p_adjust_bh};
@@ -184,7 +184,7 @@ pub fn enrich_motifs<S: AsRef<str> + Sync>(
     let bkg: Vec<&str> = match background {
         Some(b) => b.iter().map(|s| s.as_ref()).collect(),
         None => {
-            shuffled = shuffle_sequences(
+            shuffled = shuffled_background(
                 sequences,
                 &ShuffleOptions {
                     k: opts.shuffle_k,

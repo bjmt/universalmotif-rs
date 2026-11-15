@@ -2346,11 +2346,8 @@ fn unusable_gaps_are_refused() {
     let m = sites(&["ACGTACGTAC"]);
     let seqs = ["ACGTACGTACGTACGT"];
     let opts = ScanOptions::default();
-    let backwards = add_gap(&m, Some(&[6, 3]), &[1], &[2]).unwrap();
-    assert_eq!(
-        arg_msg(scan_table(from_ref(&backwards), &seqs, &opts)),
-        "the gap locations of motif 'motif' must be in increasing order"
-    );
+    // Gap locations out of order are refused when the motif is made.
+    assert!(add_gap(&m, Some(&[6, 3]), &[1], &[2]).is_err());
     let many = add_gap(&m, Some(&[2, 4, 6]), &[0], &[40]).unwrap();
     assert_eq!(
         arg_msg(scan_table(from_ref(&many), &seqs, &opts)),

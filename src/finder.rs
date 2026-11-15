@@ -19,7 +19,7 @@ use crate::error::{Result, arg_err};
 use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType, Strand};
 use crate::pvalue::with_threads;
-use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffle_sequences};
+use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_background};
 
 const HAMMING_MISMATCH: u64 = 1;
 const REFINE_PASSES: usize = 2;
@@ -772,7 +772,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     let neg_strs: Vec<&str> = match negatives {
         Some(n) => n.iter().map(|s| s.as_ref()).collect(),
         None => {
-            shuffled = shuffle_sequences(
+            shuffled = shuffled_background(
                 sequences,
                 &ShuffleOptions {
                     k: opts.shuffle_k,
@@ -866,7 +866,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     );
 
     let mut out = Vec::new();
-    for (i, (f, ln_qv)) in survivors.iter().zip(ln_q).enumerate() {
+    for (f, ln_qv) in survivors.iter().zip(ln_q) {
         let qv = ln_qv.exp();
         let ln_pv = corrected(f);
         // Trim low-information flanks, keeping at least three columns.
@@ -890,7 +890,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
         }
         let copts = CreateOptions {
             motif_type: MotifType::Ppm,
-            name: format!("motif_{}", i + 1),
+            name: format!("motif_{}", out.len() + 1),
             nsites: Some(f.motif.nsites as f64),
             pseudocount: opts.pseudocount as f64,
             bkg: Some(bkg.to_vec()),

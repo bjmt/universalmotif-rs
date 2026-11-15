@@ -243,6 +243,9 @@ impl MotifParts {
                 msg.push("gap location values should not exceed motif size - 1".into());
             }
         }
+        if g.gaploc.windows(2).any(|w| w[0] >= w[1]) {
+            msg.push("gap locations should be in increasing order".into());
+        }
         for (&lo, &hi) in g.mingap.iter().zip(&g.maxgap) {
             if lo > hi {
                 msg.push("mingap cannot be greater than the corresponding maxgap".into());
