@@ -14,9 +14,9 @@ TRANSFAC, CIS-BP, UniPROBE and plain matrices. It is also the engine
 behind the Python version of the package,
 [universalmotif-py](https://github.com/bjmt/universalmotif-py).
 
-Results are checked against the R package itself. Where the two differ, it
-is on purpose. Bugs found in the R package are fixed here, and
-[DIVERGENCES.md](DIVERGENCES.md) explains the other differences.
+Results are checked against the R package itself. Where the two differ it
+is on purpose, either to fix a bug in the R package or for the reasons given
+in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## A quick example
 

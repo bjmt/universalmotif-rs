@@ -4,9 +4,14 @@
 
 Breaking changes:
 
-- `scan::scan_fasta()` takes `trim_names`, and `MergeSimilarOptions` and
-  `MergedClusters` have new fields, so struct literals need them or
-  `..Default::default()`.
+- `scan::scan_fasta()` takes a new argument, `trim_names`.
+- `MergeSimilarOptions` and `MergedClusters` have new fields, so struct
+  literals need them or `..Default::default()`.
+- The enums `compare::Overhang`, `compare::NullModel`,
+  `similarity::CwmMetric`, `merge::MergeLinkage`, `enrich::EnrichTest`,
+  `proximity::ProximityMethod` and `scan::MatchValue`, and the results
+  `pvalue::ScoringMatrix` and `sample::Implant`, are `#[non_exhaustive]`, so
+  a `match` on one of the enums needs a wildcard arm.
 
 Changes in behaviour:
 

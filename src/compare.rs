@@ -295,6 +295,7 @@ fn enum_columns(bkg: &[f64; 4]) -> Vec<([f64; 4], f64)> {
 
 /// The null model column correlations are compared against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum NullModel {
     /// Columns of all the motifs being compared.
     #[default]
@@ -306,6 +307,7 @@ pub enum NullModel {
 /// What the columns of either motif hanging over the ends of the other are
 /// compared with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Overhang {
     /// Nothing: only the overlap is scored.
     #[default]
@@ -336,7 +338,8 @@ pub enum Overhang {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompareOptions {
     /// Fewest overlapping columns an alignment may have, lowered to the width
-    /// of the narrower motif when needed.
+    /// of the narrower motif when needed; 5 by default,
+    /// where trees use 6.
     pub min_overlap: usize,
     /// Also try the reverse complement of each query.
     pub rc: bool,
@@ -1360,7 +1363,7 @@ pub(crate) fn consensus_range(letters: &[char], start: i64, len: usize) -> Strin
 ///     from_strings(&["TGACGTCA"], None, &opts)?,
 ///     from_strings(&["CACGTG"], None, &opts)?,
 /// ];
-/// // The first motif against all three, best matches first.
+/// // The first motif against all three.
 /// for c in compare_motifs(&motifs, &[0], &CompareOptions::default())? {
 ///     println!("{} vs {}: {:.3} (P = {:.2e})", c.query, c.target, c.score, c.pvalue);
 /// }

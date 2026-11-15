@@ -58,7 +58,7 @@ pub struct ContribScanOptions {
     /// Match gapped CWMs with their gaps; otherwise their columns are
     /// matched as if they followed one another.
     pub use_gaps: bool,
-    /// Threads to use, at least 1.
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 

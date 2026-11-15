@@ -8,7 +8,7 @@ use crate::matrix::Matrix;
 use crate::motif::{GapInfo, Motif, MotifType};
 
 /// Reverse complement a DNA or RNA motif. Other alphabets are refused unless
-/// `ignore_alphabet` is set, in which case the rows and columns are simply
+/// `ignore_alphabet` is set, in which case the rows and columns are just
 /// reversed. The total IC and consensus are recomputed; the background is
 /// kept as is.
 pub fn reverse_complement(motif: &Motif, ignore_alphabet: bool) -> Result<Motif> {

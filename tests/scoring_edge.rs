@@ -650,7 +650,8 @@ fn words_are_checked_against_the_motif() {
     let wide = sites_in(&["MKVLAAGG"], Alphabet::Aa);
     assert_eq!(
         arg_msg(get_scores(&wide, false)),
-        "the motif has 25600000000 possible scores, too many to list; use a narrower motif"
+        "the motif has 25600000000 possible scores, more than the 16777216 that can be listed; \
+         use a narrower motif"
     );
 }
 

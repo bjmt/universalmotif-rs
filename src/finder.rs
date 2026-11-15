@@ -658,21 +658,23 @@ pub struct FinderOptions {
     pub min_width: usize,
     /// Widest motif to search for, at most 30; 15 by default.
     pub max_width: usize,
-    /// Most motifs searched for at each width.
+    /// Most motifs searched for at each width; 10 by default.
     pub nmotifs: usize,
-    /// P-value for a site to count as a hit.
+    /// P-value for a site to count as a hit; 1e-4 by default.
     pub hit_pvalue: f64,
-    /// A motif is kept if its hits are enriched with at most this P-value.
+    /// A motif is kept if its hits are enriched with at most this P-value;
+    /// 1e-3 by default.
     pub stop_pvalue: f64,
-    /// Motifs with q-values above this are dropped.
+    /// Motifs with q-values above this are dropped; 0.05 by default.
     pub qvalue: f64,
     /// Fraction of shared site positions above which the less significant
-    /// of two motifs is dropped.
+    /// of two motifs is dropped; 0.5 by default.
     pub dedup_overlap: f64,
-    /// Search both strands. Motifs found without it are for the forward
-    /// strand only, which [`crate::scan`] then respects.
+    /// Search both strands, as by default. Motifs found without it are for
+    /// the forward strand only, which [`crate::scan`] then respects.
     pub rc: bool,
-    /// Shuffling for negative sequences when none are given.
+    /// The size of the k-mers kept when shuffling the sequences into
+    /// negatives, when none are given; 2 by default.
     pub shuffle_k: usize,
     /// Seed for shuffling the sequences into negatives.
     pub seed: u64,
@@ -711,11 +713,11 @@ pub struct FoundMotif {
     pub motif: Motif,
     /// 1-based rank by P-value.
     pub rank: usize,
-    /// Positive and negative sequences with at least one hit.
+    /// Positive sequences with at least one hit.
     pub seqs_pos: u64,
     /// Negative sequences with at least one hit.
     pub seqs_neg: u64,
-    /// Hits in positive and negative sequences.
+    /// Hits in positive sequences.
     pub sites_pos: u64,
     /// Hits in negative sequences.
     pub sites_neg: u64,
@@ -763,7 +765,7 @@ pub(crate) fn finder_background<S: AsRef<str>>(pos: &[S], neg: &[S]) -> [f64; 4]
 }
 
 /// Find motifs enriched in DNA or RNA sequences relative to negative sequences,
-/// which by default are the positives shuffled keeping `shuffle_k`-lets. Motifs
+/// which by default are the positives shuffled keeping k-mers of size `shuffle_k`. Motifs
 /// come back as PPMs named `motif_1`, `motif_2` and so on, in order of P-value,
 /// with the q-value stored as their E-value.
 ///

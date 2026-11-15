@@ -45,6 +45,7 @@ pub(crate) fn with_threads<T: Send>(nthreads: usize, f: impl FnOnce() -> T + Sen
 
 /// The PWM and background a motif is scored with.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScoringMatrix {
     /// The motif as a PWM of log2 odds, with no infinite values.
     pub pwm: Matrix,
@@ -55,7 +56,7 @@ pub struct ScoringMatrix {
     pub pseudocount_added: bool,
 }
 
-/// Prepare the PWM a motif is scored with, as `motif_pvalue()` does.
+/// Prepare the PWM a motif is scored with, as [`motif_pvalue`] does.
 ///
 /// Against its own background, which is the default, the motif's PWM is used
 /// as scanning uses it, because converting back and forth can move entries

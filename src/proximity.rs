@@ -1,8 +1,9 @@
 //! Motif enrichment near genomic anchors, tested by [`motif_proximity`].
 //!
-//! The genome-wide counterpart of [`crate::peaks`]: are a motif's hits closer
-//! to a set of anchor coordinates, such as summits, TSSs or SNPs, than chance
-//! would put them? Each hit is placed at its middle position. For each
+//! The genome-wide counterpart of [`crate::peaks`], testing whether a motif's
+//! hits lie closer to a set of anchor coordinates, such as summits, TSSs or
+//! SNPs, than chance would put them. Each hit is placed at its middle
+//! position. For each
 //! candidate distance `d`, the near zone is every scanned position within `d`
 //! of an anchor; under the null that hits are uniform over the scanned
 //! universe, the number in the zone is binomial. The best distance is
@@ -26,6 +27,7 @@ use crate::stats::{p_adjust_bh, pbinom_upper};
 
 /// The null model of [`motif_proximity`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProximityMethod {
     /// Hits uniform over the universe.
     Binomial,

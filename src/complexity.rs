@@ -183,7 +183,8 @@ pub struct ComplexityOptions {
     /// Window overlap; by default half the window. Values between 0 and 1
     /// are a fraction of each sequence's length.
     pub overlap: Option<f64>,
-    /// Possible letters; by default those in the sequences.
+    /// Possible letters, added to those found in the sequences; by default
+    /// only those found.
     pub alphabet: Option<String>,
     /// The longest word size for the Trifonov measures; 7 by default.
     pub max_word: usize,

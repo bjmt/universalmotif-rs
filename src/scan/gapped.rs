@@ -4,11 +4,12 @@
 //! each piece but the last, so each combination of gap sizes amounts to a
 //! separate motif with blank columns in the gaps. Rather than scanning each
 //! of those, every piece is scored once per position, and the combinations
-//! are tried by
-//! adding the pieces' scores, piece by piece, dropping a partial combination
-//! as soon as the pieces still to come can no longer reach the threshold.
-//! The scores, and so the thresholds and P-values, are those of the motif
-//! without its gaps, since blank columns score zero.
+//! are tried by adding the pieces' scores, piece by piece, dropping a partial
+//! combination as soon as the pieces still to come can no longer reach the
+//! threshold. The scores are those of the motif without its gaps, since
+//! blank columns score zero. By default the P-values, and so the thresholds,
+//! are Bonferroni-corrected for the number of combinations tried, as
+//! [`super::ScanOptions::correct_gaps`] describes.
 
 use super::{CodedScorer, RawHit, Scorer};
 use crate::error::{Result, arg_err};

@@ -1,7 +1,9 @@
-//! Reading and writing motif files.
+//! Reading and writing motif and FASTA files.
 //!
 //! Each format has its own module with `read` and `write` functions that work
-//! on text, so callers decide how files are opened, skipped or appended to.
+//! on text, so callers decide how files are opened, skipped or appended to;
+//! FASTA files can also be read from a path, gzipped or not, and MEME output
+//! has readers for the sites and statistics it holds.
 
 pub mod cisbp;
 pub mod fasta;

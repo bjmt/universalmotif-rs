@@ -530,7 +530,7 @@ pub struct CodeShuffleOptions {
     /// A code for unknown letters, such as N, which stay where they are; the
     /// letters between them are shuffled stretch by stretch.
     pub unknown: Option<u8>,
-    /// Threads to use, at least 1.
+    /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
 

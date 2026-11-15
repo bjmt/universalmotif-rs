@@ -640,9 +640,9 @@ fn scans_do_not_depend_on_threads_or_chunks() {
             let key = (one.sequence[i] as u32, one.motif[i] as u32);
             match want.last_mut() {
                 Some(l) if (l.0, l.1) == key => match value {
-                    MatchValue::Matches => {}
                     MatchValue::Counts => l.2 += 1.0,
                     MatchValue::Scores => l.2 = l.2.max(one.score[i]),
+                    _ => {}
                 },
                 _ => want.push((
                     key.0,

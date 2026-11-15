@@ -65,9 +65,9 @@ fn matches_agree_with_the_hit_table() {
             for (k, v) in keys.iter().zip(&got.value) {
                 let (count, best) = want[k];
                 let expected = match value {
-                    MatchValue::Matches => 1.0,
                     MatchValue::Counts => count,
                     MatchValue::Scores => best,
+                    _ => 1.0,
                 };
                 assert!(
                     (v - expected).abs() < 1e-9,

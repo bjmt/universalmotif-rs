@@ -61,7 +61,7 @@ fn finds_a_planted_direct_repeat() {
         consensus.contains("GGTC") || consensus.contains("GACC"),
         "{consensus}"
     );
-    assert!(m.seqs_pos > 100 && m.ln_spacing_pvalue < (1e-3f64).ln());
+    assert!(m.seqs_pos > 100 && m.spacing_pvalue < 1e-3 && m.log10_spacing_pvalue < -3.0);
 }
 
 #[test]

@@ -135,6 +135,7 @@ impl Default for ImplantOptions {
 
 /// One implanted site.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Implant {
     /// Index of the sequence.
     pub sequence: usize,

@@ -16,8 +16,9 @@ use crate::similarity::{CwmCompareOptions, CwmMetric, align_cwm_pair, cwm_simila
 /// Options for [`merge_motifs`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeOptions {
-    /// Fewest overlapping columns for a motif to be aligned to the anchor;
-    /// motifs that cannot be aligned are left out.
+    /// Fewest overlapping columns for a motif to be aligned to the anchor,
+    /// lowered to the width of the narrower motif when needed; 5 by default,
+    /// where trees use 6.
     pub min_overlap: usize,
     /// Allow motifs to be reverse complemented to fit the anchor.
     pub rc: bool,
@@ -90,8 +91,8 @@ pub fn merge_motifs(motifs: &[Motif], opts: &MergeOptions) -> Result<Motif> {
 pub struct MergedMotif {
     /// The merged motif.
     pub motif: Motif,
-    /// Indices of the motifs that went into the merge; the others could not
-    /// overlap the anchor by `min_overlap` columns.
+    /// Indices of the motifs that went into the merge; any others could not
+    /// be aligned to the anchor.
     pub used: Vec<usize>,
 }
 
@@ -345,6 +346,7 @@ pub struct MergedClusters {
 
 /// How [`merge_similar`] grows clusters from the links between motifs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum MergeLinkage {
     /// Clusters are the connected groups of linked motifs, so one link to any
     /// member is enough to join a cluster. Motifs alike only in part can
@@ -352,7 +354,8 @@ pub enum MergeLinkage {
     #[default]
     Single,
     /// Every pair of motifs in a cluster is linked. Clusters come from
-    /// complete-linkage clustering of the q-values, with motifs that are not
+    /// complete-linkage clustering of the q-values, or of the similarities
+    /// of CWMs, with motifs that are not
     /// linked kept apart, which joins the closest pair of clusters first and
     /// breaks ties by input order, so the result is fully determined by the
     /// motifs.
@@ -390,7 +393,9 @@ pub struct MergeSimilarOptions {
     /// The null model for the comparison P-values; the empirical one by
     /// default.
     pub null: NullModel,
-    /// Fewest overlapping columns when comparing and merging motifs.
+    /// Fewest overlapping columns when comparing and merging motifs, lowered
+    /// to the width of the narrower motif when needed; 5 by default,
+    /// where trees use 6.
     pub min_overlap: usize,
     /// Also align motifs as reverse complements.
     pub rc: bool,

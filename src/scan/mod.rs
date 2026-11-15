@@ -3,7 +3,8 @@
 //! Each motif is turned into a PWM, a score threshold is found from the P-value
 //! cutoff as described in [`crate::pvalue`], and every window of every sequence
 //! scoring at least the threshold is reported, on both strands by default for
-//! DNA and RNA and on the forward strand for other alphabets. Scores use the
+//! DNA and RNA and on the forward strand for other alphabets; a motif for one
+//! strand is only searched on that strand. Scores use the
 //! same integer grid as the P-value computations, so a hit's P-value is always
 //! within the cutoff.
 //!
@@ -202,8 +203,9 @@ impl HitTable {
     }
 
     /// Write the letters matched by hit `i` into `out`, replacing its contents.
-    /// They are in upper case, reverse complemented for `-` strand hits, and
-    /// with dots in the gaps of gapped motifs.
+    /// They are in upper case for all but custom alphabets, reverse
+    /// complemented for `-` strand hits, and with dots in the gaps of gapped
+    /// motifs.
     pub fn matched_into<S: AsRef<str>>(&self, i: usize, sequences: &[S], out: &mut Vec<u8>) {
         let seq = sequences[self.sequence[i] as usize].as_ref().as_bytes();
         let bytes = &seq[self.start[i] as usize..self.end[i] as usize];
@@ -1090,7 +1092,7 @@ fn finish(
 /// Letters of DNA, RNA and amino acid sequences are matched case-insensitively,
 /// and letters of custom alphabets exactly; other letters, such as `N` or `X`,
 /// never contribute to a hit. Only DNA and RNA have a reverse strand. Sequences
-/// shorter than a motif simply have no hits for it. Hits are ordered by motif,
+/// shorter than a motif have no hits for it. Hits are ordered by motif,
 /// sequence and start, with `+` strand hits first.
 ///
 /// The sequences are encoded for scanning first, as described in
@@ -1192,6 +1194,7 @@ pub fn scan_encoded(
 
 /// What [`motif_matches`] records for each sequence and motif.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum MatchValue {
     /// 1 if the motif has a hit in the sequence.
     #[default]

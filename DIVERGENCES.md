@@ -66,8 +66,8 @@ copied, and are not listed here. The other differences are below.
 - **Merging without chains.** `merge_similar()` can join motifs with
   complete linkage, so that every pair in a cluster is similar, where the
   connected groups of `merge_similar_lite()` can chain unlike motifs
-  together, and it warns
-  when one cluster holds more than a quarter of the motifs.
+  together, and it warns when one cluster holds more than a quarter of the
+  motifs.
 - **First hits only.** Scans can keep only the first hit of each motif in
   each sequence and stop scanning that sequence for the motif after it.
 - **Package-wide threads.** The Python package's `set_nthreads()`, or the
@@ -202,10 +202,10 @@ These defaults differ from the R package's, to suit most uses better.
   letters below zero upside down by default (`flip_neg=True`) and stacking
   them as a mirror image of those above zero, with the largest furthest
   from zero, while trees and peak plots follow the R package's layouts
-  without matching them point for point. Tree tips are ordered as `hclust()` orders them rather than
-  ladderized as ggtree does, and the unrooted `radial`, `equal_angle` and
-  `daylight` layouts are not available. Plots are not part of the Rust
-  crate.
+  without matching them point for point. Tree tips are ordered as
+  `hclust()` orders them rather than ladderized as ggtree does, and the
+  unrooted `radial`, `equal_angle` and `daylight` layouts are not
+  available. Plots are not part of the Rust crate.
 - `motif_pvalue(method = "exhaustive")`: the branch-and-bound P-value
   search and the random score search. Only the exact dynamic method is
   ported.

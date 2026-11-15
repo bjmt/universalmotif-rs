@@ -2,13 +2,13 @@
 //! spacer of varying length between them.
 //!
 //! Pairs of k-mers at every spacing searched are counted with
-//! [`spaced_pairs`], and the most enriched seed motifs, which are refined by
-//! rescanning, trimmed, given the spacer sizes their hits support and grown
-//! into neighbouring informative columns. A motif is kept only if its hits
-//! favour some spacings more than independent placement of its two parts
-//! would, so that two motifs which merely occur in the same sequences are not
-//! reported as one, and this is tested in sequences set aside from the
-//! search.
+//! [`spaced_pairs`], and the most enriched become seed motifs, which are then
+//! refined by rescanning, trimmed, given the spacer sizes their hits support
+//! and grown into neighbouring informative columns. A motif is kept only if
+//! its hits favour some spacings more than independent placement of its two
+//! parts would, which is tested in sequences set aside from the search, so
+//! that two motifs which merely occur in the same sequences are not reported
+//! as one.
 
 use std::collections::{HashMap, HashSet};
 
@@ -50,8 +50,9 @@ pub struct GappedFinderOptions {
     /// part, and parts grow into columns with at least this many; 0.5 by
     /// default.
     pub min_ic: f64,
-    /// Seeds built into motifs for each k-mer size and motif; 6 by default.
-    pub n_seeds: usize,
+    /// The most enriched pairs of k-mers built into motifs for each k-mer
+    /// size and motif; 6 by default.
+    pub n_seed_pairs: usize,
     /// Pairs are tested only if found in at least this fraction of the
     /// sequences, and in at least 5; 0.02 by default. Lower values find rarer
     /// motifs at the cost of more tests to correct for.
@@ -96,7 +97,7 @@ impl Default for GappedFinderOptions {
             stop_pvalue: 1e-3,
             flank: 3,
             min_ic: 0.5,
-            n_seeds: 6,
+            n_seed_pairs: 6,
             min_fraction: 0.02,
             holdout: 0.3,
             mismatch: false,
@@ -110,17 +111,16 @@ impl Default for GappedFinderOptions {
 }
 
 /// A motif found by [`gapped_motif_finder`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct GappedMotif {
-    /// The motif, a PPM named `gapped1`, `gapped2` and so on. It has one gap
-    /// unless its spacer turned out to be fixed at no letters.
+    /// The motif, a gapped PPM named `gapped_1`, `gapped_2` and so on.
     pub motif: Motif,
-    /// The k-mer size of the seed it grew from.
+    /// The k-mer size of the pair it grew from.
     pub k: usize,
-    /// The seed: two k-mers with the spacings they were counted over, as
-    /// `ACGT[0-15]TGCA`.
-    pub seed: String,
+    /// The pair of k-mers it grew from, with the spacings they were counted
+    /// over, as `ACGT[0-15]TGCA`.
+    pub seed_pair: String,
     /// Positive sequences with at least one hit.
     pub seqs_pos: u64,
     /// Negative sequences with at least one hit.
@@ -129,20 +129,25 @@ pub struct GappedMotif {
     pub n_pos: usize,
     /// The number of negative sequences.
     pub n_neg: usize,
-    /// Pairs of k-mers tested at the seed's size.
-    pub candidates: usize,
-    /// Seeds tried at the seed's size.
-    pub seeds: usize,
-    /// The natural log of the one-sided Fisher's exact test P-value of
-    /// sequences with hits being more common among the positives: in those
-    /// held out, uncorrected, or else in all of them.
-    pub ln_pvalue: f64,
-    /// The natural log of the P-value of the motif's spacing against
-    /// independent placement of its parts and against the negatives: in the
-    /// sequences held out, corrected for the motifs tested there, or else in
-    /// all of them, corrected for the pairs and seeds tried at its size and
-    /// for the number of sizes.
-    pub ln_spacing_pvalue: f64,
+    /// Pairs of k-mers tested at the size of the pair it grew from.
+    pub candidates: u64,
+    /// Pairs built into motifs at that size.
+    pub seed_pairs: usize,
+    /// The one-sided Fisher's exact test P-value of sequences with hits
+    /// being more common among the positives: in those held out,
+    /// uncorrected, or else in all of them, corrected as the spacing is.
+    pub pvalue: f64,
+    /// Base 10 log of `pvalue`, which stays finite when `pvalue` is too small
+    /// for a double.
+    pub log10_pvalue: f64,
+    /// The P-value of the motif's spacing against independent placement of
+    /// its parts and against the negatives: in the sequences held out,
+    /// corrected for the motifs tested there, or else in all of them,
+    /// corrected for the pairs and seeds tried at its size and for the
+    /// number of sizes; capped at 1.
+    pub spacing_pvalue: f64,
+    /// Base 10 log of `spacing_pvalue`.
+    pub log10_spacing_pvalue: f64,
 }
 
 /// A candidate motif and what it was judged on.
@@ -224,7 +229,7 @@ struct Search<'a> {
 /// `max_gap` found in at least `min_fraction` of the sequences are counted in
 /// the sequences and in the negatives, by default dinucleotide shuffles of
 /// the sequences, and tested for enrichment with Fisher's exact test, for
-/// each k-mer size in `k`. For each size, each of the `n_seeds` most enriched
+/// each k-mer size in `k`. For each size, each of the `n_seed_pairs` most enriched
 /// distinct pairs, over the window of spacings that gives it, seeds a motif:
 /// its sites, with `flank` letters on either side of each part, make a gapped
 /// motif, refined by rescanning and trimmed of columns below `min_ic` bits at
@@ -347,7 +352,7 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
     let ln_stop = opts.stop_pvalue.ln();
     let mut out = Vec::new();
     for found in 0..opts.nmotifs {
-        let name = format!("gapped{}", found + 1);
+        let name = format!("gapped_{}", found + 1);
         let mut candidates = Vec::new();
         for &k in &ks {
             candidates.extend(search.seed_candidates(k, min_count, &name)?);
@@ -404,15 +409,17 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
         out.push(GappedMotif {
             motif: best.motif,
             k: best.k,
-            seed: best.seed,
+            seed_pair: best.seed,
             seqs_pos: best.seqs_pos,
             seqs_neg: best.seqs_neg,
             n_pos,
             n_neg,
-            candidates: best.n_tested,
-            seeds: best.tried,
-            ln_pvalue: best.ln_p,
-            ln_spacing_pvalue: best.ln_spacing,
+            candidates: best.n_tested as u64,
+            seed_pairs: best.tried,
+            pvalue: best.ln_p.min(0.0).exp(),
+            log10_pvalue: best.ln_p.min(0.0) / std::f64::consts::LN_10,
+            spacing_pvalue: best.ln_spacing.min(0.0).exp(),
+            log10_spacing_pvalue: best.ln_spacing.min(0.0) / std::f64::consts::LN_10,
         });
     }
     Ok(out)
@@ -441,7 +448,7 @@ impl Search<'_> {
         let mut seen = HashSet::new();
         let mut tried = 0;
         for p in &pairs {
-            if tried == o.n_seeds {
+            if tried == o.n_seed_pairs {
                 break;
             }
             if !seen.insert((p.left, p.right)) {

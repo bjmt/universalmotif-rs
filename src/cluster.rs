@@ -93,8 +93,10 @@ impl std::fmt::Display for Linkage {
 /// A clustering tree: its merges, their heights and the leaf order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tree {
-    /// Merge steps: a negative value `-i` is the 1-based leaf `i`, and a
-    /// positive value `j` is the cluster formed at step `j`.
+    /// Merge steps, in the convention of R's `hclust()`: a negative value
+    /// `-i` is leaf `i` counting from 1, unlike the 0-based indices
+    /// elsewhere, and a positive value `j` is the cluster formed at step
+    /// `j`.
     pub merge: Vec<[i64; 2]>,
     /// Height of each merge.
     pub height: Vec<f64>,
@@ -486,7 +488,8 @@ mod tests {
 /// Options for [`motif_tree`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct TreeOptions {
-    /// Fewest overlapping columns when comparing motifs.
+    /// Fewest overlapping columns when comparing motifs, lowered to the width
+    /// of the narrower motif when needed; 6 by default.
     pub min_overlap: usize,
     /// Also try reverse complements when comparing motifs.
     pub rc: bool,

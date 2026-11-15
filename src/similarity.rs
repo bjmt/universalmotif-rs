@@ -27,6 +27,7 @@ use crate::pvalue::with_threads;
 
 /// How two CWMs are scored once aligned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CwmMetric {
     /// The cosine of the two matrices, zero-padded where they do not
     /// overlap: the sum of the products of facing values over the overlap,
@@ -93,7 +94,8 @@ pub struct CwmCompareOptions {
     /// alike. Off by default, when they score about 0.
     pub ignore_sign: bool,
     /// Fewest overlapping columns an alignment may have, lowered to the width
-    /// of the narrower motif when needed.
+    /// of the narrower motif when needed; 5 by default,
+    /// where trees use 6.
     pub min_overlap: usize,
     /// Also try the reverse complement of each query, for DNA and RNA.
     pub rc: bool,
@@ -673,8 +675,8 @@ mod tests {
         .unwrap()
     }
 
-    /// The scores of the numpy versions, which match tfmodisco-lite's
-    /// continuous Jaccard, written out by hand for a small pair.
+    /// Reference values computed by hand for a small pair, the continuous
+    /// Jaccard as tfmodisco-lite defines it.
     fn reference(a: &[[f64; 4]], b: &[[f64; 4]], metric: CwmMetric) -> f64 {
         let (la, lb) = (a.len() as i64, b.len() as i64);
         let mut best = f64::NEG_INFINITY;

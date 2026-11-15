@@ -15,6 +15,7 @@ use crate::stats::{fisher_greater, ln_fisher_greater, ln_p_adjust_bh, p_adjust_b
 
 /// What [`enrich_motifs`] counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EnrichTest {
     /// Sequences containing at least one hit.
     Seqs,
@@ -54,18 +55,20 @@ impl std::fmt::Display for EnrichTest {
 /// Options for [`enrich_motifs`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnrichOptions {
-    /// P-value cutoff for hits.
+    /// P-value cutoff for hits; 1e-4 by default.
     pub pvalue: f64,
     /// What to count; sequences with hits by default.
     pub test: EnrichTest,
     /// Scan both strands of DNA and RNA, for motifs whose strand is
-    /// [`crate::motif::Strand::Both`], as [`ScanOptions::rc`] does.
+    /// [`crate::motif::Strand::Both`], as [`ScanOptions::rc`] does; on by
+    /// default.
     pub rc: bool,
-    /// k-mers kept when shuffling the targets into a background.
+    /// The size of the k-mers kept when shuffling the targets into a
+    /// background; 2 by default.
     pub shuffle_k: usize,
-    /// Seed for that shuffle.
+    /// Seed for that shuffle; 1 by default.
     pub seed: u64,
-    /// Added to every cell of the 2x2 table.
+    /// Added to every cell of the 2x2 table; 1 by default.
     pub pseudocount: u64,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,

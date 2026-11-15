@@ -352,7 +352,7 @@ pub fn consensus_to_ppm_aa(letter: char) -> Result<[f64; 20]> {
 /// Convert a motif to another type.
 ///
 /// The motif's own pseudocount is used unless `pseudocount` is given, in which
-/// case it also replaces the motif's pseudocount. An empty `nsites` is treated
+/// case it also replaces the motif's pseudocount. A missing `nsites` is taken
 /// as 100. Converting to [`MotifType::Cwm`] is an error, because contribution
 /// weights cannot be recovered from probabilities. Converting a motif to its
 /// own type returns it unchanged.
