@@ -508,7 +508,7 @@ pub fn compare_cwms(
                         .collect();
                     let oriented = [fwd, rev.unwrap_or(fwd)];
                     pvalues = cosine_pvalues(&null, oriented, &targets, &aligned, &tested);
-                    qvalues = crate::stats::p_adjust_bh(&pvalues);
+                    qvalues = crate::stats::p_adjust_bh_except(&pvalues, Some(q));
                 }
                 let wq = motifs[q].width() as i64;
                 aligned

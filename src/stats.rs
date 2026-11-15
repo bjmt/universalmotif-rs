@@ -280,6 +280,31 @@ pub fn p_adjust_bh(p: &[f64]) -> Vec<f64> {
     out
 }
 
+/// [`p_adjust_bh`] over every P-value but the one at `skip`, which is
+/// returned as it is: a query's comparison with itself, which is no test
+/// and whose tiny P-value would otherwise shrink every other q-value.
+pub(crate) fn p_adjust_bh_except(pvalues: &[f64], skip: Option<usize>) -> Vec<f64> {
+    let Some(skip) = skip.filter(|&s| s < pvalues.len()) else {
+        return p_adjust_bh(pvalues);
+    };
+    let rest: Vec<f64> = pvalues
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != skip)
+        .map(|(_, &p)| p)
+        .collect();
+    let mut adjusted = p_adjust_bh(&rest).into_iter();
+    (0..pvalues.len())
+        .map(|i| {
+            if i == skip {
+                pvalues[i]
+            } else {
+                adjusted.next().unwrap()
+            }
+        })
+        .collect()
+}
+
 /// Bonferroni adjusted P-values, capped at 1.
 pub fn p_adjust_bonferroni(p: &[f64]) -> Vec<f64> {
     let n = p.len() as f64;

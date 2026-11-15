@@ -65,7 +65,9 @@ fn comparisons_match_r() {
             let got = match out {
                 "score" => m.scores,
                 "pvalue" => m.pvalues,
-                _ => m.qvalues,
+                _ => (0..motifs.len())
+                    .map(|r| r_qvalues(&m.pvalues[r], Some(r), &m.qvalues[r], &ctx))
+                    .collect(),
             };
             for (r, (g, w)) in got.iter().zip(rows).enumerate() {
                 let g = beyond_null(g, &nums(w), opts.null);
@@ -78,8 +80,17 @@ fn comparisons_match_r() {
                 .map(|&x| x as usize - 1)
                 .collect();
             let qmax = a.get("qvalue").map(num).unwrap_or(0.1);
-            let mut rows: Vec<_> = compare_motifs(&motifs, &queries, &opts)
-                .unwrap()
+            let mut all = compare_motifs(&motifs, &queries, &opts).unwrap();
+            for &q in &queries {
+                let idx: Vec<usize> = (0..all.len()).filter(|&k| all[k].query == q).collect();
+                let own = idx.iter().position(|&k| all[k].target == q);
+                let p: Vec<f64> = idx.iter().map(|&k| all[k].pvalue).collect();
+                let port: Vec<f64> = idx.iter().map(|&k| all[k].qvalue).collect();
+                for (&k, r) in idx.iter().zip(r_qvalues(&p, own, &port, &ctx)) {
+                    all[k].qvalue = r;
+                }
+            }
+            let mut rows: Vec<_> = all
                 .into_iter()
                 .filter(|c| c.qvalue <= qmax && c.overlap > 0)
                 .collect();

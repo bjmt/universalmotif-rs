@@ -1269,7 +1269,10 @@ const MATCH_BLOCK: usize = 1 << 22;
 /// motif at its first hit, since only whether there is one matters.
 /// Sequences are scanned a block at a time and each block's hits are
 /// summarized straight away, which keeps memory to that of the matrix even
-/// for hundreds of thousands of sequences.
+/// for hundreds of thousands of sequences. When P-values choose among
+/// overlapping hits, motifs are scanned in batches whose P-value tails fit
+/// in about 32 MB, as in [`scan_encoded`], unless overlaps are compared
+/// across motifs, which needs the tails of every motif at once.
 ///
 /// # Example
 ///
@@ -1291,6 +1294,18 @@ pub fn motif_matches(
     seqs: &EncodedSequences,
     opts: &ScanOptions,
     value: MatchValue,
+) -> Result<MotifMatches> {
+    motif_matches_with(motifs, seqs, opts, value, TAIL_BUDGET)
+}
+
+/// [`motif_matches`] with the grid points of P-value tails held at once
+/// given, so that tests can make batches small.
+fn motif_matches_with(
+    motifs: &[Motif],
+    seqs: &EncodedSequences,
+    opts: &ScanOptions,
+    value: MatchValue,
+    budget: usize,
 ) -> Result<MotifMatches> {
     let alphabet = check_scan(motifs, opts)?;
     if *seqs.alphabet() != alphabet {
@@ -1314,61 +1329,101 @@ pub fn motif_matches(
             && opts
                 .no_overlaps
                 .is_some_and(|n| n.by == OverlapPriority::Pvalue);
-        let prepared = motifs
-            .par_iter()
-            .map(|m| prepare_motif(m, opts, by_pvalue))
-            .collect::<Result<Vec<Option<Prepared>>>>()?;
-        let shapes: Vec<Option<Shape>> =
-            prepared.iter().map(|p| p.as_ref().map(Shape::of)).collect();
+        // Unless overlaps are compared across motifs, each motif's hits are
+        // summarized on their own, so motifs can go in batches whose P-value
+        // tails fit in TAIL_BUDGET, as in scan_encoded().
+        let across = opts.no_overlaps.is_some_and(|n| n.ignore_motif);
         let work = work_items(seqs);
-        let mut lo = 0;
-        while lo < work.len() {
-            // A block ends with a whole sequence, so each sequence's hits are
-            // summarized together.
-            let (mut hi, mut size) = (lo, 0);
-            while hi < work.len() && (size < MATCH_BLOCK || work[hi].0 == work[hi - 1].0) {
-                size += work[hi].1.1 - work[hi].1.0;
-                hi += 1;
-            }
-            let mut raw = scan_raw(&prepared, seqs, &work[lo..hi], presence || opts.first_hit);
-            if !presence {
-                if by_pvalue {
-                    raw.par_iter_mut().for_each(|r| {
-                        let p = prepared[r.motif as usize].as_ref().unwrap();
-                        let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
-                        r.pvalue = (raw * p.pvalue_scale).min(1.0);
-                    });
+        let mut base = 0;
+        let mut batches = 0;
+        while base < motifs.len() {
+            let batch: Vec<Option<Prepared>> = if by_pvalue && !across {
+                let mut batch = Vec::new();
+                let mut size = 0;
+                while base + batch.len() < motifs.len() && size < budget {
+                    let lo = base + batch.len();
+                    let hi = (lo + prepare_group()).min(motifs.len());
+                    let group = motifs[lo..hi]
+                        .par_iter()
+                        .map(|m| prepare_motif(m, opts, true))
+                        .collect::<Result<Vec<Option<Prepared>>>>()?;
+                    size += group
+                        .iter()
+                        .flatten()
+                        .map(|p| p.tail.as_ref().map_or(0, ScoreTail::len))
+                        .sum::<usize>();
+                    batch.extend(group);
                 }
-                raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
-                if opts.first_hit {
-                    raw.dedup_by_key(|r| (r.motif, r.sequence));
+                batch
+            } else {
+                motifs
+                    .par_iter()
+                    .map(|m| prepare_motif(m, opts, by_pvalue))
+                    .collect::<Result<Vec<Option<Prepared>>>>()?
+            };
+            let shapes: Vec<Option<Shape>> =
+                batch.iter().map(|p| p.as_ref().map(Shape::of)).collect();
+            let mut lo = 0;
+            while lo < work.len() {
+                // A block ends with a whole sequence, so each sequence's hits
+                // are summarized together.
+                let (mut hi, mut size) = (lo, 0);
+                while hi < work.len() && (size < MATCH_BLOCK || work[hi].0 == work[hi - 1].0) {
+                    size += work[hi].1.1 - work[hi].1.0;
+                    hi += 1;
                 }
-                drop_overlaps(&mut raw, &shapes, opts);
-            }
-            raw.sort_unstable_by_key(|r| (r.sequence, r.motif));
-            for r in &raw {
-                // Blocks hold whole sequences in order, so a sequence and
-                // motif pair can only continue the last entry.
-                let same =
-                    out.sequence.last() == Some(&r.sequence) && out.motif.last() == Some(&r.motif);
-                let v = r.score as f64 / 1000.0;
-                if same {
-                    let last = out.value.last_mut().unwrap();
-                    match value {
-                        MatchValue::Matches => {}
-                        MatchValue::Counts => *last += 1.0,
-                        MatchValue::Scores => *last = last.max(v),
+                let mut raw = scan_raw(&batch, seqs, &work[lo..hi], presence || opts.first_hit);
+                if !presence {
+                    if by_pvalue {
+                        raw.par_iter_mut().for_each(|r| {
+                            let p = batch[r.motif as usize].as_ref().unwrap();
+                            let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
+                            r.pvalue = (raw * p.pvalue_scale).min(1.0);
+                        });
                     }
-                } else {
-                    out.sequence.push(r.sequence);
-                    out.motif.push(r.motif);
-                    out.value.push(match value {
-                        MatchValue::Matches | MatchValue::Counts => 1.0,
-                        MatchValue::Scores => v,
-                    });
+                    raw.sort_unstable_by_key(|r| (r.motif, r.sequence, r.start, r.minus, r.combo));
+                    if opts.first_hit {
+                        raw.dedup_by_key(|r| (r.motif, r.sequence));
+                    }
+                    drop_overlaps(&mut raw, &shapes, opts);
                 }
+                raw.sort_unstable_by_key(|r| (r.sequence, r.motif));
+                for r in &raw {
+                    let motif = r.motif + base as u32;
+                    // Blocks hold whole sequences in order, so a sequence
+                    // and motif pair can only continue the last entry.
+                    let same = out.sequence.last() == Some(&r.sequence)
+                        && out.motif.last() == Some(&motif);
+                    let v = r.score as f64 / 1000.0;
+                    if same {
+                        let last = out.value.last_mut().unwrap();
+                        match value {
+                            MatchValue::Matches => {}
+                            MatchValue::Counts => *last += 1.0,
+                            MatchValue::Scores => *last = last.max(v),
+                        }
+                    } else {
+                        out.sequence.push(r.sequence);
+                        out.motif.push(motif);
+                        out.value.push(match value {
+                            MatchValue::Matches | MatchValue::Counts => 1.0,
+                            MatchValue::Scores => v,
+                        });
+                    }
+                }
+                lo = hi;
             }
-            lo = hi;
+            base += batch.len();
+            batches += 1;
+        }
+        // Batches each run through the sequences, so their entries are put
+        // back in order of sequence and then motif.
+        if batches > 1 {
+            let mut order: Vec<usize> = (0..out.value.len()).collect();
+            order.sort_unstable_by_key(|&i| (out.sequence[i], out.motif[i]));
+            out.sequence = order.iter().map(|&i| out.sequence[i]).collect();
+            out.motif = order.iter().map(|&i| out.motif[i]).collect();
+            out.value = order.iter().map(|&i| out.value[i]).collect();
         }
         Ok(())
     })??;
@@ -2177,6 +2232,27 @@ mod tests {
                 .collect();
             got.sort();
             assert_eq!(got, naive(m, &seq, 0.01), "motif {mi}");
+        }
+    }
+
+    #[test]
+    fn match_batches_give_the_same_matches() {
+        let motifs: Vec<Motif> = ["TGACTCA", "CACGTG", "TTGACC", "GATAAG", "CAACA"]
+            .iter()
+            .map(|w| from_strings(&[w], None, &CreateOptions::default()).unwrap())
+            .collect();
+        let raw = create_sequences(&['A', 'C', 'G', 'T'], 40, 300, None, 5, 1).unwrap();
+        let seqs = EncodedSequences::new(&raw, &Alphabet::Dna, 1).unwrap();
+        for value in [MatchValue::Counts, MatchValue::Scores] {
+            let opts = ScanOptions {
+                pvalue: 0.01,
+                no_overlaps: Some(NoOverlaps::default()),
+                ..Default::default()
+            };
+            let whole = motif_matches_with(&motifs, &seqs, &opts, value, TAIL_BUDGET).unwrap();
+            let split = motif_matches_with(&motifs, &seqs, &opts, value, 1).unwrap();
+            assert!(!whole.value.is_empty());
+            assert_eq!(whole, split, "{value:?}");
         }
     }
 }

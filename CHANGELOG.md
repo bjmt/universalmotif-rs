@@ -40,6 +40,10 @@ Changes in behaviour:
   `MergeSimilarOptions::min_score` rather than by q-value.
 - `merge::merge_motifs()` aligns motifs narrower than `min_overlap` over
   their whole width, as comparisons do, rather than leaving them out.
+- `compare::compare_motifs()` and `similarity::compare_cwms()` leave a
+  query's comparison with itself out of the Benjamini-Hochberg correction
+  of its q-values, and give it its P-value as its q-value; its tiny
+  P-value made the best matches' q-values about half what they should be.
 - `compare::anchor_layout()` aligns CWMs by the cosine of their
   contributions, through the new `similarity::cwm_anchor_layout()`.
 - `Genome` and `scan_fasta(trim_names = true)` name sequences by the first
@@ -83,6 +87,9 @@ Other changes:
   of motifs to linear for a few queries), removing overlapping hits in
   dense clusters, positional enrichment, proximity permutations and
   deduplication in `finder::motif_finder()`.
+- `scan::motif_matches()` scans motifs in batches whose P-value tails fit
+  in about 32 MB when P-values choose among overlapping hits, where it held
+  every motif's tails at once.
 
 Fixes:
 

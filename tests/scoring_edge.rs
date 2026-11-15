@@ -1257,12 +1257,14 @@ fn self_comparisons_and_reverse_complements() {
                 for o in &own {
                     assert!(o.pvalue >= s.pvalue, "{ctx}: {o:?}");
                 }
-                // q-values are the BH adjustment of the query's P-values.
-                let p: Vec<f64> = own.iter().map(|r| r.pvalue).collect();
-                let q_want = p_adjust_bh(&p);
-                for (r, w) in own.iter().zip(q_want) {
+                // q-values are the BH adjustment of the query's P-values
+                // against the other motifs, and its own row keeps its P-value.
+                let others: Vec<&&_> = own.iter().filter(|r| r.target != q).collect();
+                let p: Vec<f64> = others.iter().map(|r| r.pvalue).collect();
+                for (r, w) in others.iter().zip(p_adjust_bh(&p)) {
                     assert_eq!(r.qvalue, w);
                 }
+                assert_eq!(s.qvalue, s.pvalue);
             }
         }
     }

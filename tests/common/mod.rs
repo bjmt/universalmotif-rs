@@ -288,3 +288,29 @@ pub fn r_style_pwm(m: &Motif) -> Motif {
     p.motif_type = MotifType::Pwm;
     Motif::from_parts(p).unwrap()
 }
+
+/// The R package's q-values for one query, which count its comparison with
+/// itself in the correction (port-bugs.md, "A query's comparison with itself
+/// shrinks its q-values"). The port's leave it out, which is checked here
+/// before R's are given back to compare with the reference values.
+pub fn r_qvalues(pvalues: &[f64], own: Option<usize>, port: &[f64], ctx: &str) -> Vec<f64> {
+    let rest: Vec<f64> = pvalues
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| Some(i) != own)
+        .map(|(_, &p)| p)
+        .collect();
+    let mut adjusted = universalmotif::stats::p_adjust_bh(&rest).into_iter();
+    for (i, (&p, &q)) in pvalues.iter().zip(port).enumerate() {
+        let want = if Some(i) == own {
+            p
+        } else {
+            adjusted.next().unwrap()
+        };
+        assert!(
+            (q - want).abs() <= 1e-12 * want.abs().max(1e-300) || (q.is_nan() && want.is_nan()),
+            "{ctx}: port q-value {q} vs {want}"
+        );
+    }
+    universalmotif::stats::p_adjust_bh(pvalues)
+}

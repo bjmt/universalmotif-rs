@@ -1299,7 +1299,8 @@ pub struct Comparison {
     /// The P-value of the alignment's score.
     pub pvalue: f64,
     /// Benjamini-Hochberg adjusted P-value, among the comparisons of the
-    /// same query.
+    /// same query with other motifs; a motif's comparison with itself keeps
+    /// its P-value and is left out of the others' adjustment.
     pub qvalue: f64,
     /// Consensus of the aligned query columns, in the query's own orientation.
     pub query_consensus: String,
@@ -1429,7 +1430,11 @@ fn finish_comparisons<C: Col>(
     let mut qvals = vec![f64::NAN; al.len()];
     for &q in queries {
         let rows = std::mem::take(&mut by_query[q]);
-        let adj = crate::stats::p_adjust_bh(&rows.iter().map(|&k| pvals[k]).collect::<Vec<_>>());
+        let own = rows.iter().position(|&k| al[k].target == q);
+        let adj = crate::stats::p_adjust_bh_except(
+            &rows.iter().map(|&k| pvals[k]).collect::<Vec<_>>(),
+            own,
+        );
         for (k, v) in rows.into_iter().zip(adj) {
             qvals[k] = v;
         }
@@ -1472,7 +1477,8 @@ pub struct ComparisonMatrices {
     pub scores: Vec<Vec<f64>>,
     /// P-values of the best alignments.
     pub pvalues: Vec<Vec<f64>>,
-    /// Benjamini-Hochberg q-values, adjusted within each query.
+    /// Benjamini-Hochberg q-values, adjusted within each query over its
+    /// comparisons with the other motifs; the diagonal keeps the P-values.
     pub qvalues: Vec<Vec<f64>>,
 }
 
