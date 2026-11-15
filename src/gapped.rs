@@ -9,6 +9,9 @@
 //! parts would, which is tested in sequences set aside from the search, so
 //! that two motifs which merely occur in the same sequences are not reported
 //! as one.
+//!
+//! The finder is experimental: its options, its results and the motifs it
+//! finds may change in later releases.
 
 use std::collections::{HashMap, HashSet};
 
@@ -223,6 +226,7 @@ struct Search<'a> {
 }
 
 /// Find motifs made of two parts with a spacer of varying length.
+/// Experimental, as the [module docs](self) say.
 ///
 /// A share of the sequences and of the negatives, `holdout`, is first set
 /// aside. In the rest, pairs of k-mers at every spacing from `min_gap` to

@@ -57,7 +57,7 @@ modules and more examples.
   fast as scanning every combination of gap sizes on its own.
 - Gapped motifs can be discovered *de novo* with
   `gapped::gapped_motif_finder`, which tests the spacing of each motif in
-  sequences held out from the search.
+  sequences held out from the search. It is experimental for now.
 - Very large sequence sets can be scanned straight from a FASTA file,
   gzipped or not, with `scan::scan_fasta`, which reads and scans a batch at
   a time, so a human genome takes a few hundred MB. Alternatively,
