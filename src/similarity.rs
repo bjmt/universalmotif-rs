@@ -6,8 +6,9 @@
 //! sum to 1. That loses the sign of negative patterns and lets columns
 //! carrying almost no contribution count as much as the core. The measures
 //! here work on the whole signed matrices instead, as TF-MoDISco and the
-//! tools around it compare patterns. As in [`crate::compare`], the gaps of
-//! gapped CWMs are not used.
+//! tools around it compare patterns. As in [`crate::compare`], gapped CWMs
+//! are compared with every combination of their gap sizes, the gaps filled
+//! by columns of zeros, unless [`CwmCompareOptions::use_gaps`] is off.
 //!
 //! # References
 //!
@@ -22,6 +23,7 @@ use rayon::prelude::*;
 
 use crate::compare::{Comparison, Layout, consensus_range, layout_from_frames, motif_letters};
 use crate::error::{Error, Result, arg_err};
+use crate::gapfill;
 use crate::motif::{Motif, MotifType, Strand};
 use crate::pvalue::with_threads;
 
@@ -99,6 +101,9 @@ pub struct CwmCompareOptions {
     pub min_overlap: usize,
     /// Also try the reverse complement of each query, for DNA and RNA.
     pub rc: bool,
+    /// Compare gapped CWMs with their gaps, as [`crate::compare`] does; on
+    /// by default.
+    pub use_gaps: bool,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
@@ -110,6 +115,7 @@ impl Default for CwmCompareOptions {
             ignore_sign: false,
             min_overlap: 5,
             rc: true,
+            use_gaps: true,
             nthreads: 1,
         }
     }
@@ -463,6 +469,22 @@ pub fn compare_cwms(
     queries: &[usize],
     opts: &CwmCompareOptions,
 ) -> Result<Vec<Comparison>> {
+    if opts.use_gaps && gapfill::any_gapped(motifs) {
+        if let Some(&q) = queries.iter().find(|&&q| q >= motifs.len()) {
+            return arg_err(format!(
+                "query index {q} is out of range for {} motifs",
+                motifs.len()
+            ));
+        }
+        let exp = gapfill::expand(motifs, &[0.25; 4])?;
+        let instances: Vec<usize> = queries
+            .iter()
+            .flat_map(|&q| exp.of[q].iter().copied())
+            .collect();
+        let rows = compare_cwms(&exp.motifs, &instances, opts)?;
+        // Columns of zeros add nothing to a cosine, so the scores stand.
+        return Ok(gapfill::collapse(rows, &exp, queries, false, None));
+    }
     let rc = check(motifs, opts)?;
     if let Some(&q) = queries.iter().find(|&&q| q >= motifs.len()) {
         return arg_err(format!(
@@ -537,6 +559,8 @@ pub fn compare_cwms(
                                 (-a.offset).max(0),
                                 a.overlap,
                             ),
+                            query_gaps: Vec::new(),
+                            target_gaps: Vec::new(),
                         }
                     })
                     .collect()
@@ -553,6 +577,15 @@ pub fn cwm_similarity_matrix(motifs: &[Motif], opts: &CwmCompareOptions) -> Resu
     let rc = check(motifs, opts)?;
     if motifs.len() < 2 {
         return arg_err("need at least 2 motifs for an all-against-all comparison");
+    }
+    if opts.use_gaps && gapfill::any_gapped(motifs) {
+        let n = motifs.len();
+        let queries: Vec<usize> = (0..n).collect();
+        let rows = compare_cwms(motifs, &queries, opts)?;
+        return Ok(rows
+            .chunks(n)
+            .map(|r| r.iter().map(|c| c.score).collect())
+            .collect());
     }
     let prep = prepare_all(motifs, opts, rc);
     let n = motifs.len();
@@ -606,6 +639,15 @@ pub fn cwm_anchor_layout(
 ) -> Result<Layout> {
     if anchor >= motifs.len() {
         return arg_err("anchor index out of range");
+    }
+    if opts.use_gaps && gapfill::any_gapped(motifs) {
+        let compare_opts = crate::compare::CompareOptions {
+            min_overlap: opts.min_overlap,
+            rc: opts.rc,
+            nthreads: opts.nthreads,
+            ..Default::default()
+        };
+        return crate::compare::anchor_layout(motifs, anchor, &compare_opts);
     }
     let rc = check(motifs, opts)?;
     let prep = prepare_all(motifs, opts, rc);

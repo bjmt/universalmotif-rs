@@ -1,7 +1,10 @@
 //! Merging motifs with [`merge_motifs`] and [`merge_similar`].
 //!
-//! Gaps are not used: gapped motifs are aligned with their columns running
-//! together, and merged motifs have no gaps.
+//! Gapped motifs are aligned with their gaps, as [`crate::compare`]
+//! compares them. When every motif merged has the same number of gaps, the
+//! parts between the gaps are merged with each other and the merged motif
+//! keeps gaps spanning the sizes of all of them; otherwise the gaps are
+//! filled with blank columns and a warning says so.
 
 use crate::alphabet::Alphabet;
 use crate::cluster::{Linkage, hclust};
@@ -9,8 +12,10 @@ use crate::compare::{CompareOptions, NullModel, align, compare_matrix};
 use crate::convert::convert_type;
 use crate::create::{CreateOptions, from_typed_matrix};
 use crate::error::{Result, arg_err};
+use crate::gapfill;
 use crate::matrix::Matrix;
-use crate::motif::{Motif, MotifType, Strand};
+use crate::motif::{GapInfo, Motif, MotifType, Strand};
+use crate::ops::reverse_complement;
 use crate::similarity::{CwmCompareOptions, CwmMetric, align_cwm_pair, cwm_similarity_matrix};
 
 /// Options for [`merge_motifs`].
@@ -27,6 +32,10 @@ pub struct MergeOptions {
     pub name: Option<String>,
     /// Weight each motif by its `nsites` when averaging.
     pub weighted: bool,
+    /// Align and merge gapped motifs with their gaps, as the module docs
+    /// describe; on by default. Off, their columns are taken as if they
+    /// followed one another, and the merged motif has no gaps.
+    pub use_gaps: bool,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
@@ -38,6 +47,7 @@ impl Default for MergeOptions {
             rc: true,
             name: None,
             weighted: false,
+            use_gaps: true,
             nthreads: 1,
         }
     }
@@ -94,11 +104,16 @@ pub struct MergedMotif {
     /// Indices of the motifs that went into the merge; any others could not
     /// be aligned to the anchor.
     pub used: Vec<usize>,
+    /// Notes for the caller to pass on, such as that gaps could not be kept.
+    pub warnings: Vec<String>,
 }
 
 /// [`merge_motifs`], also reporting which motifs went into the merge.
 pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<MergedMotif> {
     let alphabet = shared_alphabet(motifs)?;
+    if opts.use_gaps && gapfill::any_gapped(motifs) {
+        return merge_gapped(motifs, opts);
+    }
     if motifs.iter().all(|m| m.motif_type == MotifType::Cwm) {
         return merge_cwms(motifs, alphabet, opts);
     }
@@ -111,6 +126,7 @@ pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<Me
         return Ok(MergedMotif {
             motif: Motif::from_parts(p)?,
             used: vec![0],
+            warnings: Vec::new(),
         });
     }
     let ppms: Vec<Motif> = motifs
@@ -228,7 +244,173 @@ pub fn merge_motifs_detailed(motifs: &[Motif], opts: &MergeOptions) -> Result<Me
     Ok(MergedMotif {
         motif: merged,
         used: used_idx,
+        warnings: Vec::new(),
     })
+}
+
+/// The motif the others are aligned to: the first with the most total IC,
+/// or for CWMs with the largest sum of absolute contributions, so that
+/// rounding cannot hand the anchor to a later motif with the same value,
+/// such as a reverse complement.
+fn anchor_of(motifs: &[Motif]) -> Result<usize> {
+    let value: Vec<f64> = if motifs.iter().all(|m| m.motif_type == MotifType::Cwm) {
+        motifs
+            .iter()
+            .map(|m| m.matrix.as_slice().iter().map(|v| v.abs()).sum())
+            .collect()
+    } else {
+        motifs
+            .iter()
+            .map(|m| Ok(convert_type(m, MotifType::Ppm, None, false)?.icscore))
+            .collect::<Result<_>>()?
+    };
+    let mut anchor = 0;
+    for (i, &v) in value.iter().enumerate().skip(1) {
+        if v > value[anchor] + 1e-9 * value[anchor].abs().max(1.0) {
+            anchor = i;
+        }
+    }
+    Ok(anchor)
+}
+
+/// [`merge_motifs_detailed`] with gapped motifs. Each motif is aligned to
+/// the anchor as its best instance, the anchor's own chosen to fit them all. When every motif
+/// used has the same number of gaps, they are turned to face the anchor and
+/// merged part by part, with gaps spanning all of theirs; otherwise their
+/// best instances are merged, gaps filled, with a warning.
+fn merge_gapped(motifs: &[Motif], opts: &MergeOptions) -> Result<MergedMotif> {
+    let plain = MergeOptions {
+        use_gaps: false,
+        ..opts.clone()
+    };
+    if motifs.len() == 1 {
+        let mut p = motifs[0].clone();
+        if p.motif_type != MotifType::Cwm {
+            p = convert_type(&p, MotifType::Ppm, None, false)?;
+        }
+        let mut parts = p.into_parts();
+        if let Some(n) = &opts.name {
+            parts.name = n.clone();
+        }
+        return Ok(MergedMotif {
+            motif: Motif::from_parts(parts)?,
+            used: vec![0],
+            warnings: Vec::new(),
+        });
+    }
+    let cwm = motifs.iter().all(|m| m.motif_type == MotifType::Cwm);
+    let anchor = anchor_of(motifs)?;
+    let exp = gapfill::expand(motifs, &[0.25; 4])?;
+    let copts = CompareOptions {
+        min_overlap: opts.min_overlap,
+        rc: opts.rc,
+        use_gaps: false,
+        nthreads: opts.nthreads,
+        ..Default::default()
+    };
+    // Each motif's best instance, the anchor's chosen to fit them all, and
+    // how each aligns.
+    let (best, fits) = crate::compare::fit_instances(&exp, anchor, &copts, cwm)?;
+    let a = best[anchor];
+    let used: Vec<usize> = (0..motifs.len())
+        .filter(|&i| {
+            let need = opts
+                .min_overlap
+                .min(exp.motifs[best[i]].width())
+                .min(exp.motifs[a].width());
+            i == anchor || fits[i].overlap >= need
+        })
+        .collect();
+    let gaps: Vec<usize> = used
+        .iter()
+        .map(|&i| {
+            if motifs[i].gap.isgapped {
+                motifs[i].gap.gaploc.len()
+            } else {
+                0
+            }
+        })
+        .collect();
+    if gaps[0] > 0 && gaps.iter().all(|&g| g == gaps[0]) {
+        // Every motif used, turned to face the anchor, split at its gaps.
+        let mut oriented = Vec::with_capacity(used.len());
+        for &i in &used {
+            let m = if cwm {
+                motifs[i].clone()
+            } else {
+                convert_type(&motifs[i], MotifType::Ppm, None, false)?
+            };
+            let minus = i != anchor && fits[i].minus;
+            oriented.push(if minus {
+                reverse_complement(&m, false)?
+            } else {
+                m
+            });
+        }
+        let pieces: Vec<Vec<Motif>> = oriented.iter().map(gapfill::split).collect::<Result<_>>()?;
+        let by_part = MergeOptions {
+            rc: false,
+            name: None,
+            ..plain.clone()
+        };
+        let mut cols: Vec<Vec<f64>> = Vec::new();
+        let mut gaploc = Vec::new();
+        for j in 0..=gaps[0] {
+            let part: Vec<Motif> = pieces.iter().map(|p| p[j].clone()).collect();
+            let merged = merge_motifs_detailed(&part, &by_part)?.motif;
+            if j > 0 {
+                gaploc.push(cols.len());
+            }
+            cols.extend(merged.matrix.columns().map(<[f64]>::to_vec));
+        }
+        let mingap = (0..gaps[0])
+            .map(|g| oriented.iter().map(|m| m.gap.mingap[g]).min().unwrap())
+            .collect();
+        let maxgap = (0..gaps[0])
+            .map(|g| oriented.iter().map(|m| m.gap.maxgap[g]).max().unwrap())
+            .collect();
+        let name = opts.name.clone().unwrap_or_else(|| {
+            let names: Vec<&str> = used.iter().map(|&i| motifs[i].name.as_str()).collect();
+            format!("merged_{}", names.join("+"))
+        });
+        let mut parts = oriented[0].clone().into_parts();
+        parts.matrix = Matrix::from_columns(&cols)?;
+        parts.name = name;
+        parts.nsites = Some(
+            used.iter()
+                .map(|&i| motifs[i].nsites.filter(|n| *n > 0.0).unwrap_or(1.0))
+                .sum(),
+        );
+        parts.gap = GapInfo {
+            isgapped: true,
+            gaploc,
+            mingap,
+            maxgap,
+        };
+        parts.recompute_derived();
+        return Ok(MergedMotif {
+            motif: Motif::from_parts(parts)?,
+            used,
+            warnings: Vec::new(),
+        });
+    }
+    // The motifs differ in their gaps, so their best instances are merged.
+    let picked: Vec<Motif> = best.iter().map(|&e| exp.motifs[e].clone()).collect();
+    let mut out = merge_motifs_detailed(&picked, &plain)?;
+    let gapped: Vec<&str> = out
+        .used
+        .iter()
+        .filter(|&&i| motifs[i].gap.isgapped)
+        .map(|&i| motifs[i].name.as_str())
+        .collect();
+    if !gapped.is_empty() {
+        out.warnings.push(format!(
+            "the gaps of {} were filled with blank columns rather than kept, as the motifs merged do not all have \
+             the same number of gaps",
+            gapped.join(", ")
+        ));
+    }
+    Ok(out)
 }
 
 /// [`merge_motifs_detailed`] for CWMs, keeping their sign.
@@ -251,6 +433,7 @@ fn merge_cwms(motifs: &[Motif], alphabet: Alphabet, opts: &MergeOptions) -> Resu
     let copts = CwmCompareOptions {
         min_overlap: opts.min_overlap,
         rc: opts.rc,
+        use_gaps: false,
         nthreads: opts.nthreads,
         ..Default::default()
     };
@@ -325,6 +508,7 @@ fn merge_cwms(motifs: &[Motif], alphabet: Alphabet, opts: &MergeOptions) -> Resu
     Ok(MergedMotif {
         motif: merged,
         used: used_idx,
+        warnings: Vec::new(),
     })
 }
 
@@ -417,6 +601,9 @@ pub struct MergeSimilarOptions {
     pub min_score: Option<f64>,
     /// How clusters grow from the links; single linkage by default.
     pub linkage: MergeLinkage,
+    /// Compare and merge gapped motifs with their gaps, as [`merge_motifs`]
+    /// does; on by default.
+    pub use_gaps: bool,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
@@ -434,6 +621,7 @@ impl Default for MergeSimilarOptions {
             ignore_sign: false,
             min_score: None,
             linkage: MergeLinkage::Single,
+            use_gaps: true,
             nthreads: 1,
         }
     }
@@ -509,6 +697,7 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
         min_overlap: opts.min_overlap,
         rc: opts.rc,
         weighted: opts.weighted,
+        use_gaps: opts.use_gaps,
         nthreads: opts.nthreads,
         name: None,
     };
@@ -521,10 +710,12 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
             if members.len() == 1 {
                 Ok(members.into_iter().next().unwrap())
             } else {
-                merge_motifs(&members, &mopts)
+                let out = merge_motifs_detailed(&members, &mopts)?;
+                warnings.extend(out.warnings.iter().map(|w| format!("cluster {c}: {w}")));
+                Ok(out.motif)
             }
         })
-        .collect::<Result<_>>()?;
+        .collect::<Result<Vec<Motif>>>()?;
     Ok(MergedClusters {
         clusters,
         motifs: merged,
@@ -540,6 +731,7 @@ fn qvalue_clusters(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Vec<u
         rc: opts.rc,
         null: opts.null,
         bkg: opts.bkg,
+        use_gaps: opts.use_gaps,
         nthreads: opts.nthreads,
         ..Default::default()
     };
@@ -583,6 +775,7 @@ fn cwm_clusters(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Vec<usiz
             ignore_sign: opts.ignore_sign,
             min_overlap: opts.min_overlap,
             rc: opts.rc,
+            use_gaps: opts.use_gaps,
             nthreads: opts.nthreads,
         },
     )?;

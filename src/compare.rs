@@ -15,15 +15,22 @@
 //! too.
 //!
 //! Motifs of any alphabet can be compared. Reverse complements are only tried,
-//! and the parametric null is only available, for DNA and RNA. The gaps of
-//! gapped motifs are not used: their columns are compared as if they followed
-//! one another.
+//! and the parametric null is only available, for DNA and RNA.
+//!
+//! A gapped motif is compared as each of the motifs it stands for, one for
+//! every combination of its gap sizes, with each gap filled by columns of
+//! the background (zeros for CWMs). The best of these comparisons is kept,
+//! its P-value multiplied by the number tried, and [`Comparison::query_gaps`]
+//! and [`Comparison::target_gaps`] give the sizes it used. With
+//! [`CompareOptions::use_gaps`] off, the gaps are ignored instead and the
+//! columns compared as if they followed one another.
 
 use rayon::prelude::*;
 
 use crate::alphabet::Alphabet;
 use crate::convert::{consensus_letter, consensus_letter_aa, convert_type};
 use crate::error::{Error, Result, arg_err};
+use crate::gapfill;
 use crate::matrix::which_max;
 use crate::metrics::ColumnMetric;
 use crate::motif::{Motif, MotifType, Strand};
@@ -372,6 +379,11 @@ pub struct CompareOptions {
     /// makes comparisons depend on which motif is the query. Off by default,
     /// when only the overlap counts.
     pub complete: bool,
+    /// Compare gapped motifs with their gaps, trying every combination of
+    /// gap sizes with the gaps filled by background columns, as the module
+    /// docs describe; on by default. Off, their columns are compared as if
+    /// they followed one another.
+    pub use_gaps: bool,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
 }
@@ -386,6 +398,7 @@ impl Default for CompareOptions {
             method: ColumnMetric::Pcc,
             overhang: Overhang::Ignore,
             complete: false,
+            use_gaps: true,
             nthreads: 1,
         }
     }
@@ -918,6 +931,10 @@ pub struct Layout {
     pub placements: Vec<Placement>,
     /// The width of the frame, in columns.
     pub width: usize,
+    /// For each gapped motif laid out with its gaps, the size of each gap
+    /// it is placed with, its gaps being filled by blank columns of these
+    /// sizes in the frame; empty for other motifs.
+    pub gaps: Vec<Vec<usize>>,
 }
 
 /// Lay motifs out in a common column frame by aligning each one to
@@ -930,6 +947,9 @@ pub struct Layout {
 pub fn anchor_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> Result<Layout> {
     if anchor >= motifs.len() {
         return arg_err("anchor index out of range");
+    }
+    if opts.use_gaps && gapfill::any_gapped(motifs) {
+        return gapped_layout(motifs, anchor, opts);
     }
     if motifs.iter().all(|m| m.motif_type == MotifType::Cwm) {
         let cwm_opts = crate::similarity::CwmCompareOptions {
@@ -967,6 +987,23 @@ pub fn anchor_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> 
     Ok(layout_from_frames(&frame, &rc, &widths))
 }
 
+/// [`anchor_layout`] for gapped motifs: each motif is placed as its
+/// instance that aligns best to the anchor's, as [`fit_instances`] chooses
+/// them, and the layout records their gap sizes.
+fn gapped_layout(motifs: &[Motif], anchor: usize, opts: &CompareOptions) -> Result<Layout> {
+    let exp = gapfill::expand(motifs, &opts.bkg)?;
+    let cwm = motifs.iter().all(|m| m.motif_type == MotifType::Cwm);
+    let plain = CompareOptions {
+        use_gaps: false,
+        ..opts.clone()
+    };
+    let (chosen, _) = fit_instances(&exp, anchor, &plain, cwm)?;
+    let picked: Vec<Motif> = chosen.iter().map(|&e| exp.motifs[e].clone()).collect();
+    let mut layout = anchor_layout(&picked, anchor, &plain)?;
+    layout.gaps = chosen.iter().map(|&e| exp.sizes[e].clone()).collect();
+    Ok(layout)
+}
+
 /// A layout from each motif's first column in the anchor's frame, which may
 /// be negative, shifted so that the leftmost motif starts at column 0.
 pub(crate) fn layout_from_frames(frame: &[i64], rc: &[bool], widths: &[i64]) -> Layout {
@@ -983,6 +1020,7 @@ pub(crate) fn layout_from_frames(frame: &[i64], rc: &[bool], widths: &[i64]) -> 
     Layout {
         placements,
         width: (hi - lo) as usize,
+        gaps: vec![Vec::new(); frame.len()],
     }
 }
 
@@ -1306,6 +1344,13 @@ pub struct Comparison {
     pub query_consensus: String,
     /// Consensus of the aligned target columns.
     pub target_consensus: String,
+    /// For a gapped query compared with its gaps, the size of each gap in
+    /// the comparison kept, in the query's own order; empty otherwise. The
+    /// offset, overlap and consensus are then those of the query with its
+    /// gaps filled to these sizes.
+    pub query_gaps: Vec<usize>,
+    /// The same for the target.
+    pub target_gaps: Vec<usize>,
 }
 
 /// Consensus letters of some columns, by the same rules as a motif's own
@@ -1371,6 +1416,169 @@ pub(crate) fn consensus_range(letters: &[char], start: i64, len: usize) -> Strin
 /// # Ok::<(), universalmotif::Error>(())
 /// ```
 pub fn compare_motifs(
+    motifs: &[Motif],
+    queries: &[usize],
+    opts: &CompareOptions,
+) -> Result<Vec<Comparison>> {
+    if opts.use_gaps && gapfill::any_gapped(motifs) {
+        if let Some(&q) = queries.iter().find(|&&q| q >= motifs.len()) {
+            return arg_err(format!(
+                "query index {q} is out of range for {} motifs",
+                motifs.len()
+            ));
+        }
+        let exp = gapfill::expand(motifs, &opts.bkg)?;
+        let instances: Vec<usize> = queries
+            .iter()
+            .flat_map(|&q| exp.of[q].iter().copied())
+            .collect();
+        let rows = compare_ungapped(&exp.motifs, &instances, opts)?;
+        let rescore =
+            |r: &Comparison, iq: usize, it: usize| gap_free_score(motifs, &exp, r, iq, it, opts);
+        let rescore: Option<gapfill::Rescore> = match opts.overhang {
+            Overhang::Ignore => Some(&rescore),
+            Overhang::Background => None,
+        };
+        return Ok(gapfill::collapse(
+            rows,
+            &exp,
+            queries,
+            opts.method == ColumnMetric::Eucl,
+            rescore,
+        ));
+    }
+    compare_ungapped(motifs, queries, opts)
+}
+
+/// The mean column score of a comparison of two instances over the columns
+/// that face each other, leaving out those facing a gap in either, which
+/// would otherwise dilute it.
+fn gap_free_score(
+    motifs: &[Motif],
+    exp: &gapfill::Expansion,
+    r: &Comparison,
+    iq: usize,
+    it: usize,
+    opts: &CompareOptions,
+) -> f64 {
+    let Ok(cols) = columns::<Vec<f64>>(&[exp.motifs[iq].clone(), exp.motifs[it].clone()]) else {
+        return r.score;
+    };
+    let minus = r.strand == Strand::Minus;
+    let q = if minus {
+        rc_columns(&cols[0])
+    } else {
+        cols[0].clone()
+    };
+    let t = &cols[1];
+    let wq = q.len();
+    let mut q_blank = vec![false; wq];
+    for p in gapfill::blank_columns(&motifs[exp.origin[iq]], &exp.sizes[iq]) {
+        q_blank[if minus { wq - 1 - p } else { p }] = true;
+    }
+    let mut t_blank = vec![false; t.len()];
+    for p in gapfill::blank_columns(&motifs[exp.origin[it]], &exp.sizes[it]) {
+        t_blank[p] = true;
+    }
+    let (qs, ts) = (r.offset.max(0) as usize, (-r.offset).max(0) as usize);
+    let (mut sum, mut n) = (0.0, 0usize);
+    for k in 0..r.overlap {
+        let (a, b) = (qs + k, ts + k);
+        if a >= wq || b >= t.len() || q_blank[a] || t_blank[b] {
+            continue;
+        }
+        sum += match opts.method {
+            ColumnMetric::Eucl => -EuclScore::score(&q[a], &t[b]),
+            _ => PccScore::careful(
+                &PccScore::careful_prepare(&q[a]),
+                &PccScore::careful_prepare(&t[b]),
+            ),
+        };
+        n += 1;
+    }
+    if n == 0 { f64::NAN } else { sum / n as f64 }
+}
+
+/// For a set of motifs expanded into instances, the instance of each motif
+/// to align to the anchor's, and how it aligns: its score (higher is
+/// better), its overlap and whether it is reverse complemented. The
+/// anchor's instance is the one that the others, each at its best, fit best
+/// in all.
+pub(crate) fn fit_instances(
+    exp: &gapfill::Expansion,
+    anchor: usize,
+    opts: &CompareOptions,
+    cwm: bool,
+) -> Result<(Vec<usize>, Vec<gapfill::Fit>)> {
+    let mut best: Option<(f64, Vec<usize>, Vec<gapfill::Fit>)> = None;
+    for &a in &exp.of[anchor] {
+        let fits: Vec<gapfill::Fit> = if cwm {
+            let cwm_opts = crate::similarity::CwmCompareOptions {
+                min_overlap: opts.min_overlap,
+                rc: opts.rc,
+                use_gaps: false,
+                nthreads: opts.nthreads,
+                ..Default::default()
+            };
+            crate::similarity::compare_cwms(&exp.motifs, &[a], &cwm_opts)?
+                .iter()
+                .map(|c| gapfill::Fit {
+                    score: if c.overlap == 0 {
+                        f64::NEG_INFINITY
+                    } else {
+                        c.score
+                    },
+                    overlap: c.overlap,
+                    minus: c.strand == Strand::Minus,
+                })
+                .collect()
+        } else {
+            let pairs: Vec<(usize, usize)> = (0..exp.motifs.len()).map(|e| (a, e)).collect();
+            align(&exp.motifs, &pairs, opts)?
+                .iter()
+                .map(|al| gapfill::Fit {
+                    score: if al.overlap == 0 {
+                        f64::NEG_INFINITY
+                    } else {
+                        al.complete_score
+                    },
+                    overlap: al.overlap,
+                    minus: al.strand == Strand::Minus,
+                })
+                .collect()
+        };
+        let chosen: Vec<usize> = exp
+            .of
+            .iter()
+            .enumerate()
+            .map(|(i, inst)| {
+                if i == anchor {
+                    return a;
+                }
+                *inst
+                    .iter()
+                    .max_by(|&&x, &&y| fits[x].score.total_cmp(&fits[y].score))
+                    .expect("every motif has an instance")
+            })
+            .collect();
+        let total: f64 = chosen
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != anchor)
+            .map(|(_, &e)| fits[e].score)
+            .filter(|s| s.is_finite())
+            .sum();
+        if best.as_ref().is_none_or(|b| total > b.0) {
+            let picked = chosen.iter().map(|&e| fits[e]).collect();
+            best = Some((total, chosen, picked));
+        }
+    }
+    let (_, chosen, fits) = best.expect("the anchor has an instance");
+    Ok((chosen, fits))
+}
+
+/// [`compare_motifs`] with any gaps ignored.
+fn compare_ungapped(
     motifs: &[Motif],
     queries: &[usize],
     opts: &CompareOptions,
@@ -1463,6 +1671,8 @@ fn finish_comparisons<C: Col>(
                     qvalue: qvals[k],
                     query_consensus: consensus_range(&letters[a.query], q_start, a.overlap),
                     target_consensus: consensus_range(&letters[a.target], t_start, a.overlap),
+                    query_gaps: Vec::new(),
+                    target_gaps: Vec::new(),
                 }
             })
             .collect()
@@ -1494,6 +1704,9 @@ pub fn compare_matrix(
         return arg_err("need at least 2 motifs for an all-against-all comparison");
     }
     let queries: Vec<usize> = (0..n).collect();
+    // Gapped motifs are compared through their instances, which gives the
+    // P-values along the way.
+    let need_pvalues = need_pvalues || (opts.use_gaps && gapfill::any_gapped(motifs));
     let (scores, pvals, qvals) = if need_pvalues {
         let rows = compare_motifs(motifs, &queries, opts)?;
         let get = |f: &dyn Fn(&Comparison) -> f64| -> Vec<Vec<f64>> {

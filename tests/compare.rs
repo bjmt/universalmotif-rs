@@ -203,6 +203,8 @@ fn merges_match_r() {
             rc: a.get("RC").and_then(Value::as_bool).unwrap_or(true),
             name: a.get("new.name").and_then(Value::as_str).map(String::from),
             weighted: a.get("weighted").and_then(Value::as_bool).unwrap_or(false),
+            // R aligns gapped motifs as if their columns followed one another.
+            use_gaps: false,
             nthreads: 1,
         };
         // The R package leaves out motifs narrower than min.overlap

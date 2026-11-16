@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Changes in behaviour:
+
+- Gapped motifs are compared, laid out and merged with their gaps
+  (`use_gaps` in `CompareOptions`, `CwmCompareOptions`, `MergeOptions` and
+  `MergeSimilarOptions`, on by default): each combination of gap sizes is
+  tried with the gaps filled by background columns, the best kept and its
+  P-value corrected for the combinations tried. `Comparison` gives the gap
+  sizes used (`query_gaps`, `target_gaps`), as does `Layout` (`gaps`).
+  Merging motifs with the same number of gaps keeps gaps spanning all of
+  theirs; otherwise the gaps are filled and `MergedMotif::warnings` says
+  so.
+
 New:
 
 - `progress::with_progress()` runs a call with a `progress::Progress`
