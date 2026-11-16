@@ -1707,10 +1707,21 @@ fn finder_default_negatives_rna_and_missing_letters() {
     let a = motif_finder(&pos, None, &opts).unwrap();
     assert!(!a.is_empty());
     assert_eq!(a, motif_finder(&pos, None, &opts).unwrap());
+    // Three shuffles of the 30 sequences by default.
     for f in &a {
-        assert_eq!(f.n_neg, 30);
+        assert_eq!(f.n_neg, 90);
         assert_eq!(f.motif.alphabet, Alphabet::Rna);
     }
+    let one = FinderOptions {
+        bkg_shuffles: 1,
+        ..opts.clone()
+    };
+    assert!(
+        motif_finder(&pos, None, &one)
+            .unwrap()
+            .iter()
+            .all(|f| f.n_neg == 30)
+    );
     // Sequences missing a letter have its background floored, and with no
     // pseudocount the scores of unseen letters are floored too.
     let no_t: Vec<String> = planted(30, "GCCAGG", 4)

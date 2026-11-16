@@ -20,7 +20,7 @@ use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType, Strand};
 use crate::progress::{self, Progress};
 use crate::pvalue::with_threads;
-use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_background};
+use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_backgrounds};
 
 const HAMMING_MISMATCH: u64 = 1;
 const REFINE_PASSES: usize = 2;
@@ -687,6 +687,10 @@ pub struct FinderOptions {
     /// The size of the k-mers kept when shuffling the sequences into
     /// negatives, when none are given; 2 by default.
     pub shuffle_k: usize,
+    /// How many shuffles of the sequences make up the negatives, when none
+    /// are given; 3 by default. More shuffles steady the background, so
+    /// that motifs in few of the sequences are found whatever the seed.
+    pub bkg_shuffles: usize,
     /// Seed for shuffling the sequences into negatives.
     pub seed: u64,
     /// Pseudocount added to the motifs' counts when scoring sites, which the
@@ -708,6 +712,7 @@ impl Default for FinderOptions {
             dedup_overlap: 0.5,
             rc: true,
             shuffle_k: 2,
+            bkg_shuffles: 3,
             seed: 1,
             pseudocount: 1,
             nthreads: 1,
@@ -832,7 +837,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     let neg_strs: Vec<&str> = match negatives {
         Some(n) => n.iter().map(|s| s.as_ref()).collect(),
         None => {
-            shuffled = shuffled_background(
+            shuffled = shuffled_backgrounds(
                 sequences,
                 &ShuffleOptions {
                     k: opts.shuffle_k,
@@ -841,6 +846,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
                     window: None,
                     nthreads: opts.nthreads,
                 },
+                opts.bkg_shuffles,
             )?;
             shuffled.iter().map(|s| s.as_str()).collect()
         }

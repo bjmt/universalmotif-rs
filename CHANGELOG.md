@@ -4,6 +4,11 @@
 
 Changes in behaviour:
 
+- `motif_finder()` and `gapped_motif_finder()` build their negatives, when
+  none are given, from three shuffles of the sequences rather than one
+  (`bkg_shuffles` in `FinderOptions` and `GappedFinderOptions`), which
+  finds motifs in a few percent of the sequences more reliably;
+  `bkg_shuffles: 1` gives the results of earlier versions.
 - Gapped motifs are compared, laid out and merged with their gaps
   (`use_gaps` in `CompareOptions`, `CwmCompareOptions`, `MergeOptions` and
   `MergeSimilarOptions`, on by default): each combination of gap sizes is

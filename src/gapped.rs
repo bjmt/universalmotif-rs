@@ -27,7 +27,7 @@ use crate::ops::{add_gap, normalize};
 use crate::packed::EncodedSequences;
 use crate::progress;
 use crate::scan::{HitTable, NoOverlaps, ScanOptions, scan_encoded};
-use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_background};
+use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_backgrounds};
 use crate::stats::ln_fisher_greater;
 
 /// Options for [`gapped_motif_finder`].
@@ -84,6 +84,10 @@ pub struct GappedFinderOptions {
     /// Shuffling for the negative sequences when none are given; 2 by
     /// default.
     pub shuffle_k: usize,
+    /// How many shuffles of the sequences make up the negatives, when none
+    /// are given; 3 by default, which steadies the background so that
+    /// motifs in few of the sequences are found whatever the seed.
+    pub bkg_shuffles: usize,
     /// Seed for shuffling the sequences into negatives.
     pub seed: u64,
     /// Threads to use; 0 means all available.
@@ -108,6 +112,7 @@ impl Default for GappedFinderOptions {
             mask: true,
             rc: true,
             shuffle_k: 2,
+            bkg_shuffles: 3,
             seed: 1,
             nthreads: 1,
         }
@@ -303,7 +308,7 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
     let pos: Vec<String> = sequences.iter().map(|s| dna_text(s.as_ref())).collect();
     let neg: Vec<String> = match negatives {
         Some(n) => n.iter().map(|s| dna_text(s.as_ref())).collect(),
-        None => shuffled_background(
+        None => shuffled_backgrounds(
             &pos,
             &ShuffleOptions {
                 k: opts.shuffle_k,
@@ -312,6 +317,7 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
                 window: None,
                 nthreads: opts.nthreads,
             },
+            opts.bkg_shuffles,
         )?,
     };
     if neg.is_empty() {

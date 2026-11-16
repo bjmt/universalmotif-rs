@@ -425,6 +425,24 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
 /// Shuffled copies of sequences for a background, as [`shuffle_sequences`]
 /// gives, except that sequences shorter than `k`, which have nothing to
 /// shuffle, are copied as they are rather than refused.
+/// [`shuffled_background`] `copies` times over, the first with the seed of
+/// `opts` and the rest with the seeds that follow it, one after another.
+pub(crate) fn shuffled_backgrounds<S: AsRef<str> + Sync>(
+    seqs: &[S],
+    opts: &ShuffleOptions,
+    copies: usize,
+) -> Result<Vec<String>> {
+    let mut out = Vec::with_capacity(seqs.len() * copies);
+    for c in 0..copies.max(1) {
+        let o = ShuffleOptions {
+            seed: opts.seed.wrapping_add(c as u64),
+            ..opts.clone()
+        };
+        out.extend(shuffled_background(seqs, &o)?);
+    }
+    Ok(out)
+}
+
 pub(crate) fn shuffled_background<S: AsRef<str> + Sync>(
     seqs: &[S],
     opts: &ShuffleOptions,
