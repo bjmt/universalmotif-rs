@@ -15,6 +15,15 @@
 //! site all have hits there, where a caller that fits all the motifs to each
 //! input at once makes them compete for the same scores.
 //!
+//! When the model's hypothetical scores are at hand, the scores every letter
+//! would have had at each position, [`scan_hypothetical`] matches them
+//! instead. A window's hypothetical scores say which letters the model wants
+//! there, including at the positions where a site has the wrong letter, so
+//! they can be compared with the motif's preferences as a whole: with a CWM
+//! of hypothetical scores, or with any probabilistic motif, such as one from
+//! a database, through its log-odds. Importance still comes from the
+//! observed scores.
+//!
 //! # References
 //!
 //! - Shrikumar A, Tian K, Avsec Ž, Shcherbina A, Banerjee A, Sharmin M, Nair S,
@@ -24,6 +33,7 @@
 
 use rayon::prelude::*;
 
+use crate::convert::convert_type;
 use crate::error::{Result, arg_err};
 use crate::motif::{Motif, MotifType, Strand};
 use crate::pvalue::with_threads;
@@ -177,38 +187,87 @@ fn pieces(m: &Motif, use_gaps: bool) -> Result<Pieces> {
     Ok((bounds.windows(2).map(|b| b[1] - b[0]).collect(), sizes))
 }
 
+/// Pseudocount added to each probability of a motif matched against
+/// hypothetical scores, so that letters it never saw give finite log-odds.
+const HYPOTHETICAL_PSEUDOCOUNT: f64 = 0.01;
+
+/// The values a motif is matched with, column by column, and the importance
+/// its thresholds are relative to. Observed scores are matched with a CWM as
+/// it is, relative to the sum of its absolute values. Hypothetical scores are
+/// matched with values centred in each column, so that only the preferences
+/// among letters count: a CWM's own values, relative to the sum of each
+/// column's largest absolute value, the importance of a site with the
+/// favoured letters, or another motif's log2 probabilities, which carry no
+/// scale, relative to its width, so that the threshold is a mean per
+/// position.
+fn motif_values(m: &Motif, hypothetical: bool) -> Result<(Vec<f64>, f64)> {
+    let is_cwm = m.motif_type == MotifType::Cwm;
+    if !hypothetical {
+        if !is_cwm {
+            return arg_err(format!(
+                "contribution scores are matched with CWMs, but {} is a {}",
+                m.name, m.motif_type
+            ));
+        }
+        let values: Vec<f64> = m.matrix.columns().flatten().copied().collect();
+        let l1 = values.iter().map(|v| v.abs()).sum();
+        return Ok((values, l1));
+    }
+    let (columns, reference): (Vec<Vec<f64>>, f64) = if is_cwm {
+        let cols: Vec<Vec<f64>> = m.matrix.columns().map(<[f64]>::to_vec).collect();
+        let reference = cols
+            .iter()
+            .map(|c| c.iter().fold(0.0f64, |a, &v| a.max(v.abs())))
+            .sum();
+        (cols, reference)
+    } else {
+        let ppm = convert_type(m, MotifType::Ppm, None, false)?;
+        let cols = ppm
+            .matrix
+            .columns()
+            .map(|c| {
+                let total: f64 = c.iter().sum::<f64>() + HYPOTHETICAL_PSEUDOCOUNT * c.len() as f64;
+                c.iter()
+                    .map(|&v| ((v + HYPOTHETICAL_PSEUDOCOUNT) / total).log2())
+                    .collect()
+            })
+            .collect();
+        (cols, m.width() as f64)
+    };
+    let values = columns
+        .iter()
+        .flat_map(|c| {
+            let mean = c.iter().sum::<f64>() / c.len() as f64;
+            c.iter().map(move |&v| v - mean)
+        })
+        .collect();
+    Ok((values, reference))
+}
+
 fn filters(
-    cwms: &[Motif],
+    motifs: &[Motif],
     thresholds: &[ContribThreshold],
     opts: &ContribScanOptions,
+    hypothetical: bool,
 ) -> Result<Vec<Filter>> {
-    if thresholds.len() != 1 && thresholds.len() != cwms.len() {
+    if thresholds.len() != 1 && thresholds.len() != motifs.len() {
         return arg_err(format!(
             "give one threshold or one per motif, not {} for {} motifs",
             thresholds.len(),
-            cwms.len()
+            motifs.len()
         ));
     }
-    cwms.iter()
+    motifs
+        .iter()
         .enumerate()
         .map(|(i, m)| {
-            if m.motif_type != MotifType::Cwm {
-                return arg_err(format!(
-                    "contribution scores are matched with CWMs, but {} is a {}",
-                    m.name, m.motif_type
-                ));
-            }
             if !m.alphabet.is_nucleotide() {
                 return arg_err(format!("{} is not a DNA or RNA motif", m.name));
             }
             let t = thresholds[if thresholds.len() == 1 { 0 } else { i }];
-            let width = m.width();
             let (widths, sizes) = pieces(m, opts.use_gaps)?;
-            let mut fwd = Vec::with_capacity(width * 4);
-            for col in m.matrix.columns() {
-                fwd.extend(col.iter().map(|&v| v as f32));
-            }
-            let l1: f64 = m.matrix.columns().flatten().map(|v| v.abs()).sum();
+            let (values, reference) = motif_values(m, hypothetical)?;
+            let mut fwd: Vec<f32> = values.iter().map(|&v| v as f32).collect();
             let norm = fwd
                 .iter()
                 .map(|&v| f64::from(v) * f64::from(v))
@@ -238,7 +297,7 @@ fn filters(
                 sizes,
                 strands,
                 min_similarity: t.min_similarity,
-                min_importance: t.min_importance * l1,
+                min_importance: t.min_importance * reference,
             })
         })
         .collect()
@@ -258,9 +317,14 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
     lanes.iter().sum::<f32>() + tail
 }
 
+/// The hits of one sequence. Windows are matched by the scores `x`, centred
+/// in each position with `centre`, and their importance comes from the
+/// scores `imp`, both in the layout (4, `width`).
 fn scan_one(
     sequence: usize,
     x: &[f32],
+    imp: &[f32],
+    centre: bool,
     width: usize,
     len: usize,
     filters: &[Filter],
@@ -273,11 +337,18 @@ fn scan_one(
             xt[p * 4 + a] = v;
         }
     }
+    if centre {
+        for col in xt.as_chunks_mut::<4>().0 {
+            let mean = col.iter().sum::<f32>() / 4.0;
+            col.iter_mut().for_each(|v| *v -= mean);
+        }
+    }
     let mut abs = vec![0.0f64; len + 1];
     let mut sq = vec![0.0f64; len + 1];
     for p in 0..len {
         let col = &xt[p * 4..p * 4 + 4];
-        abs[p + 1] = abs[p] + col.iter().map(|&v| f64::from(v.abs())).sum::<f64>();
+        let imp_sum: f64 = (0..4).map(|a| f64::from(imp[a * width + p].abs())).sum();
+        abs[p + 1] = abs[p] + imp_sum;
         sq[p + 1] = sq[p]
             + col
                 .iter()
@@ -432,25 +503,119 @@ pub fn scan_contributions(
             "a sequence of length {l} is longer than the {width} positions of the scores"
         ));
     }
-    let filters = filters(cwms, thresholds, opts)?;
+    let filters = filters(cwms, thresholds, opts, false)?;
+    run(&filters, scores, scores, false, lengths, width, opts)
+}
+
+/// Scan each sequence on the thread pool and gather the hits in order.
+fn run(
+    filters: &[Filter],
+    x: &[f32],
+    imp: &[f32],
+    centre: bool,
+    lengths: &[usize],
+    width: usize,
+    opts: &ContribScanOptions,
+) -> Result<Vec<ContribHit>> {
     let per_seq: Vec<Vec<ContribHit>> = with_threads(opts.nthreads, || {
         lengths
             .par_iter()
             .enumerate()
             .map(|(s, &len)| {
-                scan_one(
-                    s,
-                    &scores[s * 4 * width..(s + 1) * 4 * width],
-                    width,
-                    len,
-                    &filters,
-                )
+                let part = s * 4 * width..(s + 1) * 4 * width;
+                scan_one(s, &x[part.clone()], &imp[part], centre, width, len, filters)
             })
             .collect()
     })?;
     let mut hits: Vec<ContribHit> = per_seq.into_iter().flatten().collect();
     hits.sort_by_key(|h| (h.motif, h.sequence, h.start, h.strand == Strand::Minus));
     Ok(hits)
+}
+
+/// Find the windows of hypothetical contribution scores that match each
+/// motif.
+///
+/// `hypothetical` holds the score each letter would have had at each
+/// position, and `projected` those of the letters present, zero for the
+/// others, both laid out as for [`scan_contributions`]. Each window is
+/// matched by its hypothetical scores, centred in each position so that
+/// only the preferences among letters count, against the motif's values
+/// centred the same way, and its similarity is the cosine of the two. The
+/// motifs can be CWMs, best built from hypothetical scores, or any other
+/// type, whose probabilities are matched as log2 values after a small
+/// pseudocount; a database motif can then be matched against a model's
+/// scores directly. Importance is the sum of the window's absolute
+/// projected scores, as in [`scan_contributions`].
+///
+/// A CWM's `min_importance` is a fraction of the importance of a site with
+/// its favoured letters, the sum of each column's largest absolute value.
+/// Other motifs say nothing about the size of contributions, so theirs is
+/// the least mean absolute projected score per position of the window. The
+/// similarities of probabilistic motifs run lower than those of CWMs, as
+/// log-odds and contributions differ in shape where a motif is loose, so
+/// they want a lower `min_similarity`; 0.5 suits them well.
+///
+/// Hits, gaps and strands are as in [`scan_contributions`].
+///
+/// # Example
+///
+/// ```
+/// use universalmotif::contributions::{ContribScanOptions, ContribThreshold, scan_hypothetical};
+/// use universalmotif::create::{CreateOptions, from_strings};
+///
+/// // GAT, as a PPM, and the hypothetical scores of CCGATCC, where the model
+/// // wants G, A and T over the middle three positions.
+/// let gat = from_strings(&["GAT"], None, &CreateOptions::default())?;
+/// let (len, wanted) = (7, [(2, 2), (3, 0), (4, 3)]);
+/// let mut hyp = vec![-0.05f32; 4 * len];
+/// for (p, letter) in wanted {
+///     hyp[letter * len + p] = 0.9;
+/// }
+/// // The observed scores are those of the letters present, C C G A T C C.
+/// let seq = [1, 1, 2, 0, 3, 1, 1];
+/// let mut projected = vec![0.0f32; 4 * len];
+/// for (p, &letter) in seq.iter().enumerate() {
+///     projected[letter * len + p] = hyp[letter * len + p];
+/// }
+/// let t = ContribThreshold { min_similarity: 0.5, min_importance: 0.3 };
+/// let hits = scan_hypothetical(&[gat], &hyp, &projected, &[len], len, &[t], &ContribScanOptions::default())?;
+/// assert_eq!((hits[0].start, hits[0].end), (2, 5));
+/// # Ok::<(), universalmotif::Error>(())
+/// ```
+pub fn scan_hypothetical(
+    motifs: &[Motif],
+    hypothetical: &[f32],
+    projected: &[f32],
+    lengths: &[usize],
+    width: usize,
+    thresholds: &[ContribThreshold],
+    opts: &ContribScanOptions,
+) -> Result<Vec<ContribHit>> {
+    for (name, scores) in [("hypothetical", hypothetical), ("projected", projected)] {
+        if scores.len() != lengths.len() * 4 * width {
+            return arg_err(format!(
+                "{} {name} scores do not fill {} sequences of 4 letters and {} positions",
+                scores.len(),
+                lengths.len(),
+                width
+            ));
+        }
+    }
+    if let Some(&l) = lengths.iter().find(|&&l| l > width) {
+        return arg_err(format!(
+            "a sequence of length {l} is longer than the {width} positions of the scores"
+        ));
+    }
+    let filters = filters(motifs, thresholds, opts, true)?;
+    run(
+        &filters,
+        hypothetical,
+        projected,
+        true,
+        lengths,
+        width,
+        opts,
+    )
 }
 
 #[cfg(test)]

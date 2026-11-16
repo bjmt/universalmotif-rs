@@ -9,6 +9,10 @@ New:
   `shuffle_sequences()` and the functions built on them report their
   progress, and through which they can be cancelled
   (`Error::Cancelled`).
+- `contributions::scan_hypothetical()` matches motifs against hypothetical
+  contribution scores, comparing the letters the model wants at each
+  position with a CWM or, through its log-odds, with any probabilistic
+  motif, such as one from a database.
 
 ## 0.4.0 (2026-11-15)
 
