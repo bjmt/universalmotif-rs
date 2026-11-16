@@ -16,13 +16,18 @@ Changes in behaviour:
 
 New:
 
+- `seqlets::call_seqlets()` calls seqlets in contribution scores: stretches
+  whose total, and the total of every stretch inside them, is unlikely
+  under a null built from the scores themselves, kept down to a false
+  discovery rate estimated by calling seqlets on the scores shuffled within
+  each sequence.
 - `select::select_motifs()` ranks motifs greedily by how many new
   sequences or sites each reaches, keeping those that add enough and
   optionally leaving out motifs too similar to one already kept, and
   `select::refine_motifs()` rebuilds motifs from their hits, widened and
   trimmed, with hits shared out between motifs so that each site builds
-  one. Together they turn the many motifs of `motif_finder()` into a few
-  that reach as much.
+  one, and gapped motifs rebuilt part by part. Together they turn the many
+  motifs of `motif_finder()` into a few that reach as much.
 - `progress::with_progress()` runs a call with a `progress::Progress`
   handle, to which scanning, `motif_finder()`, `gapped_motif_finder()`,
   `shuffle_sequences()` and the functions built on them report their

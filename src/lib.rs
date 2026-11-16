@@ -60,6 +60,7 @@
 //! | Genomic anchors and matched backgrounds | [`proximity`], [`background`], [`ranges`] |
 //! | Sequences: k-mers, complexity, shuffling, sampling, masking | [`kmer`], [`complexity`], [`shuffle`], [`sample`], [`mask`] |
 //! | De novo motif discovery, and choosing and refining what it finds | [`finder`], [`select`] |
+//! | Seqlets in a sequence model's contribution scores, and matching motifs to them | [`seqlets`], [`contributions`] |
 //!
 //! Functions that do a lot of work take a thread count, `nthreads`, mostly in
 //! their options, where 0 means all cores.
@@ -109,6 +110,7 @@ pub mod sample;
 pub mod scan;
 pub mod scoring;
 pub mod select;
+pub mod seqlets;
 pub mod shuffle;
 pub mod similarity;
 #[doc(hidden)]

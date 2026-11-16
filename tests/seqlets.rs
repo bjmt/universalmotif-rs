@@ -1,0 +1,157 @@
+//! Calling seqlets in contribution scores.
+
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+use universalmotif::seqlets::{SeqletOptions, SeqletSign, call_seqlets};
+
+/// Noise around zero, with a block of `value` over `start..end` in every
+/// `every`th sequence.
+fn tracks(n: usize, len: usize, blocks: &[(usize, usize, f64)], every: usize) -> Vec<Vec<f64>> {
+    let mut rng = StdRng::seed_from_u64(4);
+    (0..n)
+        .map(|i| {
+            let mut x: Vec<f64> = (0..len).map(|_| rng.random_range(-0.02..0.02)).collect();
+            if i % every == 0 {
+                for &(a, b, v) in blocks {
+                    x[a..b].iter_mut().for_each(|p| *p += v);
+                }
+            }
+            x
+        })
+        .collect()
+}
+
+#[test]
+fn blocks_of_high_scores_are_called() {
+    let x = tracks(200, 300, &[(100, 110, 0.3)], 2);
+    let opts = SeqletOptions {
+        flank: 0,
+        ..Default::default()
+    };
+    let s = call_seqlets(&x, &opts).unwrap();
+    let pos: Vec<_> = s.iter().filter(|s| s.positive).collect();
+    assert!(pos.len() >= 95, "{} seqlets", pos.len());
+    // Seqlets may take in a few positions of the noise around a block.
+    let on_block = pos
+        .iter()
+        .filter(|s| s.sequence % 2 == 0 && s.core_start >= 95 && s.core_end <= 115)
+        .count();
+    assert!(
+        on_block >= 95 && on_block as f64 >= 0.9 * pos.len() as f64,
+        "{on_block} of {}",
+        pos.len()
+    );
+    assert!(pos.iter().all(|s| s.score > 0.0 && s.pvalue < 0.01));
+    // Seqlets come in order of sequence and position.
+    assert!(
+        s.windows(2)
+            .all(|w| (w[0].sequence, w[0].core_start) <= (w[1].sequence, w[1].core_start))
+    );
+}
+
+#[test]
+fn noise_alone_gives_almost_nothing_with_the_shuffle_filter() {
+    let x = tracks(200, 300, &[], 1);
+    let filtered = call_seqlets(&x, &SeqletOptions::default()).unwrap();
+    let raw = call_seqlets(
+        &x,
+        &SeqletOptions {
+            fdr: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        raw.len() > 10 * filtered.len().max(1),
+        "{} raw, {} kept",
+        raw.len(),
+        filtered.len()
+    );
+}
+
+#[test]
+fn a_quiet_stretch_splits_two_blocks() {
+    // Two blocks with a run of zeros between them: no stretch spanning both
+    // is a seqlet, since the run inside it is unremarkable.
+    let x = tracks(100, 200, &[(50, 58, 0.3), (68, 76, 0.3)], 1);
+    let opts = SeqletOptions {
+        flank: 0,
+        fdr: None,
+        ..Default::default()
+    };
+    let s = call_seqlets(&x, &opts).unwrap();
+    let spanning = s
+        .iter()
+        .filter(|s| s.positive && s.core_start < 58 && s.core_end > 68)
+        .count();
+    assert_eq!(spanning, 0);
+    let first = s
+        .iter()
+        .filter(|s| s.positive && s.core_start >= 48 && s.core_end <= 60)
+        .count();
+    assert!(first >= 95);
+}
+
+#[test]
+fn signs_and_flanks() {
+    let x = tracks(100, 200, &[(20, 30, -0.3), (150, 160, 0.3)], 1);
+    let opts = SeqletOptions {
+        flank: 3,
+        ..Default::default()
+    };
+    let s = call_seqlets(&x, &opts).unwrap();
+    let neg: Vec<_> = s.iter().filter(|s| !s.positive).collect();
+    assert!(
+        neg.len() >= 95
+            && neg
+                .iter()
+                .all(|s| s.score < 0.0 && s.core_start >= 18 && s.core_end <= 32)
+    );
+    assert!(
+        s.iter()
+            .all(|s| s.start + 3 == s.core_start || s.start == 0)
+    );
+    assert!(s.iter().all(|s| s.end == s.core_end + 3 || s.end == 200));
+    let pos_only = call_seqlets(
+        &x,
+        &SeqletOptions {
+            sign: SeqletSign::Positive,
+            ..opts.clone()
+        },
+    )
+    .unwrap();
+    assert!(pos_only.iter().all(|s| s.positive));
+    assert_eq!(pos_only.len(), s.iter().filter(|s| s.positive).count());
+}
+
+#[test]
+fn bad_options_and_empty_tracks() {
+    let x = tracks(5, 50, &[], 1);
+    for opts in [
+        SeqletOptions {
+            threshold: 0.0,
+            ..Default::default()
+        },
+        SeqletOptions {
+            min_len: 10,
+            max_len: 5,
+            ..Default::default()
+        },
+        SeqletOptions {
+            fdr: Some(1.5),
+            ..Default::default()
+        },
+    ] {
+        assert!(call_seqlets(&x, &opts).is_err());
+    }
+    assert!(
+        call_seqlets(&[vec![0.0; 40]], &SeqletOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        call_seqlets(&[vec![1.0, f64::NAN, 2.0]], &SeqletOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+}

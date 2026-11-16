@@ -225,3 +225,39 @@ fn competitive_refinement_keeps_a_weak_motif_apart() {
     assert!(c.contains("GATAAG") || c.contains("CTTATC"), "{c}");
     assert!(alone[1].sites > 0);
 }
+
+#[test]
+fn gapped_motifs_are_refined_part_by_part() {
+    let mut seqs = create_sequences(&['A', 'C', 'G', 'T'], 300, 250, None, 11, 1).unwrap();
+    // Two parts with flanks, a spacer of 3 to 6 random letters between them.
+    let spacers = ["ACG", "TTCA", "GACTT", "CATGCA"];
+    for (i, s) in seqs.iter_mut().enumerate().step_by(2) {
+        let site = format!("GCTGACTCA{}AGATAAGCG", spacers[(i / 2) % 4]);
+        s.replace_range(100..100 + site.len(), &site);
+    }
+    let start =
+        universalmotif::ops::add_gap(&motif("TGACTCAAGATAAG", "pair"), Some(&[7]), &[3], &[6])
+            .unwrap();
+    let out = refine_motifs(
+        std::slice::from_ref(&start),
+        &seqs,
+        None,
+        &RefineOptions::default(),
+    )
+    .unwrap();
+    let r = &out[0].motif;
+    assert!(out[0].sites >= 140, "{} sites", out[0].sites);
+    assert!(r.gap.isgapped);
+    assert_eq!(
+        (r.gap.mingap.clone(), r.gap.maxgap.clone()),
+        (vec![3], vec![6])
+    );
+    // Each part grew to take in its planted flank.
+    assert_eq!(r.width(), 18, "{:?}", r.consensus);
+    assert_eq!(r.gap.gaploc, vec![9]);
+    let c = r.consensus.clone().unwrap();
+    assert!(
+        c.starts_with("GCTGACTCA") && c.ends_with("AGATAAGCG"),
+        "{c}"
+    );
+}

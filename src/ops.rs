@@ -99,7 +99,7 @@ impl std::fmt::Display for TrimFrom {
 
 /// Keep only the columns in `keep`, shifting gap positions to match and
 /// dropping gaps that fall outside.
-fn keep_columns(motif: &Motif, keep: std::ops::Range<usize>) -> (Matrix, GapInfo) {
+pub(crate) fn keep_columns(motif: &Motif, keep: std::ops::Range<usize>) -> (Matrix, GapInfo) {
     let width = keep.len();
     let mut gap = GapInfo {
         isgapped: false,
@@ -118,7 +118,12 @@ fn keep_columns(motif: &Motif, keep: std::ops::Range<usize>) -> (Matrix, GapInfo
 
 /// Rebuild the derived fields, the total IC and consensus, after the matrix
 /// changed, leaving everything else as it was.
-fn refresh(motif: &Motif, matrix: Matrix, gap: GapInfo, ic_type: MotifType) -> Result<Motif> {
+pub(crate) fn refresh(
+    motif: &Motif,
+    matrix: Matrix,
+    gap: GapInfo,
+    ic_type: MotifType,
+) -> Result<Motif> {
     let mut p = motif.clone().into_parts();
     let nsites = Some(p.nsites.unwrap_or(100.0));
     p.icscore = Motif::compute_icscore(&matrix, &p.bkg, ic_type, p.pseudocount, nsites);

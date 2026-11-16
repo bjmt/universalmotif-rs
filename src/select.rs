@@ -347,9 +347,12 @@ pub struct Refined {
 /// strand, with a pseudocount of the motif's own (or 1 if it has none).
 /// Edge columns below `min_ic` are then trimmed, and a motif wider than
 /// `max_width` keeps its most informative stretch of that width. Gapped
-/// motifs, and motifs with fewer than `min_sites` hits, are left as they
-/// are, though they still compete for sites. The refined motifs keep the
-/// names and other details of those given.
+/// motifs are rebuilt part by part from the letters their hits put in each
+/// part, whatever the spacer, with flanks added and trimmed at their outer
+/// ends only, so that no part is lost, and their gaps keep their ranges.
+/// Motifs with fewer than `min_sites` hits are left as they are, though they
+/// still compete for sites. The refined motifs keep the names and other
+/// details of those given.
 pub fn refine_motifs<S: AsRef<str> + Sync>(
     motifs: &[Motif],
     sequences: &[S],
@@ -383,6 +386,7 @@ pub fn refine_motifs<S: AsRef<str> + Sync>(
         let hits = scan_table(&current, sequences, &scan)?;
         let mut next = current.clone();
         let mut windows: Vec<Vec<(usize, usize, bool)>> = vec![Vec::new(); current.len()];
+        let mut gapped: Vec<Vec<usize>> = vec![Vec::new(); current.len()];
         for i in 0..hits.len() {
             let (seq, start, end) = (hits.sequence[i] as usize, hits.start[i], hits.end[i]);
             if sites.is_some() {
@@ -397,14 +401,19 @@ pub fn refine_motifs<S: AsRef<str> + Sync>(
                 continue;
             }
             windows[hits.motif[i] as usize].push((seq, a as usize, hits.minus[i]));
+            gapped[hits.motif[i] as usize].push(i);
         }
         for (k, m) in current.iter().enumerate() {
             let w = &windows[k];
-            if m.gap.isgapped || w.len() < opts.min_sites {
+            if w.len() < opts.min_sites {
                 continue;
             }
-            let width = m.width() + 2 * opts.flank;
-            if let Some(new) = rebuild(m, sequences, w, width, opts)? {
+            let new = if m.gap.isgapped {
+                rebuild_gapped(m, &hits, &gapped[k], sequences, opts)?
+            } else {
+                rebuild(m, sequences, w, m.width() + 2 * opts.flank, opts)?
+            };
+            if let Some(new) = new {
                 next[k] = new;
                 used[k] = w.len();
             }
@@ -484,6 +493,120 @@ fn rebuild<S: AsRef<str>>(
         pcm = widest_informative(&pcm, opts.max_width)?;
     }
     convert_type(&pcm, m.motif_type, Some(pseudocount), false).map(Some)
+}
+
+/// A gapped motif rebuilt from its hits `idx`: each part from the letters
+/// its hits put in it, whatever their spacers, with `flank` columns added at
+/// the outer ends only and trimmed back as far as `min_ic` asks without
+/// emptying a part. The gaps keep their ranges.
+fn rebuild_gapped<S: AsRef<str>>(
+    m: &Motif,
+    hits: &HitTable,
+    idx: &[usize],
+    sequences: &[S],
+    opts: &RefineOptions,
+) -> Result<Option<Motif>> {
+    let alphabet = &m.alphabet;
+    let k = alphabet.len();
+    let fold = !matches!(alphabet, Alphabet::Custom(_));
+    let index = |b: u8| {
+        let c = b as char;
+        alphabet.index_of(c).or_else(|| {
+            if fold {
+                alphabet.index_of(c.to_ascii_uppercase())
+            } else {
+                None
+            }
+        })
+    };
+    let f = opts.flank;
+    let core = m.width();
+    let width = core + 2 * f;
+    let mut counts = vec![0.0; k * width];
+    let mut letters = Vec::new();
+    let mut n = 0usize;
+    for &i in idx {
+        if hits.minus[i] && !alphabet.is_nucleotide() {
+            continue;
+        }
+        let seq = sequences[hits.sequence[i] as usize].as_ref().as_bytes();
+        let (a, b) = (hits.start[i] as usize, hits.end[i] as usize);
+        hits.matched_into(i, sequences, &mut letters);
+        let parts: Vec<u8> = letters.iter().copied().filter(|&c| c != b'.').collect();
+        if parts.len() != core {
+            continue;
+        }
+        // The flanks read along the hit: before and after it on the +
+        // strand, and the complements of after and before it on the -.
+        let (left, right): (Vec<Option<usize>>, Vec<Option<usize>>) = if hits.minus[i] {
+            let comp = |c: u8| index(c).map(|r| k - 1 - r);
+            (
+                seq[b..b + f].iter().rev().map(|&c| comp(c)).collect(),
+                seq[a - f..a].iter().rev().map(|&c| comp(c)).collect(),
+            )
+        } else {
+            (
+                seq[a - f..a].iter().map(|&c| index(c)).collect(),
+                seq[b..b + f].iter().map(|&c| index(c)).collect(),
+            )
+        };
+        let row = left
+            .into_iter()
+            .chain(parts.iter().map(|&c| index(c)))
+            .chain(right);
+        for (col, r) in row.enumerate() {
+            if let Some(r) = r {
+                counts[col * k + r] += 1.0;
+            }
+        }
+        n += 1;
+    }
+    if n < opts.min_sites {
+        return Ok(None);
+    }
+    let pseudocount = if m.pseudocount > 0.0 {
+        m.pseudocount
+    } else {
+        1.0
+    };
+    let mut p = m.clone().into_parts();
+    p.matrix = crate::matrix::Matrix::from_vec(k, width, counts)?;
+    p.motif_type = MotifType::Pcm;
+    p.nsites = Some(n as f64);
+    p.pseudocount = pseudocount;
+    p.gap.gaploc = m.gap.gaploc.iter().map(|g| g + f).collect();
+    p.icscore = Motif::compute_icscore(&p.matrix, &p.bkg, MotifType::Pcm, pseudocount, p.nsites);
+    p.consensus = Motif::compute_consensus(&p.matrix, &p.alphabet, MotifType::Pcm, pseudocount);
+    let pcm = Motif::from_parts(p)?;
+    // Trim the outer ends, keeping at least one column of the first and
+    // last parts.
+    let ic: Vec<f64> = pcm
+        .matrix
+        .columns()
+        .map(|c| {
+            crate::convert::position_icscore(
+                c,
+                &pcm.bkg,
+                MotifType::Pcm,
+                pseudocount,
+                n as f64,
+                false,
+            )
+        })
+        .collect();
+    let first_gap = pcm.gap.gaploc[0];
+    let last_gap = *pcm.gap.gaploc.last().unwrap();
+    let mut lo = 0;
+    while lo + 1 < first_gap && ic[lo] < opts.min_ic {
+        lo += 1;
+    }
+    let mut hi = width;
+    while hi > last_gap + 1 && ic[hi - 1] < opts.min_ic {
+        hi -= 1;
+    }
+    let (matrix, gap) = crate::ops::keep_columns(&pcm, lo..hi);
+    let trimmed = crate::ops::refresh(&pcm, matrix, gap, MotifType::Pcm)?;
+    convert_type(&trimmed, m.motif_type, Some(pseudocount), false).map(Some)
 }
 
 /// The stretch of `width` columns with the most information.
