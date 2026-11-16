@@ -59,7 +59,7 @@
 //! | Enrichment, co-occurrence and positional enrichment | [`enrich`], [`coocc`], [`peaks`] |
 //! | Genomic anchors and matched backgrounds | [`proximity`], [`background`], [`ranges`] |
 //! | Sequences: k-mers, complexity, shuffling, sampling, masking | [`kmer`], [`complexity`], [`shuffle`], [`sample`], [`mask`] |
-//! | De novo motif discovery | [`finder`] |
+//! | De novo motif discovery, and choosing and refining what it finds | [`finder`], [`select`] |
 //!
 //! Functions that do a lot of work take a thread count, `nthreads`, mostly in
 //! their options, where 0 means all cores.
@@ -108,6 +108,7 @@ pub mod ranges;
 pub mod sample;
 pub mod scan;
 pub mod scoring;
+pub mod select;
 pub mod shuffle;
 pub mod similarity;
 #[doc(hidden)]
