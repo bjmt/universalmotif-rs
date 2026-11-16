@@ -45,9 +45,10 @@ pub struct SeqletOptions {
     /// Positions added on either side of each seqlet, within its sequence;
     /// 3 by default.
     pub flank: usize,
-    /// With a value, keep seqlets down to the total at which decoys called
-    /// on shuffled scores are at most this share of those passing; 0.2 by
-    /// default. `None` keeps every seqlet.
+    /// With a value, keep seqlets down to the total at which decoys are at
+    /// most this share of those passing; 0.2 by default. Decoys are called
+    /// in the decoy scores given to [`call_seqlets`], or else in each
+    /// sequence's scores shuffled. `None` keeps every seqlet.
     pub fdr: Option<f64>,
     /// The signs to call.
     pub sign: SeqletSign,
@@ -107,7 +108,19 @@ pub struct Seqlet {
 /// `min_len` positions have a P-value below `threshold`, in order of P-value,
 /// unless it overlaps a seqlet already taken. Seqlets come back in order of
 /// sequence and position.
-pub fn call_seqlets(scores: &[Vec<f64>], opts: &SeqletOptions) -> Result<Vec<Seqlet>> {
+///
+/// `decoys`, the scores of sequences with nothing to find, such as a model's
+/// contributions for shuffled sequences, set the false discovery rate when
+/// given: seqlets are called in them the same way, and their number, scaled
+/// to as many positions as the scores have, stands for the false seqlets
+/// among those called. Otherwise each sequence's own scores, shuffled,
+/// stand in for them, which keeps their values but not the model's view of
+/// sequence without sites.
+pub fn call_seqlets(
+    scores: &[Vec<f64>],
+    decoys: Option<&[Vec<f64>]>,
+    opts: &SeqletOptions,
+) -> Result<Vec<Seqlet>> {
     if !(opts.threshold > 0.0 && opts.threshold <= 1.0) {
         return arg_err("threshold must be above 0 and at most 1");
     }
@@ -150,21 +163,40 @@ pub fn call_seqlets(scores: &[Vec<f64>], opts: &SeqletOptions) -> Result<Vec<Seq
             };
             let mut real = call_all(&x, &null, opts, &work)?;
             if let Some(fdr) = opts.fdr {
-                let mut rng =
-                    StdRng::seed_from_u64(opts.seed ^ if sign > 0.0 { 0 } else { 0x5eed });
-                let shuffled: Vec<Vec<f64>> = x
-                    .iter()
-                    .map(|s| {
-                        let mut v = s.clone();
-                        v.shuffle(&mut rng);
-                        v
-                    })
-                    .collect();
-                let decoys = call_all(&shuffled, &null, opts, &None)?;
+                // Decoy scores given, such as the model's on shuffled
+                // sequences, or else each sequence's scores shuffled.
+                let null_scores: Vec<Vec<f64>> = match decoys {
+                    Some(d) => d
+                        .iter()
+                        .map(|s| {
+                            s.iter()
+                                .map(|&v| if v.is_finite() { v * sign } else { 0.0 })
+                                .collect()
+                        })
+                        .collect(),
+                    None => {
+                        let mut rng =
+                            StdRng::seed_from_u64(opts.seed ^ if sign > 0.0 { 0 } else { 0x5eed });
+                        x.iter()
+                            .map(|s| {
+                                let mut v = s.clone();
+                                v.shuffle(&mut rng);
+                                v
+                            })
+                            .collect()
+                    }
+                };
+                let called = call_all(&null_scores, &null, opts, &None)?;
+                // Decoys are counted as if there were as many positions of
+                // them as of the scores.
+                let positions =
+                    |v: &[Vec<f64>]| v.iter().map(Vec::len).sum::<usize>().max(1) as f64;
+                let scale = positions(&x) / positions(&null_scores);
                 let cut = fdr_cut(
                     &real.iter().map(|s| s.score).collect::<Vec<_>>(),
-                    &decoys.iter().map(|s| s.score).collect::<Vec<_>>(),
+                    &called.iter().map(|s| s.score).collect::<Vec<_>>(),
                     fdr,
+                    scale,
                 );
                 real.retain(|s| s.score >= cut);
             }
@@ -181,9 +213,10 @@ pub fn call_seqlets(scores: &[Vec<f64>], opts: &SeqletOptions) -> Result<Vec<Seq
     Ok(out)
 }
 
-/// The lowest total at which decoys at or above it are at most `fdr` of the
-/// real seqlets at or above it, or infinity when there is none.
-fn fdr_cut(real: &[f64], decoy: &[f64], fdr: f64) -> f64 {
+/// The lowest total at which decoys at or above it, times `scale`, are at
+/// most `fdr` of the real seqlets at or above it, or infinity when there is
+/// none.
+fn fdr_cut(real: &[f64], decoy: &[f64], fdr: f64, scale: f64) -> f64 {
     let mut v = real.to_vec();
     v.sort_by(|a, b| b.partial_cmp(a).unwrap());
     let mut d = decoy.to_vec();
@@ -191,7 +224,7 @@ fn fdr_cut(real: &[f64], decoy: &[f64], fdr: f64) -> f64 {
     let mut cut = f64::INFINITY;
     for (i, &t) in v.iter().enumerate() {
         let n_decoy = d.len() - d.partition_point(|&x| x < t);
-        if n_decoy as f64 / (i + 1) as f64 <= fdr {
+        if n_decoy as f64 * scale / (i + 1) as f64 <= fdr {
             cut = t;
         }
     }

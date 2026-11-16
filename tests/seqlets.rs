@@ -28,7 +28,7 @@ fn blocks_of_high_scores_are_called() {
         flank: 0,
         ..Default::default()
     };
-    let s = call_seqlets(&x, &opts).unwrap();
+    let s = call_seqlets(&x, None, &opts).unwrap();
     let pos: Vec<_> = s.iter().filter(|s| s.positive).collect();
     assert!(pos.len() >= 95, "{} seqlets", pos.len());
     // Seqlets may take in a few positions of the noise around a block.
@@ -52,9 +52,10 @@ fn blocks_of_high_scores_are_called() {
 #[test]
 fn noise_alone_gives_almost_nothing_with_the_shuffle_filter() {
     let x = tracks(200, 300, &[], 1);
-    let filtered = call_seqlets(&x, &SeqletOptions::default()).unwrap();
+    let filtered = call_seqlets(&x, None, &SeqletOptions::default()).unwrap();
     let raw = call_seqlets(
         &x,
+        None,
         &SeqletOptions {
             fdr: None,
             ..Default::default()
@@ -79,7 +80,7 @@ fn a_quiet_stretch_splits_two_blocks() {
         fdr: None,
         ..Default::default()
     };
-    let s = call_seqlets(&x, &opts).unwrap();
+    let s = call_seqlets(&x, None, &opts).unwrap();
     let spanning = s
         .iter()
         .filter(|s| s.positive && s.core_start < 58 && s.core_end > 68)
@@ -99,7 +100,7 @@ fn signs_and_flanks() {
         flank: 3,
         ..Default::default()
     };
-    let s = call_seqlets(&x, &opts).unwrap();
+    let s = call_seqlets(&x, None, &opts).unwrap();
     let neg: Vec<_> = s.iter().filter(|s| !s.positive).collect();
     assert!(
         neg.len() >= 95
@@ -114,6 +115,7 @@ fn signs_and_flanks() {
     assert!(s.iter().all(|s| s.end == s.core_end + 3 || s.end == 200));
     let pos_only = call_seqlets(
         &x,
+        None,
         &SeqletOptions {
             sign: SeqletSign::Positive,
             ..opts.clone()
@@ -142,16 +144,34 @@ fn bad_options_and_empty_tracks() {
             ..Default::default()
         },
     ] {
-        assert!(call_seqlets(&x, &opts).is_err());
+        assert!(call_seqlets(&x, None, &opts).is_err());
     }
     assert!(
-        call_seqlets(&[vec![0.0; 40]], &SeqletOptions::default())
+        call_seqlets(&[vec![0.0; 40]], None, &SeqletOptions::default())
             .unwrap()
             .is_empty()
     );
     assert!(
-        call_seqlets(&[vec![1.0, f64::NAN, 2.0]], &SeqletOptions::default())
+        call_seqlets(&[vec![1.0, f64::NAN, 2.0]], None, &SeqletOptions::default())
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn decoy_scores_set_the_cut() {
+    let x = tracks(200, 300, &[(100, 110, 0.3)], 2);
+    let opts = SeqletOptions {
+        flank: 0,
+        sign: SeqletSign::Positive,
+        ..Default::default()
+    };
+    // Decoys with blocks as strong as the real ones make every seqlet look
+    // false; quiet decoys, twice as many, keep the real ones.
+    let loud = tracks(200, 300, &[(50, 60, 0.3)], 1);
+    let quiet = tracks(400, 300, &[], 1);
+    let none = call_seqlets(&x, Some(&loud), &opts).unwrap();
+    let kept = call_seqlets(&x, Some(&quiet), &opts).unwrap();
+    assert!(none.len() < 10, "{}", none.len());
+    assert!(kept.len() >= 95, "{}", kept.len());
 }
