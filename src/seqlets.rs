@@ -11,9 +11,9 @@
 //! kept down to the total at which these decoys make up at most a given
 //! share of those passing.
 
-use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 
 use crate::error::{Result, arg_err};
@@ -116,9 +116,13 @@ pub struct Seqlet {
 /// among those called. Otherwise each sequence's own scores, shuffled,
 /// stand in for them, which keeps their values but not the model's view of
 /// sequence without sites.
-pub fn call_seqlets(
-    scores: &[Vec<f64>],
-    decoys: Option<&[Vec<f64>]>,
+///
+/// The scores can be any slices, such as `Vec<f64>` or rows borrowed from a
+/// larger array; each sequence's are copied only while it is called, so the
+/// memory used beyond the scores stays small.
+pub fn call_seqlets<S: AsRef<[f64]> + Sync>(
+    scores: &[S],
+    decoys: Option<&[S]>,
     opts: &SeqletOptions,
 ) -> Result<Vec<Seqlet>> {
     if !(opts.threshold > 0.0 && opts.threshold <= 1.0) {
@@ -140,58 +144,48 @@ pub fn call_seqlets(
         SeqletSign::Positive => &[1.0],
         SeqletSign::Negative => &[-1.0],
     };
-    let clean: Vec<Vec<f64>> = scores
-        .iter()
-        .map(|s| {
-            s.iter()
-                .map(|&x| if x.is_finite() { x } else { 0.0 })
-                .collect()
-        })
-        .collect();
-    let total: usize = clean.iter().map(|s| s.len()).sum();
+    let positions = |v: &[S]| v.iter().map(|s| s.as_ref().len()).sum::<usize>();
+    let total = positions(scores);
     let work = progress::current();
     progress::begin(&work, "calling seqlets", (total * signs.len()) as u64);
+    // Each sequence's scores are signed, cleaned and, for decoys, shuffled
+    // only as it is called, so that no copy of all the scores is kept.
     let out = with_threads(opts.nthreads, || -> Result<Vec<Seqlet>> {
         let mut out = Vec::new();
         for &sign in signs {
-            let x: Vec<Vec<f64>> = clean
-                .iter()
-                .map(|s| s.iter().map(|v| v * sign).collect())
-                .collect();
-            let Some(null) = Null::new(&x, opts.max_len, opts.n_bins) else {
+            let Some(null) = Null::new(scores, sign, opts.max_len, opts.n_bins) else {
                 continue;
             };
-            let mut real = call_all(&x, &null, opts, &work)?;
+            let mut real = call_all(
+                scores.len(),
+                |i| signed(scores[i].as_ref(), sign),
+                &null,
+                opts,
+                &work,
+            )?;
             if let Some(fdr) = opts.fdr {
                 // Decoy scores given, such as the model's on shuffled
                 // sequences, or else each sequence's scores shuffled.
-                let null_scores: Vec<Vec<f64>> = match decoys {
-                    Some(d) => d
-                        .iter()
-                        .map(|s| {
-                            s.iter()
-                                .map(|&v| if v.is_finite() { v * sign } else { 0.0 })
-                                .collect()
-                        })
-                        .collect(),
+                let (called, n_decoy) = match decoys {
+                    Some(d) => (
+                        call_all(d.len(), |i| signed(d[i].as_ref(), sign), &null, opts, &None)?,
+                        positions(d),
+                    ),
                     None => {
                         let mut rng =
                             StdRng::seed_from_u64(opts.seed ^ if sign > 0.0 { 0 } else { 0x5eed });
-                        x.iter()
-                            .map(|s| {
-                                let mut v = s.clone();
-                                v.shuffle(&mut rng);
-                                v
-                            })
-                            .collect()
+                        let seeds: Vec<u64> = (0..scores.len()).map(|_| rng.next_u64()).collect();
+                        let shuffled = |i: usize| {
+                            let mut v = signed(scores[i].as_ref(), sign);
+                            v.shuffle(&mut StdRng::seed_from_u64(seeds[i]));
+                            v
+                        };
+                        (call_all(scores.len(), shuffled, &null, opts, &None)?, total)
                     }
                 };
-                let called = call_all(&null_scores, &null, opts, &None)?;
                 // Decoys are counted as if there were as many positions of
                 // them as of the scores.
-                let positions =
-                    |v: &[Vec<f64>]| v.iter().map(Vec::len).sum::<usize>().max(1) as f64;
-                let scale = positions(&x) / positions(&null_scores);
+                let scale = total.max(1) as f64 / n_decoy.max(1) as f64;
                 let cut = fdr_cut(
                     &real.iter().map(|s| s.score).collect::<Vec<_>>(),
                     &called.iter().map(|s| s.score).collect::<Vec<_>>(),
@@ -211,6 +205,13 @@ pub fn call_seqlets(
     let mut out = out;
     out.sort_by_key(|s| (s.sequence, s.core_start, !s.positive));
     Ok(out)
+}
+
+/// A sequence's scores times `sign`, with missing ones as zero.
+fn signed(s: &[f64], sign: f64) -> Vec<f64> {
+    s.iter()
+        .map(|&v| if v.is_finite() { v * sign } else { 0.0 })
+        .collect()
 }
 
 /// The lowest total at which decoys at or above it, times `scale`, are at
@@ -242,9 +243,13 @@ struct Null {
 }
 
 impl Null {
-    fn new(x: &[Vec<f64>], max_len: usize, n_bins: usize) -> Option<Null> {
-        let all = x.iter().flatten();
-        let (lo, hi) = all.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| {
+    fn new<S: AsRef<[f64]>>(x: &[S], sign: f64, max_len: usize, n_bins: usize) -> Option<Null> {
+        let all = || {
+            x.iter()
+                .flat_map(|s| s.as_ref().iter())
+                .map(move |&v| if v.is_finite() { v * sign } else { 0.0 })
+        };
+        let (lo, hi) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
             (a.min(v), b.max(v))
         });
         // Empty, constant or all-missing scores give no null.
@@ -254,7 +259,7 @@ impl Null {
         let width = (hi - lo) / (n_bins - 1) as f64;
         let mut f = vec![0.0; n_bins];
         let mut n = 0.0;
-        for &v in x.iter().flatten() {
+        for v in all() {
             f[(((v - lo) / width) as usize).min(n_bins - 1)] += 1.0;
             n += 1.0;
         }
@@ -306,18 +311,19 @@ fn survival(pmf: &[f64]) -> Vec<f64> {
     out
 }
 
-fn call_all(
-    x: &[Vec<f64>],
+fn call_all<F: Fn(usize) -> Vec<f64> + Sync>(
+    n: usize,
+    get: F,
     null: &Null,
     opts: &SeqletOptions,
     work: &Option<Progress>,
 ) -> Result<Vec<Seqlet>> {
-    let calls: Vec<Result<Vec<Seqlet>>> = x
-        .par_iter()
-        .enumerate()
-        .map(|(i, s)| {
+    let calls: Vec<Result<Vec<Seqlet>>> = (0..n)
+        .into_par_iter()
+        .map(|i| {
             progress::check(work)?;
-            let found = call_one(i, s, null, opts);
+            let s = get(i);
+            let found = call_one(i, &s, null, opts);
             progress::add(work, s.len() as u64);
             Ok(found)
         })
