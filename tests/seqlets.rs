@@ -175,3 +175,29 @@ fn decoy_scores_set_the_cut() {
     assert!(none.len() < 10, "{}", none.len());
     assert!(kept.len() >= 95, "{}", kept.len());
 }
+
+#[test]
+fn single_precision_scores_give_the_same_seqlets() {
+    // Scores that f32 holds exactly, so that both precisions see the same values.
+    let x: Vec<Vec<f64>> = tracks(100, 200, &[(80, 90, 0.25)], 2)
+        .into_iter()
+        .map(|s| s.into_iter().map(|v| v as f32 as f64).collect())
+        .collect();
+    let x32: Vec<Vec<f32>> = x
+        .iter()
+        .map(|s| s.iter().map(|&v| v as f32).collect())
+        .collect();
+    let rows: Vec<&[f32]> = x32.iter().map(Vec::as_slice).collect();
+    let opts = SeqletOptions::default();
+    let a = call_seqlets(&x, None, &opts).unwrap();
+    let b = call_seqlets(&rows, None, &opts).unwrap();
+    assert!(!a.is_empty());
+    assert_eq!(
+        a.iter()
+            .map(|s| (s.sequence, s.start, s.end))
+            .collect::<Vec<_>>(),
+        b.iter()
+            .map(|s| (s.sequence, s.start, s.end))
+            .collect::<Vec<_>>()
+    );
+}

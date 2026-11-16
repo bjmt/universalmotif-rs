@@ -26,8 +26,9 @@ New:
   under a null built from the scores themselves, kept down to a false
   discovery rate estimated by calling seqlets on decoy scores, such as a
   model's for shuffled sequences, or else on the scores shuffled within
-  each sequence. It takes the scores as any slices, such as borrowed rows
-  of a larger array, and copies one sequence at a time.
+  each sequence. It takes the scores as any slices of `f64` or `f32`,
+  such as borrowed rows of a larger array, and copies one sequence at a
+  time.
 - `select::motif_stability()` reruns `motif_finder()` on random subsets of
   the sequences and gives each motif the share of reruns that find it
   again.

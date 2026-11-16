@@ -117,10 +117,10 @@ pub struct Seqlet {
 /// stand in for them, which keeps their values but not the model's view of
 /// sequence without sites.
 ///
-/// The scores can be any slices, such as `Vec<f64>` or rows borrowed from a
-/// larger array; each sequence's are copied only while it is called, so the
+/// The scores can be any slices of `f64` or `f32`, such as `Vec<f64>` or
+/// rows borrowed from a larger array; each sequence's are copied only while it is called, so the
 /// memory used beyond the scores stays small.
-pub fn call_seqlets<S: AsRef<[f64]> + Sync>(
+pub fn call_seqlets<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
     scores: &[S],
     decoys: Option<&[S]>,
     opts: &SeqletOptions,
@@ -208,9 +208,12 @@ pub fn call_seqlets<S: AsRef<[f64]> + Sync>(
 }
 
 /// A sequence's scores times `sign`, with missing ones as zero.
-fn signed(s: &[f64], sign: f64) -> Vec<f64> {
+fn signed<T: Copy + Into<f64>>(s: &[T], sign: f64) -> Vec<f64> {
     s.iter()
-        .map(|&v| if v.is_finite() { v * sign } else { 0.0 })
+        .map(|&v| {
+            let v: f64 = v.into();
+            if v.is_finite() { v * sign } else { 0.0 }
+        })
         .collect()
 }
 
@@ -243,11 +246,17 @@ struct Null {
 }
 
 impl Null {
-    fn new<S: AsRef<[f64]>>(x: &[S], sign: f64, max_len: usize, n_bins: usize) -> Option<Null> {
+    fn new<T: Copy + Into<f64>, S: AsRef<[T]>>(
+        x: &[S],
+        sign: f64,
+        max_len: usize,
+        n_bins: usize,
+    ) -> Option<Null> {
         let all = || {
-            x.iter()
-                .flat_map(|s| s.as_ref().iter())
-                .map(move |&v| if v.is_finite() { v * sign } else { 0.0 })
+            x.iter().flat_map(|s| s.as_ref().iter()).map(move |&v| {
+                let v: f64 = v.into();
+                if v.is_finite() { v * sign } else { 0.0 }
+            })
         };
         let (lo, hi) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
             (a.min(v), b.max(v))
