@@ -261,3 +261,56 @@ fn gapped_motifs_are_refined_part_by_part() {
         "{c}"
     );
 }
+
+#[test]
+fn stability_counts_reruns_that_find_a_motif_again() {
+    use universalmotif::finder::{FinderOptions, motif_finder};
+    use universalmotif::select::{StabilityOptions, motif_stability};
+
+    let mut seqs = create_sequences(&['A', 'C', 'G', 'T'], 300, 100, None, 21, 1).unwrap();
+    plant(&mut seqs, "TTGACTCATG", 2, 0, 40);
+    let finder = FinderOptions {
+        nmotifs: 3,
+        seed: 1,
+        ..Default::default()
+    };
+    let found = motif_finder(&seqs, None, &finder).unwrap();
+    assert!(!found.is_empty());
+    let mut motifs: Vec<Motif> = found.into_iter().map(|f| f.motif).collect();
+    motifs.push(motif("CGCGTACGCG", "absent"));
+    let opts = StabilityOptions::default();
+    let st = motif_stability(&motifs, &seqs, None, &finder, &opts).unwrap();
+    assert_eq!(st.len(), motifs.len());
+    assert_eq!(st[0], 1.0, "{st:?}");
+    assert_eq!(*st.last().unwrap(), 0.0);
+    assert_eq!(
+        st,
+        motif_stability(&motifs, &seqs, None, &finder, &opts).unwrap()
+    );
+    assert!(
+        motif_stability(
+            &motifs,
+            &seqs,
+            None,
+            &finder,
+            &StabilityOptions {
+                rounds: 0,
+                ..opts.clone()
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        motif_stability(
+            &motifs,
+            &seqs,
+            None,
+            &finder,
+            &StabilityOptions {
+                fraction: 1.0,
+                ..opts
+            }
+        )
+        .is_err()
+    );
+}

@@ -21,6 +21,9 @@ New:
   under a null built from the scores themselves, kept down to a false
   discovery rate estimated by calling seqlets on the scores shuffled within
   each sequence.
+- `select::motif_stability()` reruns `motif_finder()` on random subsets of
+  the sequences and gives each motif the share of reruns that find it
+  again.
 - `select::select_motifs()` ranks motifs greedily by how many new
   sequences or sites each reaches, keeping those that add enough and
   optionally leaving out motifs too similar to one already kept, and

@@ -634,3 +634,117 @@ fn widest_informative(m: &Motif, width: usize) -> Result<Motif> {
     p.consensus = Motif::compute_consensus(&p.matrix, &p.alphabet, p.motif_type, p.pseudocount);
     Motif::from_parts(p)
 }
+
+/// Options for [`motif_stability`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct StabilityOptions {
+    /// Times discovery is rerun; 4 by default.
+    pub rounds: usize,
+    /// The share of the sequences, and of the negatives, each rerun sees;
+    /// 0.5 by default.
+    pub fraction: f64,
+    /// The similarity, as [`compare_motifs`](crate::compare::compare_motifs)
+    /// scores it with its default options, at which a motif counts as found
+    /// again; 0.9 by default.
+    pub min_similarity: f64,
+    /// Seed for drawing the subsets.
+    pub seed: u64,
+}
+
+impl Default for StabilityOptions {
+    fn default() -> Self {
+        StabilityOptions {
+            rounds: 4,
+            fraction: 0.5,
+            min_similarity: 0.9,
+            seed: 1,
+        }
+    }
+}
+
+/// How reliably discovery finds each motif: the share of `rounds` reruns of
+/// [`motif_finder`](crate::finder::motif_finder), each on a random
+/// `fraction` of the sequences and negatives with the options `finder`, that
+/// find a motif at least `min_similarity` like it.
+///
+/// Motifs found in most reruns are the ones discovery would find again on
+/// other data; keeping only those, before or after [`select_motifs`], gives
+/// sets that differ less from one sample of sequences to the next.
+pub fn motif_stability<S: AsRef<str> + Sync>(
+    motifs: &[Motif],
+    sequences: &[S],
+    negatives: Option<&[S]>,
+    finder: &crate::finder::FinderOptions,
+    opts: &StabilityOptions,
+) -> Result<Vec<f64>> {
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use rand::seq::index::sample;
+
+    if opts.rounds == 0 {
+        return arg_err("rounds must be at least 1");
+    }
+    if !(opts.fraction > 0.0 && opts.fraction < 1.0) {
+        return arg_err("fraction must be above 0 and below 1");
+    }
+    if motifs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let progress = crate::progress::current();
+    crate::progress::begin(&progress, "checking stability", opts.rounds as u64);
+    let mut rng = StdRng::seed_from_u64(opts.seed);
+    let mut found_in = vec![0usize; motifs.len()];
+    let pick = |n: usize, rng: &mut StdRng| {
+        let k = ((n as f64 * opts.fraction).round() as usize).clamp(1, n);
+        let mut idx = sample(rng, n, k).into_vec();
+        idx.sort_unstable();
+        idx
+    };
+    for round in 0..opts.rounds {
+        crate::progress::check(&progress)?;
+        let seqs: Vec<&str> = pick(sequences.len(), &mut rng)
+            .into_iter()
+            .map(|i| sequences[i].as_ref())
+            .collect();
+        let negs: Option<Vec<&str>> = negatives.map(|n| {
+            pick(n.len(), &mut rng)
+                .into_iter()
+                .map(|i| n[i].as_ref())
+                .collect()
+        });
+        let round_opts = crate::finder::FinderOptions {
+            seed: finder.seed.wrapping_add(round as u64 + 1),
+            ..finder.clone()
+        };
+        let found = crate::progress::without_progress(|| {
+            crate::finder::motif_finder(&seqs, negs.as_deref(), &round_opts)
+        })?;
+        if !found.is_empty() {
+            let mut all = motifs.to_vec();
+            all.extend(found.into_iter().map(|f| f.motif));
+            let queries: Vec<usize> = (0..motifs.len()).collect();
+            let cmp = crate::compare::compare_motifs(
+                &all,
+                &queries,
+                &crate::compare::CompareOptions {
+                    nthreads: finder.nthreads,
+                    ..Default::default()
+                },
+            )?;
+            let mut best = vec![f64::NEG_INFINITY; motifs.len()];
+            for c in cmp.iter().filter(|c| c.target >= motifs.len()) {
+                best[c.query] = best[c.query].max(c.score);
+            }
+            for (n, b) in found_in.iter_mut().zip(best) {
+                if b >= opts.min_similarity {
+                    *n += 1;
+                }
+            }
+        }
+        crate::progress::add(&progress, 1);
+    }
+    Ok(found_in
+        .into_iter()
+        .map(|n| n as f64 / opts.rounds as f64)
+        .collect())
+}
