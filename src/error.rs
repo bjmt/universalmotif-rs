@@ -17,6 +17,11 @@ pub enum Error {
     /// The requested operation is not supported for this input.
     #[error("{0}")]
     Unsupported(String),
+
+    /// The function was stopped through its
+    /// [`Progress`](crate::progress::Progress) handle.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 /// The result type of this crate's functions.

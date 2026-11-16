@@ -100,6 +100,7 @@ pub mod kmer;
 pub mod mask;
 pub mod metrics;
 pub mod peaks;
+pub mod progress;
 pub mod proximity;
 pub mod pvalue;
 pub mod ranges;

@@ -25,6 +25,7 @@ use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType};
 use crate::ops::{add_gap, normalize};
 use crate::packed::EncodedSequences;
+use crate::progress;
 use crate::scan::{HitTable, NoOverlaps, ScanOptions, scan_encoded};
 use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_background};
 use crate::stats::ln_fisher_greater;
@@ -278,6 +279,7 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
     negatives: Option<&[S]>,
     opts: &GappedFinderOptions,
 ) -> Result<Vec<GappedMotif>> {
+    let progress = progress::current();
     if sequences.is_empty() {
         return arg_err("no sequences given");
     }
@@ -355,11 +357,16 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
     };
     let ln_stop = opts.stop_pvalue.ln();
     let mut out = Vec::new();
+    progress::begin(&progress, "searching", (opts.nmotifs * ks.len()) as u64);
+    let mut searched = 0;
     for found in 0..opts.nmotifs {
         let name = format!("gapped_{}", found + 1);
         let mut candidates = Vec::new();
         for &k in &ks {
+            progress::check(&progress)?;
             candidates.extend(search.seed_candidates(k, min_count, &name)?);
+            searched += 1;
+            progress::add(&progress, 1);
         }
         if candidates.is_empty() {
             break;
@@ -426,6 +433,11 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
             log10_spacing_pvalue: best.ln_spacing.min(0.0) / std::f64::consts::LN_10,
         });
     }
+    // A search that stopped early counts the searches it skipped.
+    progress::add(
+        &progress,
+        (opts.nmotifs * ks.len()).saturating_sub(searched) as u64,
+    );
     Ok(out)
 }
 
@@ -506,7 +518,8 @@ impl Search<'_> {
             nthreads: self.opts.nthreads,
             ..Default::default()
         };
-        scan_encoded(&[normalize(motif)?], seqs, &opts)
+        // A step of the search, not a scan to report on its own.
+        progress::without_progress(|| scan_encoded(&[normalize(motif)?], seqs, &opts))
     }
 
     /// The letters of each hit, read along the motif, leaving out those with

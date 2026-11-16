@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+New:
+
+- `progress::with_progress()` runs a call with a `progress::Progress`
+  handle, to which scanning, `motif_finder()`, `gapped_motif_finder()`,
+  `shuffle_sequences()` and the functions built on them report their
+  progress, and through which they can be cancelled
+  (`Error::Cancelled`).
+
 ## 0.4.0 (2026-11-15)
 
 Breaking changes:

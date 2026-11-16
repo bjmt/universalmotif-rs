@@ -18,6 +18,7 @@ use crate::create::{CreateOptions, from_matrix};
 use crate::error::{Result, arg_err};
 use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType, Strand};
+use crate::progress::{self, Progress};
 use crate::pvalue::with_threads;
 use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_background};
 
@@ -585,11 +586,20 @@ fn discover_for_width(
     hit_pval: f64,
     stop_pval: f64,
     lf: &LogFact,
+    progress: &Option<Progress>,
 ) -> (Vec<Found>, u64) {
     let mut work = pos.to_vec();
     let mut out = Vec::new();
     let mut tested = 0;
+    // Each search counts once; a width that stops early counts the searches
+    // it skips, so that the counts reach the total.
+    let mut searched = 0;
     for _ in 0..nmotifs {
+        if progress::cancelled(progress) {
+            break;
+        }
+        searched += 1;
+        progress::add(progress, 1);
         let (seeds, candidates) = enumerate_seeds(&work, neg, w, rc, lf);
         tested += candidates;
         if seeds.is_empty() {
@@ -640,6 +650,7 @@ fn discover_for_width(
             break;
         }
     }
+    progress::add(progress, (nmotifs - searched) as u64);
     (out, tested)
 }
 
@@ -796,6 +807,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     negatives: Option<&[S]>,
     opts: &FinderOptions,
 ) -> Result<Vec<FoundMotif>> {
+    let progress = progress::current();
     if sequences.is_empty() {
         return arg_err("no sequences given");
     }
@@ -843,6 +855,7 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
 
     let lf = LogFact::new(pos.len() + neg.len());
     let widths: Vec<usize> = (opts.min_width..=opts.max_width).collect();
+    progress::begin(&progress, "searching", (widths.len() * opts.nmotifs) as u64);
     let per_width: Vec<(Vec<Found>, u64)> = with_threads(opts.nthreads, || {
         widths
             .par_iter()
@@ -858,10 +871,12 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
                     opts.hit_pvalue,
                     opts.stop_pvalue,
                     &lf,
+                    &progress,
                 )
             })
             .collect()
     })?;
+    progress::check(&progress)?;
     let total_tests: u64 = per_width.iter().map(|(_, t)| t).sum();
     let mut found: Vec<Found> = per_width.into_iter().flat_map(|(f, _)| f).collect();
     found.sort_by_key(|f| (f.width, f.order));

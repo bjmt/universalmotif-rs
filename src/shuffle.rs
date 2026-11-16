@@ -11,6 +11,7 @@ use crate::error::{Result, arg_err};
 use crate::kmer::{WindowOptions, windows};
 use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType};
+use crate::progress;
 use crate::pvalue::with_threads;
 
 /// A generator for item `i` of a seeded batch, independent of threading.
@@ -314,6 +315,7 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
     seqs: &[S],
     opts: &ShuffleOptions,
 ) -> Result<Vec<String>> {
+    let progress = progress::current();
     if opts.k < 1 {
         return arg_err("k must be at least 1");
     }
@@ -390,14 +392,19 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
         }
         out
     }
-    with_threads(opts.nthreads, || {
+    let bytes: usize = seqs.iter().map(|s| s.as_ref().len()).sum();
+    progress::begin(&progress, "shuffling", bytes as u64);
+    let out: Vec<String> = with_threads(opts.nthreads, || {
         seqs.par_iter()
             .zip(&plans)
             .enumerate()
             .map(|(i, (s, plan))| {
                 let s = s.as_ref();
+                if progress::cancelled(&progress) {
+                    return String::new();
+                }
                 let mut rng = rng_for(opts.seed, i);
-                if s.is_ascii() {
+                let out = if s.is_ascii() {
                     let out = shuffle_windows(s.as_bytes().to_vec(), plan, opts, &mut rng);
                     String::from_utf8(out).expect("shuffled ASCII is valid UTF-8")
                 } else {
@@ -405,10 +412,14 @@ pub fn shuffle_sequences<S: AsRef<str> + Sync>(
                     shuffle_windows(chars, plan, opts, &mut rng)
                         .into_iter()
                         .collect()
-                }
+                };
+                progress::add(&progress, s.len() as u64);
+                out
             })
             .collect()
-    })
+    })?;
+    progress::check(&progress)?;
+    Ok(out)
 }
 
 /// Shuffled copies of sequences for a background, as [`shuffle_sequences`]

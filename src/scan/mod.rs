@@ -26,6 +26,7 @@ use crate::error::{Error, Result, arg_err};
 use crate::motif::{Motif, MotifType, Strand};
 use crate::ops::with_pseudocount;
 use crate::packed::{CodedSeq, EncodedSequences, PackedSeq, Seqs};
+use crate::progress::{self, Progress};
 use crate::pvalue::{scoring_matrix, with_threads};
 
 mod gapped;
@@ -945,12 +946,16 @@ fn work_items(seqs: &EncodedSequences) -> Vec<(usize, (usize, usize), usize)> {
 
 /// Every hit of the prepared motifs in `seqs`, in no particular order and
 /// without P-values, or with `first` the first hit of each motif in each
-/// unit of work. Runs on the current thread pool.
+/// unit of work. Runs on the current thread pool. Each unit of work counts
+/// its bases times `weight` towards `progress`, and once it is cancelled the
+/// remaining units are skipped.
 fn scan_raw(
     prepared: &[Option<Prepared>],
     seqs: &EncodedSequences,
     work: &[(usize, (usize, usize), usize)],
     first: bool,
+    progress: &Option<Progress>,
+    weight: u64,
 ) -> Vec<RawHit> {
     let n_letters = seqs.alphabet().len();
     let span = if n_letters <= 64 { 2 } else { 1 };
@@ -959,6 +964,9 @@ fn scan_raw(
         .fold(
             || (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             |(mut quads, mut keys, mut pieces, mut out), &(si, starts, seg_end)| {
+                if progress::cancelled(progress) {
+                    return (quads, keys, pieces, out);
+                }
                 match seqs.seqs() {
                     Seqs::Packed(v) => scan_chunk(
                         prepared,
@@ -985,6 +993,7 @@ fn scan_raw(
                         &mut out,
                     ),
                 }
+                progress::add(progress, (starts.1 - starts.0) as u64 * weight);
                 (quads, keys, pieces, out)
             },
         )
@@ -1138,6 +1147,7 @@ pub fn scan_encoded(
     seqs: &EncodedSequences,
     opts: &ScanOptions,
 ) -> Result<HitTable> {
+    let progress = progress::current();
     let alphabet = check_scan(motifs, opts)?;
     if *seqs.alphabet() != alphabet {
         return arg_err(format!(
@@ -1150,6 +1160,8 @@ pub fn scan_encoded(
     let mut shapes: Vec<Option<Shape>> = Vec::with_capacity(motifs.len());
     with_threads(opts.nthreads, || -> Result<()> {
         let work = work_items(seqs);
+        let bases: usize = work.iter().map(|w| w.1.1 - w.1.0).sum();
+        progress::begin(&progress, "scanning", (bases * motifs.len()) as u64);
         // Motifs are scanned in batches whose P-value tails fit in
         // TAIL_BUDGET, since a wide score range (as amino acid PWMs have)
         // makes for long tails. The hits of each batch get their P-values
@@ -1172,7 +1184,15 @@ pub fn scan_encoded(
                     .sum::<usize>();
                 batch.extend(group);
             }
-            let mut hits = scan_raw(&batch, seqs, &work, opts.first_hit);
+            let mut hits = scan_raw(
+                &batch,
+                seqs,
+                &work,
+                opts.first_hit,
+                &progress,
+                batch.len() as u64,
+            );
+            progress::check(&progress)?;
             hits.par_iter_mut().for_each(|r| {
                 let p = batch[r.motif as usize].as_ref().unwrap();
                 let raw = p.tail.as_ref().unwrap().pvalue(r.score as f64 / 1000.0);
@@ -1307,6 +1327,7 @@ fn motif_matches_with(
     value: MatchValue,
     budget: usize,
 ) -> Result<MotifMatches> {
+    let progress = progress::current();
     let alphabet = check_scan(motifs, opts)?;
     if *seqs.alphabet() != alphabet {
         return arg_err(format!(
@@ -1334,6 +1355,8 @@ fn motif_matches_with(
         // tails fit in TAIL_BUDGET, as in scan_encoded().
         let across = opts.no_overlaps.is_some_and(|n| n.ignore_motif);
         let work = work_items(seqs);
+        let bases: usize = work.iter().map(|w| w.1.1 - w.1.0).sum();
+        progress::begin(&progress, "scanning", (bases * motifs.len()) as u64);
         let mut base = 0;
         let mut batches = 0;
         while base < motifs.len() {
@@ -1372,7 +1395,15 @@ fn motif_matches_with(
                     size += work[hi].1.1 - work[hi].1.0;
                     hi += 1;
                 }
-                let mut raw = scan_raw(&batch, seqs, &work[lo..hi], presence || opts.first_hit);
+                let mut raw = scan_raw(
+                    &batch,
+                    seqs,
+                    &work[lo..hi],
+                    presence || opts.first_hit,
+                    &progress,
+                    batch.len() as u64,
+                );
+                progress::check(&progress)?;
                 if !presence {
                     if by_pvalue {
                         raw.par_iter_mut().for_each(|r| {
@@ -1514,6 +1545,7 @@ fn scan_fasta_with(
     batch_size: usize,
     tail_budget: usize,
 ) -> Result<FastaHits> {
+    let progress = progress::current();
     let alphabet = check_scan(motifs, opts)?;
     let reader = crate::io::fasta::open(path)?;
     let mut out = FastaHits::default();
@@ -1579,6 +1611,9 @@ fn scan_fasta_with(
             )
         });
         let mut seen = std::collections::HashSet::new();
+        // The length of a file's sequences is not known until it is read,
+        // so the total stays 0 and only the bases scanned are counted.
+        progress::begin(&progress, "scanning bases", 0);
         let scanned = with_threads(opts.nthreads, || -> Result<()> {
             for (mut names, batch) in rx {
                 if trim_names {
@@ -1593,7 +1628,8 @@ fn scan_fasta_with(
                 }
                 let base = out.names.len();
                 let work = work_items(&batch);
-                let mut hits = scan_raw(&prepared, &batch, &work, opts.first_hit);
+                let mut hits = scan_raw(&prepared, &batch, &work, opts.first_hit, &progress, 1);
+                progress::check(&progress)?;
                 for h in &mut hits {
                     let shape = shapes[h.motif as usize].as_ref().unwrap();
                     let start = letters.len();
