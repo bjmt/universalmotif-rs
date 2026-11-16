@@ -10,9 +10,11 @@
 //!
 //! The functions that report are
 //! [`scan_table`](crate::scan::scan_table) and the others built on the same
-//! scanner (which count bases times motifs), [`motif_finder`] and
-//! [`gapped_motif_finder`] (motifs searched for), and
-//! [`shuffle_sequences`](crate::shuffle::shuffle_sequences) (bytes).
+//! scanner, counting bases times motifs; [`motif_finder`] and
+//! [`gapped_motif_finder`], counting the motifs searched for, with
+//! `motif_finder` then counting the motifs found as it evaluates them
+//! again; and [`shuffle_sequences`](crate::shuffle::shuffle_sequences),
+//! counting bytes.
 //! Functions that call these, such as
 //! [`enrich_motifs`](crate::enrich::enrich_motifs), report each call as a
 //! stage of its own.

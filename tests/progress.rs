@@ -53,9 +53,15 @@ fn the_finders_count_their_searches() {
         nmotifs: 2,
         ..Default::default()
     };
-    with_progress(&p, || motif_finder(&s, None, &opts)).unwrap();
-    assert_eq!(p.stage(), "searching");
-    assert_eq!((p.done(), p.total()), (6, 6));
+    let found = with_progress(&p, || motif_finder(&s, None, &opts)).unwrap();
+    // The motifs found, if any, are evaluated again as a last stage.
+    let last = if found.is_empty() {
+        "searching"
+    } else {
+        "evaluating"
+    };
+    assert_eq!(p.stage(), last);
+    assert_eq!(p.done(), p.total());
 
     let p = Progress::new();
     let opts = GappedFinderOptions {

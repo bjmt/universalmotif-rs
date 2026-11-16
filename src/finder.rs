@@ -884,8 +884,11 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
         return Ok(Vec::new());
     }
     // Re-evaluate on the unmasked sequences so coverage is comparable.
+    progress::begin(&progress, "evaluating", found.len() as u64);
     for f in found.iter_mut() {
+        progress::check(&progress)?;
         f.eval = evaluate(&pos, &neg, &f.motif, opts.rc, &lf);
+        progress::add(&progress, 1);
     }
     let corrected = |f: &Found| (f.eval.ln_pvalue + (f.candidates as f64).ln()).min(0.0);
     // Of two motifs covering the same sites, the one more enriched keeps them.
