@@ -333,7 +333,7 @@ fn scan_one(
     centre: bool,
     width: usize,
     len: usize,
-    filters: &[Filter],
+    plans: &[Plan<'_>],
 ) -> Vec<ContribHit> {
     // The scores position by position, and running sums of each position's
     // absolute and squared scores.
@@ -362,83 +362,81 @@ fn scan_one(
                 .sum::<f64>();
     }
     let mut hits = Vec::new();
-    for (m, f) in filters.iter().enumerate() {
-        let combos = f.combos();
-        for (strand, filt) in &f.strands {
-            // On the minus strand the pieces and gaps come in reverse order.
-            let minus = *strand == Strand::Minus;
-            let widths: Vec<usize> = if minus {
-                f.widths.iter().rev().copied().collect()
-            } else {
-                f.widths.clone()
-            };
-            let mut columns = vec![0usize; widths.len()];
-            for k in 1..widths.len() {
-                columns[k] = columns[k - 1] + widths[k - 1];
+    // The best combination of gap sizes at each start, for gapped motifs,
+    // and the starts that hold one. Ungapped motifs have one combination and
+    // keep every window that passes.
+    let mut best: Vec<Option<ContribHit>> = Vec::new();
+    let mut touched: Vec<usize> = Vec::new();
+    for pl in plans {
+        let single = pl.layouts.len() == 1;
+        if !single && best.len() < len {
+            best.resize(len, None);
+        }
+        for (gaps, offsets, span) in &pl.layouts {
+            let span = *span;
+            if span == 0 || span > len {
+                continue;
             }
-            // The best combination of gap sizes at each start.
-            let mut best: Vec<Option<ContribHit>> = vec![None; len];
-            for gaps in &combos {
-                let between: Vec<usize> = if minus {
-                    gaps.iter().rev().copied().collect()
-                } else {
-                    gaps.clone()
+            for p in 0..=len - span {
+                let sum = |acc: &[f64]| -> f64 {
+                    offsets
+                        .iter()
+                        .zip(&pl.widths)
+                        .map(|(&o, &w)| acc[p + o + w] - acc[p + o])
+                        .sum()
                 };
-                let mut offsets = vec![0usize; widths.len()];
-                for k in 1..widths.len() {
-                    offsets[k] = offsets[k - 1] + widths[k - 1] + between[k - 1];
-                }
-                let span = offsets[widths.len() - 1] + widths[widths.len() - 1];
-                if span == 0 || span > len {
+                let importance = sum(&abs);
+                if importance < pl.min_importance {
                     continue;
                 }
-                for p in 0..=len - span {
-                    let sum = |acc: &[f64]| -> f64 {
-                        offsets
-                            .iter()
-                            .zip(&widths)
-                            .map(|(&o, &w)| acc[p + o + w] - acc[p + o])
-                            .sum()
-                    };
-                    let importance = sum(&abs);
-                    if importance < f.min_importance {
-                        continue;
+                let ss = sum(&sq);
+                if ss <= 0.0 {
+                    continue;
+                }
+                let score: f64 = offsets
+                    .iter()
+                    .zip(&pl.widths)
+                    .zip(&pl.columns)
+                    .map(|((&o, &w), &c)| {
+                        f64::from(dot(
+                            &xt[(p + o) * 4..(p + o + w) * 4],
+                            &pl.filt[c * 4..(c + w) * 4],
+                        ))
+                    })
+                    .sum();
+                let similarity = score / ss.sqrt();
+                if similarity < pl.min_similarity {
+                    continue;
+                }
+                if !single && best[p].as_ref().is_some_and(|h| h.score >= score) {
+                    continue;
+                }
+                let hit = ContribHit {
+                    motif: pl.motif,
+                    sequence,
+                    start: p,
+                    end: p + span,
+                    strand: pl.strand,
+                    score,
+                    similarity,
+                    importance: importance / pl.reference,
+                    gaps: gaps.clone(),
+                };
+                if single {
+                    hits.push(hit);
+                } else {
+                    if best[p].is_none() {
+                        touched.push(p);
                     }
-                    let ss = sum(&sq);
-                    if ss <= 0.0 {
-                        continue;
-                    }
-                    let score: f64 = offsets
-                        .iter()
-                        .zip(&widths)
-                        .zip(&columns)
-                        .map(|((&o, &w), &c)| {
-                            f64::from(dot(
-                                &xt[(p + o) * 4..(p + o + w) * 4],
-                                &filt[c * 4..(c + w) * 4],
-                            ))
-                        })
-                        .sum();
-                    let similarity = score / ss.sqrt();
-                    if similarity < f.min_similarity
-                        || best[p].as_ref().is_some_and(|h| h.score >= score)
-                    {
-                        continue;
-                    }
-                    best[p] = Some(ContribHit {
-                        motif: m,
-                        sequence,
-                        start: p,
-                        end: p + span,
-                        strand: *strand,
-                        score,
-                        similarity,
-                        importance: importance / f.reference,
-                        gaps: gaps.clone(),
-                    });
+                    best[p] = Some(hit);
                 }
             }
-            hits.extend(best.into_iter().flatten());
+        }
+        if !single {
+            touched.sort_unstable();
+            for p in touched.drain(..) {
+                hits.extend(best[p].take());
+            }
         }
     }
     hits
@@ -513,6 +511,71 @@ pub fn scan_contributions(
     run(&filters, scores, scores, false, lengths, width, opts)
 }
 
+/// One strand of a motif ready for scanning: its pieces, and where they lie
+/// for each combination of gap sizes, worked out once for every sequence.
+struct Plan<'a> {
+    motif: usize,
+    strand: Strand,
+    filt: &'a [f32],
+    widths: Vec<usize>,
+    /// The first column of each piece in `filt`.
+    columns: Vec<usize>,
+    /// For each combination of gap sizes, in the CWM's own order: the sizes,
+    /// the offset of each piece in the window and the window's span.
+    layouts: Vec<(Vec<usize>, Vec<usize>, usize)>,
+    min_similarity: f64,
+    min_importance: f64,
+    reference: f64,
+}
+
+fn plans(filters: &[Filter]) -> Vec<Plan<'_>> {
+    let mut out = Vec::new();
+    for (m, f) in filters.iter().enumerate() {
+        let combos = f.combos();
+        for (strand, filt) in &f.strands {
+            // On the minus strand the pieces and gaps come in reverse order.
+            let minus = *strand == Strand::Minus;
+            let widths: Vec<usize> = if minus {
+                f.widths.iter().rev().copied().collect()
+            } else {
+                f.widths.clone()
+            };
+            let mut columns = vec![0usize; widths.len()];
+            for k in 1..widths.len() {
+                columns[k] = columns[k - 1] + widths[k - 1];
+            }
+            let layouts = combos
+                .iter()
+                .map(|gaps| {
+                    let between: Vec<usize> = if minus {
+                        gaps.iter().rev().copied().collect()
+                    } else {
+                        gaps.clone()
+                    };
+                    let mut offsets = vec![0usize; widths.len()];
+                    for k in 1..widths.len() {
+                        offsets[k] = offsets[k - 1] + widths[k - 1] + between[k - 1];
+                    }
+                    let span = offsets[widths.len() - 1] + widths[widths.len() - 1];
+                    (gaps.clone(), offsets, span)
+                })
+                .collect();
+            out.push(Plan {
+                motif: m,
+                strand: *strand,
+                filt,
+                widths,
+                columns,
+                layouts,
+                min_similarity: f.min_similarity,
+                min_importance: f.min_importance,
+                reference: f.reference,
+            });
+        }
+    }
+    out
+}
+
 /// Scan each sequence on the thread pool and gather the hits in order.
 fn run(
     filters: &[Filter],
@@ -523,13 +586,14 @@ fn run(
     width: usize,
     opts: &ContribScanOptions,
 ) -> Result<Vec<ContribHit>> {
+    let plans = plans(filters);
     let per_seq: Vec<Vec<ContribHit>> = with_threads(opts.nthreads, || {
         lengths
             .par_iter()
             .enumerate()
             .map(|(s, &len)| {
                 let part = s * 4 * width..(s + 1) * 4 * width;
-                scan_one(s, &x[part.clone()], &imp[part], centre, width, len, filters)
+                scan_one(s, &x[part.clone()], &imp[part], centre, width, len, &plans)
             })
             .collect()
     })?;

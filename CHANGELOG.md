@@ -25,6 +25,10 @@ Changes in behaviour:
 
 New:
 
+- `scan_contributions()` lays out each motif once per scan rather than once
+  per sequence, and keeps a buffer of the best window at each start only
+  for gapped motifs. On 187,000 regions and 35 CWMs it takes 4 s rather
+  than 12 s on two threads, and now speeds up with more threads.
 - `seqlets::call_seqlets()` calls seqlets in contribution scores: stretches
   whose total, and the total of every stretch inside them, is unlikely
   under a null, kept down to a false discovery rate estimated by calling
