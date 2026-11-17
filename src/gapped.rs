@@ -2,7 +2,7 @@
 //! spacer of varying length between them.
 //!
 //! Pairs of k-mers at every spacing searched are counted with
-//! [`spaced_pairs`], and the most enriched become seed motifs, which are then
+//! [`spaced_pairs`](crate::finder::spaced_pairs), and the most enriched become seed motifs, which are then
 //! refined by rescanning, trimmed, given the spacer sizes their hits support
 //! and grown into neighbouring informative columns. A motif is kept only if
 //! its hits favour some spacings more than independent placement of its two
