@@ -299,16 +299,27 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
         (1u64 << (2 * w)) - 1
     };
     // The distinct words of each sequence, gathered a chunk of sequences at a
-    // time on the thread pool.
-    let per_chunk: Vec<Vec<u64>> = seqs
+    // time on the thread pool. Each chunk writes into its own part of one
+    // buffer, sized for every word, so the words are never held twice.
+    let room: Vec<usize> = seqs
+        .chunks(PAR_CHUNK)
+        .map(|chunk| chunk.iter().map(|s| (s.len() + 1).saturating_sub(w)).sum())
+        .collect();
+    let mut all: Vec<u64> = vec![0; room.iter().sum()];
+    let mut parts: Vec<&mut [u64]> = Vec::with_capacity(room.len());
+    let mut rest = all.as_mut_slice();
+    for &r in &room {
+        let (part, tail) = rest.split_at_mut(r);
+        parts.push(part);
+        rest = tail;
+    }
+    let used: Vec<usize> = seqs
         .par_chunks(PAR_CHUNK)
-        .map(|chunk| {
-            let total: usize = chunk.iter().map(|s| (s.len() + 1).saturating_sub(w)).sum();
-            let mut out: Vec<u64> = Vec::with_capacity(total);
-            let longest = chunk.iter().map(|s| s.len()).max().unwrap_or(0);
-            let mut seen: Vec<u64> = Vec::with_capacity(longest);
+        .zip(parts.into_par_iter())
+        .map(|(chunk, out)| {
+            let mut k = 0;
             for s in chunk {
-                seen.clear();
+                let first = k;
                 // Rolling codes of the last w letters on each strand.
                 let (mut fwd, mut rev, mut run) = (0u64, 0u64, 0usize);
                 for &b in s {
@@ -321,25 +332,38 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
                     rev = (rev >> 2) | ((COMP4[idx as usize] as u64) << (2 * (w - 1)));
                     run += 1;
                     if run >= w {
-                        seen.push(if rc { fwd.min(rev) } else { fwd });
+                        out[k] = if rc { fwd.min(rev) } else { fwd };
+                        k += 1;
                     }
                 }
-                seen.sort_unstable();
-                seen.dedup();
-                out.extend_from_slice(&seen);
+                // Each word once per sequence.
+                let words = &mut out[first..k];
+                words.sort_unstable();
+                let mut n = 0;
+                for i in 0..words.len() {
+                    if n == 0 || words[n - 1] != words[i] {
+                        words[n] = words[i];
+                        n += 1;
+                    }
+                }
+                k = first + n;
             }
-            out
+            k
         })
         .collect();
-    // Sized up front: grown by doubling, the vector leaves a trail of large
-    // freed blocks that the system allocator may keep, inflating memory use.
-    let mut all: Vec<u64> = Vec::with_capacity(per_chunk.iter().map(Vec::len).sum());
-    for v in per_chunk {
-        all.extend_from_slice(&v);
+    // Close the gaps the parts left.
+    let (mut dst, mut src) = (0, 0);
+    for (&u, &r) in used.iter().zip(&room) {
+        all.copy_within(src..src + u, dst);
+        dst += u;
+        src += r;
     }
+    all.truncate(dst);
     all.par_sort_unstable();
-    // Collapse runs of the same k-mer in place, counting them.
-    let mut counts: Vec<u32> = Vec::with_capacity(all.len());
+    // Collapse runs of the same k-mer in place, counting them, with the counts
+    // sized for the distinct k-mers alone.
+    let distinct = all.chunk_by(|a, b| a == b).count();
+    let mut counts: Vec<u32> = Vec::with_capacity(distinct);
     let mut n = 0;
     for i in 0..all.len() {
         if n > 0 && all[n - 1] == all[i] {
@@ -351,6 +375,7 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
         }
     }
     all.truncate(n);
+    all.shrink_to_fit();
     (all, counts)
 }
 

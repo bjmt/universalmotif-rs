@@ -67,6 +67,18 @@ New:
   position with a CWM or, through its log-odds, with any probabilistic
   motif, such as one from a database.
 
+Fixes:
+
+- `motif_finder()` takes about half the memory it did, as before its
+  background was cached per width.
+- `call_seqlets()` takes memory in proportion to sequence length alone,
+  so whole chromosomes can be called.
+- Contribution scans count missing scores as zero, where windows after a
+  NaN came back as hits.
+- `motif_stability()` with no sequences, `compare_motifs()` with a gapped
+  query asked for twice, and `refine_motifs()` with a motif marked gapped
+  but without gaps return an error or a result rather than panicking.
+
 ## 0.4.0 (2026-11-15)
 
 Breaking changes:

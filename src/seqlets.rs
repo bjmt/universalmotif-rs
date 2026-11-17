@@ -366,34 +366,38 @@ fn call_one(seq: usize, x: &[f64], null: &Null, opts: &SeqletOptions) -> Vec<Seq
     for i in 0..n {
         csum[i + 1] = csum[i] + x[i];
     }
-    // own[len][k]: the P-value of the stretch at k of that length. worst[len][k]:
-    // the largest P-value of any stretch of at least lo positions inside it,
-    // from prefixes (worst over own[len-1][k]) and suffixes (worst[len-1][k+1]).
+    // own: the P-value of the stretch at k of a length. worst: the largest
+    // P-value of any stretch of at least lo positions inside it, from prefixes
+    // (worst over the stretch one shorter at k) and suffixes (at k + 1). Only
+    // the previous length's worst is needed, and only stretches passing the
+    // threshold are kept, so long sequences take little memory.
     let width = hi - lo + 1;
-    let mut own = vec![Vec::new(); width];
-    let mut worst = vec![Vec::new(); width];
+    let mut cands: Vec<Vec<(usize, f64)>> = vec![Vec::new(); width];
+    let mut prev: Vec<f64> = Vec::new();
     for (j, len) in (lo..=hi).enumerate() {
         let m = n - len + 1;
-        own[j] = (0..m)
-            .map(|k| null.pvalue(len, csum[k + len] - csum[k]))
-            .collect();
-        worst[j] = if j == 0 {
-            own[0].clone()
-        } else {
-            (0..m)
-                .map(|k| own[j][k].max(worst[j - 1][k]).max(worst[j - 1][k + 1]))
-                .collect()
-        };
+        let mut cur = Vec::with_capacity(m);
+        for k in 0..m {
+            let own = null.pvalue(len, csum[k + len] - csum[k]);
+            let worst = if j == 0 {
+                own
+            } else {
+                own.max(prev[k]).max(prev[k + 1])
+            };
+            if worst < opts.threshold {
+                cands[j].push((k, own));
+            }
+            cur.push(worst);
+        }
+        prev = cur;
     }
     let mut used = vec![false; n];
     let mut out = Vec::new();
     for j in (0..width).rev() {
         let len = lo + j;
-        let mut cands: Vec<usize> = (0..worst[j].len())
-            .filter(|&k| worst[j][k] < opts.threshold)
-            .collect();
-        cands.sort_by(|&a, &b| own[j][a].partial_cmp(&own[j][b]).unwrap().then(a.cmp(&b)));
-        for k in cands {
+        let mut here = std::mem::take(&mut cands[j]);
+        here.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(a.0.cmp(&b.0)));
+        for (k, own) in here {
             if used[k..k + len].iter().any(|&u| u) {
                 continue;
             }
@@ -406,7 +410,7 @@ fn call_one(seq: usize, x: &[f64], null: &Null, opts: &SeqletOptions) -> Vec<Seq
                 core_end: k + len,
                 positive: true,
                 score: csum[k + len] - csum[k],
-                pvalue: own[j][k],
+                pvalue: own,
             });
         }
     }

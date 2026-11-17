@@ -339,8 +339,10 @@ fn scan_one(
     // absolute and squared scores.
     let mut xt = vec![0.0f32; 4 * len];
     for a in 0..4 {
+        // Missing scores count as zero, as in call_seqlets(), rather than turning
+        // every window after them into a hit of NaN similarity.
         for (p, &v) in x[a * width..a * width + len].iter().enumerate() {
-            xt[p * 4 + a] = v;
+            xt[p * 4 + a] = if v.is_finite() { v } else { 0.0 };
         }
     }
     if centre {
@@ -353,7 +355,11 @@ fn scan_one(
     let mut sq = vec![0.0f64; len + 1];
     for p in 0..len {
         let col = &xt[p * 4..p * 4 + 4];
-        let imp_sum: f64 = (0..4).map(|a| f64::from(imp[a * width + p].abs())).sum();
+        let imp_sum: f64 = (0..4)
+            .map(|a| imp[a * width + p])
+            .filter(|v| v.is_finite())
+            .map(|v| f64::from(v.abs()))
+            .sum();
         abs[p + 1] = abs[p] + imp_sum;
         sq[p + 1] = sq[p]
             + col

@@ -408,7 +408,8 @@ pub fn refine_motifs<S: AsRef<str> + Sync>(
             if w.len() < opts.min_sites {
                 continue;
             }
-            let new = if m.gap.isgapped {
+            // A motif marked gapped without gap positions is treated as ungapped, as elsewhere.
+            let new = if m.gap.isgapped && !m.gap.gaploc.is_empty() {
                 rebuild_gapped(m, &hits, &gapped[k], sequences, opts)?
             } else {
                 rebuild(m, sequences, w, m.width() + 2 * opts.flank, opts)?
@@ -689,6 +690,12 @@ pub fn motif_stability<S: AsRef<str> + Sync>(
     }
     if motifs.is_empty() {
         return Ok(Vec::new());
+    }
+    if sequences.is_empty() {
+        return arg_err("no sequences to search");
+    }
+    if negatives.is_some_and(|n| n.is_empty()) {
+        return arg_err("no negative sequences");
     }
     let progress = crate::progress::current();
     crate::progress::begin(&progress, "checking stability", opts.rounds as u64);

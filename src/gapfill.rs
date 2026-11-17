@@ -187,7 +187,8 @@ pub(crate) fn collapse(
     for &q in queries {
         let mut row: Vec<Comparison> = (0..n)
             .map(|t| {
-                let (mut r, iq, it) = best[q][t].take().expect("every pair was compared");
+                // Cloned rather than taken, since a query may be asked for more than once.
+                let (mut r, iq, it) = best[q][t].clone().expect("every pair was compared");
                 if let Some(f) = rescore
                     && !(exp.sizes[iq].is_empty() && exp.sizes[it].is_empty())
                 {

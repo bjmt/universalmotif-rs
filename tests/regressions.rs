@@ -89,3 +89,91 @@ fn an_empty_sequence_does_not_stop_shuffled_backgrounds() {
     let m = from_strings(&["TGACTCA"], None, &CreateOptions::default()).unwrap();
     assert!(enrich_motifs(&[m], &seqs, None, &EnrichOptions::default()).is_ok());
 }
+
+#[test]
+fn stability_with_no_sequences_is_an_error() {
+    use universalmotif::select::{StabilityOptions, motif_stability};
+    let m = from_strings(&["ACGTACGT"], None, &CreateOptions::default()).unwrap();
+    let seqs = vec!["ACGTACGTACGTACGTAAAA".to_string(); 10];
+    let none: Vec<String> = Vec::new();
+    let opts = (FinderOptions::default(), StabilityOptions::default());
+    assert!(
+        motif_stability(
+            std::slice::from_ref(&m),
+            &seqs,
+            Some(&none),
+            &opts.0,
+            &opts.1
+        )
+        .is_err()
+    );
+    assert!(motif_stability(&[m], &none, None, &opts.0, &opts.1).is_err());
+}
+
+#[test]
+fn gapped_comparisons_take_a_query_twice() {
+    use universalmotif::compare::{CompareOptions, compare_motifs};
+    let o = CreateOptions {
+        nsites: Some(20.0),
+        ..Default::default()
+    };
+    let a = from_strings(&["AGGTCAAGGTCA"], None, &o).unwrap();
+    let b = from_strings(&["CACGTGAC"], None, &o).unwrap();
+    let g = add_gap(&a, Some(&[6]), &[1], &[3]).unwrap();
+    let rows = compare_motifs(&[g, b], &[0, 0], &CompareOptions::default()).unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0].score, rows[2].score);
+}
+
+#[test]
+fn refining_a_motif_marked_gapped_without_gaps_treats_it_as_ungapped() {
+    use universalmotif::motif::{GapInfo, Motif};
+    use universalmotif::select::{RefineOptions, refine_motifs};
+    let o = CreateOptions {
+        nsites: Some(20.0),
+        pseudocount: 1.0,
+        ..Default::default()
+    };
+    let mut p = from_strings(&["TTGACTCATG"], None, &o)
+        .unwrap()
+        .into_parts();
+    p.gap = GapInfo {
+        isgapped: true,
+        ..Default::default()
+    };
+    let m = Motif::from_parts(p).unwrap();
+    let mut seqs = create_sequences(&['A', 'C', 'G', 'T'], 100, 100, None, 3, 1).unwrap();
+    for s in seqs.iter_mut() {
+        s.replace_range(40..50, "TTGACTCATG");
+    }
+    let refined = refine_motifs(&[m], &seqs, None, &RefineOptions::default()).unwrap();
+    assert!(refined[0].sites >= 100);
+}
+
+#[test]
+fn missing_contribution_scores_count_as_zero() {
+    use universalmotif::contributions::{ContribScanOptions, ContribThreshold, scan_hypothetical};
+    let gat = from_strings(&["GATTACA"], None, &CreateOptions::default()).unwrap();
+    let len = 20;
+    let mut scores = vec![0.01f32; 4 * len];
+    scores[2 * len + 5] = f32::NAN;
+    let t = ContribThreshold {
+        min_similarity: 0.9,
+        min_importance: 0.5,
+    };
+    let hits = scan_hypothetical(
+        &[gat],
+        &scores,
+        &scores,
+        &[len],
+        len,
+        &[t],
+        &ContribScanOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        hits.iter()
+            .all(|h| h.similarity.is_finite() && h.importance.is_finite())
+    );
+    assert!(hits.is_empty());
+}
