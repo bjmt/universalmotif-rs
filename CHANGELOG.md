@@ -4,6 +4,9 @@
 
 Changes in behaviour:
 
+- Gapped motifs with more than 32 combinations of gap sizes are refused
+  by comparisons, merging and alignment, which took gigabytes for wide
+  ranges, and `gapped_motif_finder()` takes `max_gap` up to 31.
 - `ContribHit::importance` is reported on the scale of
   `ContribThreshold::min_importance`, as a fraction of the CWM's absolute
   sum, rather than as the raw sum of the window's absolute scores, so hits

@@ -77,18 +77,24 @@ fn finds_it_without_holding_sequences_out() {
 }
 
 #[test]
-fn takes_long_gaps_and_letters_outside_ascii() {
+fn takes_the_longest_gaps_and_letters_outside_ascii() {
     let mut seqs = direct_repeats(300, 7);
     seqs[0].insert(0, 'é');
     let found = find(
         &seqs,
         GappedFinderOptions {
-            max_gap: 100,
+            max_gap: 31,
             ..options()
         },
     );
     assert_eq!(found.len(), 1);
     assert!(found[0].motif.gap.isgapped);
+    // Spacers beyond 31 would give motifs too costly to compare.
+    let too_long = GappedFinderOptions {
+        max_gap: 32,
+        ..options()
+    };
+    assert!(gapped_motif_finder(&seqs, None, &too_long).is_err());
 }
 
 fn find(seqs: &[String], opts: GappedFinderOptions) -> Vec<universalmotif::gapped::GappedMotif> {

@@ -42,7 +42,8 @@ pub struct GappedFinderOptions {
     pub k: Vec<usize>,
     /// The shortest spacer searched; 0 by default.
     pub min_gap: usize,
-    /// The longest spacer searched, at most 100; 20 by default.
+    /// The longest spacer searched, at most 31, so that the motifs found
+    /// can be compared with their gaps; 20 by default.
     pub max_gap: usize,
     /// The most motifs to find; 3 by default.
     pub nmotifs: usize,
@@ -298,8 +299,8 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
     if opts.k.is_empty() || opts.k.iter().any(|k| !(2..=6).contains(k)) {
         return arg_err("each k must be from 2 to 6");
     }
-    if opts.min_gap > opts.max_gap || opts.max_gap > 100 {
-        return arg_err("gaps must satisfy min_gap <= max_gap <= 100");
+    if opts.min_gap > opts.max_gap || opts.max_gap > 31 {
+        return arg_err("gaps must satisfy min_gap <= max_gap <= 31");
     }
     if !(opts.hit_pvalue > 0.0 && opts.hit_pvalue < 1.0)
         || !(opts.stop_pvalue > 0.0 && opts.stop_pvalue <= 1.0)

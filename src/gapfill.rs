@@ -8,8 +8,11 @@ use crate::error::{Result, arg_err};
 use crate::matrix::Matrix;
 use crate::motif::{GapInfo, Motif, MotifType};
 
-/// Instances beyond which a gapped motif is refused.
-const MAX_INSTANCES: usize = 1 << 12;
+/// Combinations of gap sizes beyond which a gapped motif is refused. Every
+/// combination of one motif is compared with every one of another, so the
+/// cost of a pair grows with the product: 32 keeps any pair to a few tens
+/// of megabytes, where 100 each took 0.8 GB and 200 each 4.7 GB.
+const MAX_INSTANCES: usize = 32;
 
 /// Recomputes the score of a comparison kept between gapped motifs, given
 /// the comparison and its pair of instances.
@@ -56,7 +59,8 @@ fn combos(m: &Motif) -> Result<Vec<Vec<usize>>> {
         .product();
     if n > MAX_INSTANCES {
         return arg_err(format!(
-            "{} has {n} combinations of gap sizes, more than the {MAX_INSTANCES} that can be compared",
+            "{} has {n} combinations of gap sizes, more than the {MAX_INSTANCES} that can be compared; \
+             narrow its gap range, or compare it without its gaps",
             m.name
         ));
     }
