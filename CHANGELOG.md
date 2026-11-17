@@ -4,6 +4,10 @@
 
 Changes in behaviour:
 
+- `ContribHit::importance` is reported on the scale of
+  `ContribThreshold::min_importance`, as a fraction of the CWM's absolute
+  sum, rather than as the raw sum of the window's absolute scores, so hits
+  can be compared with their thresholds.
 - `motif_finder()` and `gapped_motif_finder()` build their negatives, when
   none are given, from three shuffles of the sequences rather than one
   (`bkg_shuffles` in `FinderOptions` and `GappedFinderOptions`), which

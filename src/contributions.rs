@@ -105,7 +105,10 @@ pub struct ContribHit {
     pub score: f64,
     /// The cosine between the window's scores and the CWM.
     pub similarity: f64,
-    /// The sum of the window's absolute scores.
+    /// The sum of the window's absolute scores, on the scale of
+    /// [`ContribThreshold::min_importance`]: as a fraction of the sum of the
+    /// CWM's absolute values, or of the importance its threshold is
+    /// otherwise relative to.
     pub importance: f64,
     /// The size of each gap of a gapped CWM in this hit, in the CWM's own
     /// order, and empty otherwise.
@@ -122,6 +125,8 @@ struct Filter {
     strands: Vec<(Strand, Vec<f32>)>,
     min_similarity: f64,
     min_importance: f64,
+    /// The importance that `min_importance` was given as a fraction of.
+    reference: f64,
 }
 
 impl Filter {
@@ -298,6 +303,7 @@ fn filters(
                 strands,
                 min_similarity: t.min_similarity,
                 min_importance: t.min_importance * reference,
+                reference: if reference > 0.0 { reference } else { 1.0 },
             })
         })
         .collect()
@@ -427,7 +433,7 @@ fn scan_one(
                         strand: *strand,
                         score,
                         similarity,
-                        importance,
+                        importance: importance / f.reference,
                         gaps: gaps.clone(),
                     });
                 }
@@ -719,7 +725,9 @@ mod tests {
         for h in &hits {
             let (sim, imp) = brute(&x, width, seq.len(), &m, h.start, h.strand == Strand::Minus);
             assert!((h.similarity - sim).abs() < 1e-5, "{h:?} {sim}");
-            assert!((h.importance - imp).abs() < 1e-5);
+            // Importance is reported as a fraction of the CWM's absolute sum.
+            let l1: f64 = m.iter().flatten().map(|v| v.abs()).sum();
+            assert!((h.importance - imp / l1).abs() < 1e-5);
             assert!(h.end <= seq.len());
         }
     }
@@ -827,7 +835,8 @@ mod tests {
         );
         // The gap's letters count towards neither measure.
         assert!((hits[0].similarity - 1.0).abs() < 1e-6);
-        assert!((hits[0].importance - 5.0).abs() < 1e-5);
+        // Ten positions of 0.5, as a fraction of the ten columns of 1.
+        assert!((hits[0].importance - 0.5).abs() < 1e-5);
         // Without the gaps the columns run together and match nothing.
         let flat = ContribScanOptions {
             use_gaps: false,
