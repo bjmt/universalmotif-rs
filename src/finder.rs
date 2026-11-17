@@ -1110,6 +1110,65 @@ pub fn spaced_pairs<S: AsRef<str> + Sync>(
     mismatch: bool,
     nthreads: usize,
 ) -> Result<Vec<SpacedPair>> {
+    spaced_pairs_with(
+        positives, negatives, k, min_gap, max_gap, rc, min_count, mismatch, nthreads, None,
+    )
+}
+
+/// The window counts of the pairs `kept`, taken from those of `before`, or
+/// `None` if a pair kept is not among them. Both lists are sorted.
+fn subset_counts(
+    kept: &[usize],
+    before: &[usize],
+    counts: &[u32],
+    n_windows: usize,
+) -> Option<Vec<u32>> {
+    if before.is_empty() || kept.len() > before.len() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(kept.len() * n_windows);
+    let mut j = 0;
+    for &p in kept {
+        while j < before.len() && before[j] < p {
+            j += 1;
+        }
+        if j == before.len() || before[j] != p {
+            return None;
+        }
+        out.extend_from_slice(&counts[j * n_windows..(j + 1) * n_windows]);
+    }
+    Some(out)
+}
+
+/// The negatives' counts from an earlier call of [`spaced_pairs_with`] with
+/// the same negatives and options, which a later call can reuse: the pairs
+/// counted window by window, sorted, with their counts, and the counts of
+/// every pair over all spacings when they were needed.
+#[derive(Default)]
+pub(crate) struct NegativePairs {
+    kept: Vec<usize>,
+    by_window: Vec<u32>,
+    any: Option<Vec<u32>>,
+}
+
+/// [`spaced_pairs`], reusing the negatives' counts in `cache` when the pairs
+/// to count are among those counted before, and leaving this call's counts
+/// there otherwise. Positives that only lose sites between calls, as when
+/// the sites of motifs found are masked, keep fewer pairs at each call, so
+/// the negatives are counted once.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
+    positives: &[S],
+    negatives: &[S],
+    k: usize,
+    min_gap: usize,
+    max_gap: usize,
+    rc: bool,
+    min_count: u32,
+    mismatch: bool,
+    nthreads: usize,
+    mut cache: Option<&mut NegativePairs>,
+) -> Result<Vec<SpacedPair>> {
     if !(2..=6).contains(&k) {
         return arg_err("k must be from 2 to 6");
     }
@@ -1234,13 +1293,24 @@ pub fn spaced_pairs<S: AsRef<str> + Sync>(
     if kept.len() > MAX_SPACED_PAIRS {
         // Too many to count spacing by spacing: keep those most enriched
         // over all spacings together.
-        let any_neg = count(negatives, n_pairs, &|pair, _, f| f(pair))?;
+        let fresh;
+        let any_neg: &Vec<u32> = match cache.as_deref_mut() {
+            Some(c) => {
+                if c.any.is_none() {
+                    c.any = Some(count(negatives, n_pairs, &|pair, _, f| f(pair))?);
+                }
+                c.any.as_ref().unwrap()
+            }
+            None => {
+                fresh = count(negatives, n_pairs, &|pair, _, f| f(pair))?;
+                &fresh
+            }
+        };
         let mut scored: Vec<(f64, usize)> = Vec::with_capacity(kept.len());
         scored.extend(kept.iter().map(|&p| {
             let (c, d) = (index[p] as u64, any_neg[p] as u64);
             (ln_fisher_greater(&lf, c, n_pos - c, d, n_neg - d), p)
         }));
-        drop(any_neg);
         scored.select_nth_unstable_by(MAX_SPACED_PAIRS - 1, |a, b| a.0.total_cmp(&b.0));
         kept.clear();
         kept.extend(scored[..MAX_SPACED_PAIRS].iter().map(|&(_, p)| p));
@@ -1269,7 +1339,22 @@ pub fn spaced_pairs<S: AsRef<str> + Sync>(
     };
     let len = kept.len() * n_windows;
     let pos = count(positives, len, &by_window)?;
-    let neg = count(negatives, len, &by_window)?;
+    // A pair's count in each window doesn't depend on the other pairs kept,
+    // so counts from an earlier call serve for any of its pairs.
+    let reused = cache
+        .as_deref()
+        .and_then(|c| subset_counts(&kept, &c.kept, &c.by_window, n_windows));
+    let neg = match reused {
+        Some(neg) => neg,
+        None => {
+            let neg = count(negatives, len, &by_window)?;
+            if let Some(c) = cache {
+                c.kept = kept.clone();
+                c.by_window = neg.clone();
+            }
+            neg
+        }
+    };
     // Sized up front: growing a vector this large by reallocation leaves
     // memory behind with some allocators.
     let mut out: Vec<SpacedPair> =

@@ -25,6 +25,10 @@ Changes in behaviour:
 
 New:
 
+- `gapped_motif_finder()` counts the negatives' pairs of k-mers once per
+  k-mer size rather than for every motif, and finds the occurrences of each
+  seed pair on the thread pool. It gives the same motifs about 20% faster
+  on one thread and 35–40% faster on several.
 - `motif_finder()` counts the background's words once per width rather than
   for every motif, and spreads its counting, rescans and tests over the
   sequences as well as the widths. It gives the same motifs 1.5 times

@@ -13,19 +13,23 @@
 //! The finder is experimental: its options, its results and the motifs it
 //! finds may change in later releases.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+
+use rayon::prelude::*;
 
 use crate::alphabet::Alphabet;
 use crate::convert::convert_type;
 use crate::create::{CreateOptions, from_strings, from_typed_matrix};
 use crate::error::{Result, arg_err};
-use crate::finder::spaced_pairs;
+use crate::finder::{NegativePairs, spaced_pairs_with};
 use crate::mask::{DustOptions, mask_complexity};
 use crate::matrix::Matrix;
 use crate::motif::{Motif, MotifType};
 use crate::ops::{add_gap, normalize};
 use crate::packed::EncodedSequences;
 use crate::progress;
+use crate::pvalue::with_threads;
 use crate::scan::{HitTable, NoOverlaps, ScanOptions, scan_encoded};
 use crate::shuffle::{ShuffleMethod, ShuffleOptions, shuffled_backgrounds};
 use crate::stats::ln_fisher_greater;
@@ -229,6 +233,9 @@ struct Search<'a> {
     neg: &'a SeqSet,
     /// Positives and negatives set aside to test the motifs.
     held_out: Option<(SeqSet, SeqSet)>,
+    /// The negatives' pair counts for each k-mer size, kept between searches
+    /// as the negatives never change.
+    neg_pairs: RefCell<HashMap<usize, NegativePairs>>,
 }
 
 /// Find motifs made of two parts with a spacer of varying length.
@@ -360,6 +367,7 @@ pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
         work: SeqSet::new(pos, opts.nthreads)?,
         neg: &neg,
         held_out,
+        neg_pairs: RefCell::new(HashMap::new()),
     };
     let ln_stop = opts.stop_pvalue.ln();
     let mut out = Vec::new();
@@ -454,7 +462,8 @@ impl Search<'_> {
         // One mismatch in a pair of shorter k-mers matches too much of the
         // background to help.
         let mismatch = o.mismatch && k == 6;
-        let pairs = spaced_pairs(
+        let mut cache = self.neg_pairs.borrow_mut();
+        let pairs = spaced_pairs_with(
             &self.work.text,
             &self.neg.text,
             k,
@@ -464,7 +473,9 @@ impl Search<'_> {
             min_count,
             mismatch,
             o.nthreads,
+            Some(cache.entry(k).or_default()),
         )?;
+        drop(cache);
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut covered: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
         let mut seen = HashSet::new();
@@ -478,7 +489,16 @@ impl Search<'_> {
             }
             let (lo, hi) = (p.gap, p.gap + p.width - 1);
             let (left, right) = (kmer_string(p.left, k), kmer_string(p.right, k));
-            let occ = occurrences(&self.work.text, &left, &right, lo, hi, o.rc, mismatch);
+            let occ = occurrences(
+                &self.work.text,
+                &left,
+                &right,
+                lo,
+                hi,
+                o.rc,
+                mismatch,
+                o.nthreads,
+            )?;
             // Seeds lying mostly within the hits of a motif already built are
             // the same motif again.
             let inside = occ
@@ -922,6 +942,7 @@ type Occurrence = (usize, usize, usize, bool);
 /// Every place where `left`, a spacer of `lo` to `hi` letters and `right`
 /// occur, with `mismatch` allowing one letter of either part to differ, read
 /// along the pattern; the start is on the forward strand.
+#[allow(clippy::too_many_arguments)]
 fn occurrences(
     seqs: &[String],
     left: &str,
@@ -930,41 +951,51 @@ fn occurrences(
     hi: usize,
     rc: bool,
     mismatch: bool,
-) -> Vec<Occurrence> {
+    nthreads: usize,
+) -> Result<Vec<Occurrence>> {
     let k = left.len();
     let mut forms = vec![(left.to_string(), right.to_string(), false)];
     if rc {
         forms.push((rc_string(right), rc_string(left), true));
     }
     let allowed = usize::from(mismatch);
-    let mut out = Vec::new();
-    for (i, s) in seqs.iter().enumerate() {
-        let s = s.as_bytes();
-        for (a, b, rev) in &forms {
-            let (a, b) = (a.as_bytes(), b.as_bytes());
-            for start in 0..s.len().saturating_sub(k - 1) {
-                // Mismatches in the first part; a letter other than A, C, G
-                // and T never matches.
-                let Some(ma) = distance(&s[start..start + k], a, allowed) else {
-                    continue;
-                };
-                for g in lo..=hi {
-                    let j = start + k + g;
-                    if j + k > s.len() {
-                        break;
-                    }
-                    if distance(&s[j..j + k], b, allowed - ma).is_some() {
-                        out.push((i, start, g, *rev));
+    // Each sequence on the thread pool, gathered in order.
+    let per_seq: Vec<Vec<Occurrence>> = with_threads(nthreads, || {
+        seqs.par_iter()
+            .enumerate()
+            .with_min_len(256)
+            .map(|(i, s)| {
+                let s = s.as_bytes();
+                let mut out = Vec::new();
+                for (a, b, rev) in &forms {
+                    let (a, b) = (a.as_bytes(), b.as_bytes());
+                    for start in 0..s.len().saturating_sub(k - 1) {
+                        // Mismatches in the first part; a letter other than A, C, G
+                        // and T never matches.
+                        let Some(ma) = distance(&s[start..start + k], a, allowed) else {
+                            continue;
+                        };
+                        for g in lo..=hi {
+                            let j = start + k + g;
+                            if j + k > s.len() {
+                                break;
+                            }
+                            if distance(&s[j..j + k], b, allowed - ma).is_some() {
+                                out.push((i, start, g, *rev));
+                            }
+                        }
                     }
                 }
-            }
-        }
-    }
+                out
+            })
+            .collect()
+    })?;
+    let mut out: Vec<Occurrence> = per_seq.into_iter().flatten().collect();
     if mismatch {
         out.sort_unstable();
         out.dedup();
     }
-    out
+    Ok(out)
 }
 
 /// The number of letters of `seq` differing from `pattern`, if at most
@@ -1165,9 +1196,9 @@ mod tests {
             "TTAGGTCAGGAGGTCATT".to_string(),
             "AGGACAGGAGGTCA".to_string(),
         ];
-        let exact = occurrences(&seqs, "AGGTCA", "AGGTCA", 1, 5, false, false);
+        let exact = occurrences(&seqs, "AGGTCA", "AGGTCA", 1, 5, false, false, 1).unwrap();
         assert_eq!(exact, vec![(0, 2, 2, false)]);
-        let one = occurrences(&seqs, "AGGTCA", "AGGTCA", 1, 5, false, true);
+        let one = occurrences(&seqs, "AGGTCA", "AGGTCA", 1, 5, false, true, 1).unwrap();
         assert_eq!(one, vec![(0, 2, 2, false), (1, 0, 2, false)]);
     }
 
