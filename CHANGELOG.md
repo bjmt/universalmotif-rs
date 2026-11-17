@@ -67,6 +67,9 @@ New:
   position with a CWM or, through its log-odds, with any probabilistic
   motif, such as one from a database.
 
+- `ScanOptions`, `SelectOptions` and `RefineOptions` take `reachable`,
+  which lets motifs too short to reach the cutoff hit at their best score.
+
 Fixes:
 
 - `motif_finder()` takes about half the memory it did, as before its

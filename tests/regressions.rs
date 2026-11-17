@@ -177,3 +177,19 @@ fn missing_contribution_scores_count_as_zero() {
     );
     assert!(hits.is_empty());
 }
+
+#[test]
+fn reachable_lets_short_motifs_hit_at_their_best_score() {
+    use universalmotif::scan::{ScanOptions, scan_table};
+    let m = from_strings(&["CACGTG"], None, &CreateOptions::default()).unwrap();
+    let seqs = ["AAAACACGTGAAAA", "AAAACACGTTAAAA"];
+    let strict = scan_table(std::slice::from_ref(&m), &seqs, &ScanOptions::default()).unwrap();
+    assert_eq!(strict.len(), 0);
+    let opts = ScanOptions {
+        reachable: true,
+        ..Default::default()
+    };
+    let hits = scan_table(&[m], &seqs, &opts).unwrap();
+    // Only the best word hits, on both strands of the palindrome.
+    assert!(!hits.is_empty() && hits.sequence.iter().all(|&s| s == 0));
+}

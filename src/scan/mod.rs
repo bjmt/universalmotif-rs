@@ -103,6 +103,10 @@ pub struct ScanOptions {
     /// each stop on their own. It cannot be combined with `no_overlaps`.
     /// Off by default.
     pub first_hit: bool,
+    /// Let a motif too short or too degenerate to reach `pvalue` hit at the
+    /// best score it can give, rather than not at all. Its hits are then
+    /// only its best words. Off by default.
+    pub reachable: bool,
 }
 
 impl Default for ScanOptions {
@@ -115,6 +119,7 @@ impl Default for ScanOptions {
             use_gaps: true,
             correct_gaps: true,
             first_hit: false,
+            reachable: false,
         }
     }
 }
@@ -883,7 +888,10 @@ fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Optio
         _ => 1.0,
     };
     let dist = ScoreDistribution::new(&sm.pwm, &sm.bkg);
-    let threshold = dist.score(opts.pvalue / pvalue_scale);
+    let mut threshold = dist.score(opts.pvalue / pvalue_scale);
+    if opts.reachable && threshold.is_infinite() {
+        threshold = dist.score_range().1;
+    }
     let min = score_grid_ceiling(threshold);
     if min >= i32::MAX as f64 {
         return Ok(None);

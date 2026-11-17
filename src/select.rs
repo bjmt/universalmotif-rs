@@ -46,6 +46,9 @@ pub struct SelectOptions {
     pub rc: bool,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
+    /// Let motifs that cannot reach `pvalue` hit at their best score, as
+    /// [`ScanOptions::reachable`] does. Off by default.
+    pub reachable: bool,
 }
 
 impl Default for SelectOptions {
@@ -57,6 +60,7 @@ impl Default for SelectOptions {
             max_similarity: None,
             rc: true,
             nthreads: 1,
+            reachable: false,
         }
     }
 }
@@ -124,6 +128,7 @@ pub fn select_motifs<S: AsRef<str> + Sync>(
         nthreads: opts.nthreads,
         // Without sites, any hit reaches its sequence, so the first will do.
         first_hit: sites.is_none(),
+        reachable: opts.reachable,
         ..Default::default()
     };
     let hits = if n == 0 {
@@ -309,6 +314,9 @@ pub struct RefineOptions {
     pub rc: bool,
     /// Threads to use; 0 means all available.
     pub nthreads: usize,
+    /// Let motifs that cannot reach `pvalue` hit at their best score, as
+    /// [`ScanOptions::reachable`] does. Off by default.
+    pub reachable: bool,
 }
 
 impl Default for RefineOptions {
@@ -324,6 +332,7 @@ impl Default for RefineOptions {
             min_overlap: 1,
             rc: true,
             nthreads: 1,
+            reachable: false,
         }
     }
 }
@@ -380,6 +389,7 @@ pub fn refine_motifs<S: AsRef<str> + Sync>(
             ignore_motif: opts.competitive,
             ..Default::default()
         }),
+        reachable: opts.reachable,
         ..Default::default()
     };
     for _ in 0..opts.iterations {
