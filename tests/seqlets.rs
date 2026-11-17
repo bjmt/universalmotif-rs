@@ -2,7 +2,7 @@
 
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use universalmotif::seqlets::{SeqletOptions, SeqletSign, call_seqlets};
+use universalmotif::seqlets::{SeqletOptions, SeqletSign, call_seqlets, call_seqlets_with_null};
 
 /// Noise around zero, with a block of `value` over `start..end` in every
 /// `every`th sequence.
@@ -199,5 +199,39 @@ fn single_precision_scores_give_the_same_seqlets() {
         b.iter()
             .map(|s| (s.sequence, s.start, s.end))
             .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_given_null_makes_batches_agree() {
+    let x = tracks(200, 300, &[(100, 110, 0.3)], 2);
+    let opts = SeqletOptions {
+        fdr: None,
+        ..Default::default()
+    };
+    // The null of the scores themselves is the default.
+    assert_eq!(
+        call_seqlets_with_null(&x, Some(&x), None, &opts).unwrap(),
+        call_seqlets(&x, None, &opts).unwrap()
+    );
+    // With one null for every batch, calling in batches gives the seqlets of
+    // one call.
+    let pilot = &x[..60];
+    let whole = call_seqlets_with_null(&x, Some(pilot), None, &opts).unwrap();
+    let mut batched = Vec::new();
+    for (k, batch) in x.chunks(50).enumerate() {
+        for mut s in call_seqlets_with_null(batch, Some(pilot), None, &opts).unwrap() {
+            s.sequence += 50 * k;
+            batched.push(s);
+        }
+    }
+    assert_eq!(batched, whole);
+    // Without one, each batch has a null of its own and the P-values differ.
+    let own = call_seqlets(&x[50..100], None, &opts).unwrap();
+    let from_pilot = call_seqlets_with_null(&x[50..100], Some(pilot), None, &opts).unwrap();
+    assert!(
+        own.iter()
+            .zip(&from_pilot)
+            .any(|(a, b)| a.pvalue != b.pvalue)
     );
 }

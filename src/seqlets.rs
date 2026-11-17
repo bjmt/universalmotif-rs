@@ -125,6 +125,19 @@ pub fn call_seqlets<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
     decoys: Option<&[S]>,
     opts: &SeqletOptions,
 ) -> Result<Vec<Seqlet>> {
+    call_seqlets_with_null(scores, None, decoys, opts)
+}
+
+/// [`call_seqlets`] with the null built from `null` rather than from the
+/// scores themselves. A null from a fixed set of scores, such as a model's
+/// contributions for shuffled sequences, gives the same P-values whichever
+/// batch of sequences is called against it.
+pub fn call_seqlets_with_null<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
+    scores: &[S],
+    null: Option<&[S]>,
+    decoys: Option<&[S]>,
+    opts: &SeqletOptions,
+) -> Result<Vec<Seqlet>> {
     if !(opts.threshold > 0.0 && opts.threshold <= 1.0) {
         return arg_err("threshold must be above 0 and at most 1");
     }
@@ -153,7 +166,8 @@ pub fn call_seqlets<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
     let out = with_threads(opts.nthreads, || -> Result<Vec<Seqlet>> {
         let mut out = Vec::new();
         for &sign in signs {
-            let Some(null) = Null::new(scores, sign, opts.max_len, opts.n_bins) else {
+            let Some(null) = Null::new(null.unwrap_or(scores), sign, opts.max_len, opts.n_bins)
+            else {
                 continue;
             };
             let mut real = call_all(

@@ -29,6 +29,9 @@ New:
   each sequence. It takes the scores as any slices of `f64` or `f32`,
   such as borrowed rows of a larger array, and copies one sequence at a
   time.
+- `seqlets::call_seqlets_with_null()` builds the null from given scores,
+  such as a pilot batch or a model's decoys, so that batches of sequences
+  called against it get the same seqlets as one call.
 - `select::motif_stability()` reruns `motif_finder()` on random subsets of
   the sequences and gives each motif the share of reruns that find it
   again.
