@@ -2,14 +2,15 @@
 //! model's attribution scores, with [`call_seqlets`].
 //!
 //! A stretch is a seqlet when its total contribution is unlikely under a
-//! null built from all the scores given, and so is the total of every
-//! stretch inside it of at least the minimum length, so that a seqlet holds
-//! no run of unremarkable positions. The null for each length comes from
-//! the scores' own distribution, convolved with itself, so a set share of
+//! null, and so is the total of every stretch inside it of at least the
+//! minimum length, so that a seqlet holds no run of unremarkable positions.
+//! The null comes from null scores, those of sequences with nothing to
+//! find, such as a model's contributions for shuffled sequences, or by
+//! default each sequence's scores shuffled. The null for each length comes
+//! from their distribution, convolved with itself, so a set share of
 //! stretches passes even in pure noise; to correct for this, the same calls
-//! are made on the scores shuffled within each sequence, and seqlets are
-//! kept down to the total at which these decoys make up at most a given
-//! share of those passing.
+//! are made on the null scores, and seqlets are kept down to the total at
+//! which those make up at most a given share of the seqlets passing.
 
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -45,10 +46,9 @@ pub struct SeqletOptions {
     /// Positions added on either side of each seqlet, within its sequence;
     /// 3 by default.
     pub flank: usize,
-    /// With a value, keep seqlets down to the total at which decoys are at
-    /// most this share of those passing; 0.2 by default. Decoys are called
-    /// in the decoy scores given to [`call_seqlets`], or else in each
-    /// sequence's scores shuffled. `None` keeps every seqlet.
+    /// With a value, keep seqlets down to the total at which the seqlets of
+    /// the null scores are at most this share of those passing; 0.2 by
+    /// default. `None` keeps every seqlet.
     pub fdr: Option<f64>,
     /// The signs to call.
     pub sign: SeqletSign,
@@ -109,33 +109,23 @@ pub struct Seqlet {
 /// unless it overlaps a seqlet already taken. Seqlets come back in order of
 /// sequence and position.
 ///
-/// `decoys`, the scores of sequences with nothing to find, such as a model's
-/// contributions for shuffled sequences, set the false discovery rate when
-/// given: seqlets are called in them the same way, and their number, scaled
-/// to as many positions as the scores have, stands for the false seqlets
-/// among those called. Otherwise each sequence's own scores, shuffled,
-/// stand in for them, which keeps their values but not the model's view of
-/// sequence without sites.
+/// `null_scores`, the scores of sequences with nothing to find, such as a
+/// model's contributions for shuffled sequences, give the null when given.
+/// The P-values come from their distribution, and seqlets are called in
+/// them the same way, their number, scaled to as many positions as the
+/// scores have, standing for the false seqlets among those called.
+/// Otherwise each sequence's own scores, shuffled, stand in for them, which
+/// keeps their values but not the model's view of sequence without sites.
+/// With the same null scores for every batch of sequences the P-values do
+/// not depend on the batch, so batches called with `fdr: None` can be cut
+/// together afterwards to give the seqlets of one call.
 ///
 /// The scores can be any slices of `f64` or `f32`, such as `Vec<f64>` or
 /// rows borrowed from a larger array; each sequence's are copied only while it is called, so the
 /// memory used beyond the scores stays small.
 pub fn call_seqlets<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
     scores: &[S],
-    decoys: Option<&[S]>,
-    opts: &SeqletOptions,
-) -> Result<Vec<Seqlet>> {
-    call_seqlets_with_null(scores, None, decoys, opts)
-}
-
-/// [`call_seqlets`] with the null built from `null` rather than from the
-/// scores themselves. A null from a fixed set of scores, such as a model's
-/// contributions for shuffled sequences, gives the same P-values whichever
-/// batch of sequences is called against it.
-pub fn call_seqlets_with_null<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
-    scores: &[S],
-    null: Option<&[S]>,
-    decoys: Option<&[S]>,
+    null_scores: Option<&[S]>,
     opts: &SeqletOptions,
 ) -> Result<Vec<Seqlet>> {
     if !(opts.threshold > 0.0 && opts.threshold <= 1.0) {
@@ -161,13 +151,20 @@ pub fn call_seqlets_with_null<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
     let total = positions(scores);
     let work = progress::current();
     progress::begin(&work, "calling seqlets", (total * signs.len()) as u64);
-    // Each sequence's scores are signed, cleaned and, for decoys, shuffled
-    // only as it is called, so that no copy of all the scores is kept.
+    // Each sequence's scores are signed, cleaned and, for the default null,
+    // shuffled only as it is called, so that no copy of all the scores is
+    // kept.
     let out = with_threads(opts.nthreads, || -> Result<Vec<Seqlet>> {
         let mut out = Vec::new();
         for &sign in signs {
-            let Some(null) = Null::new(null.unwrap_or(scores), sign, opts.max_len, opts.n_bins)
-            else {
+            // Shuffling keeps the values, so the scores themselves give the
+            // null of their shuffles.
+            let Some(null) = Null::new(
+                null_scores.unwrap_or(scores),
+                sign,
+                opts.max_len,
+                opts.n_bins,
+            ) else {
                 continue;
             };
             let mut real = call_all(
@@ -178,9 +175,9 @@ pub fn call_seqlets_with_null<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
                 &work,
             )?;
             if let Some(fdr) = opts.fdr {
-                // Decoy scores given, such as the model's on shuffled
+                // The null scores given, such as the model's on shuffled
                 // sequences, or else each sequence's scores shuffled.
-                let (called, n_decoy) = match decoys {
+                let (called, n_null) = match null_scores {
                     Some(d) => (
                         call_all(d.len(), |i| signed(d[i].as_ref(), sign), &null, opts, &None)?,
                         positions(d),
@@ -197,9 +194,9 @@ pub fn call_seqlets_with_null<T: Copy + Into<f64> + Sync, S: AsRef<[T]> + Sync>(
                         (call_all(scores.len(), shuffled, &null, opts, &None)?, total)
                     }
                 };
-                // Decoys are counted as if there were as many positions of
-                // them as of the scores.
-                let scale = total.max(1) as f64 / n_decoy.max(1) as f64;
+                // The null scores are counted as if there were as many
+                // positions of them as of the scores.
+                let scale = total.max(1) as f64 / n_null.max(1) as f64;
                 let cut = fdr_cut(
                     &real.iter().map(|s| s.score).collect::<Vec<_>>(),
                     &called.iter().map(|s| s.score).collect::<Vec<_>>(),
@@ -231,18 +228,18 @@ fn signed<T: Copy + Into<f64>>(s: &[T], sign: f64) -> Vec<f64> {
         .collect()
 }
 
-/// The lowest total at which decoys at or above it, times `scale`, are at
-/// most `fdr` of the real seqlets at or above it, or infinity when there is
-/// none.
-fn fdr_cut(real: &[f64], decoy: &[f64], fdr: f64, scale: f64) -> f64 {
+/// The lowest total at which the null seqlets at or above it, times
+/// `scale`, are at most `fdr` of the real seqlets at or above it, or
+/// infinity when there is none.
+fn fdr_cut(real: &[f64], null: &[f64], fdr: f64, scale: f64) -> f64 {
     let mut v = real.to_vec();
     v.sort_by(|a, b| b.partial_cmp(a).unwrap());
-    let mut d = decoy.to_vec();
+    let mut d = null.to_vec();
     d.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mut cut = f64::INFINITY;
     for (i, &t) in v.iter().enumerate() {
-        let n_decoy = d.len() - d.partition_point(|&x| x < t);
-        if n_decoy as f64 * scale / (i + 1) as f64 <= fdr {
+        let n_null = d.len() - d.partition_point(|&x| x < t);
+        if n_null as f64 * scale / (i + 1) as f64 <= fdr {
             cut = t;
         }
     }

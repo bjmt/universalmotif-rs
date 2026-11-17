@@ -2,7 +2,7 @@
 
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use universalmotif::seqlets::{SeqletOptions, SeqletSign, call_seqlets, call_seqlets_with_null};
+use universalmotif::seqlets::{SeqletOptions, SeqletSign, call_seqlets};
 
 /// Noise around zero, with a block of `value` over `start..end` in every
 /// `every`th sequence.
@@ -159,15 +159,15 @@ fn bad_options_and_empty_tracks() {
 }
 
 #[test]
-fn decoy_scores_set_the_cut() {
+fn null_scores_set_the_null() {
     let x = tracks(200, 300, &[(100, 110, 0.3)], 2);
     let opts = SeqletOptions {
         flank: 0,
         sign: SeqletSign::Positive,
         ..Default::default()
     };
-    // Decoys with blocks as strong as the real ones make every seqlet look
-    // false; quiet decoys, twice as many, keep the real ones.
+    // Null scores with blocks as strong as the real ones make every seqlet
+    // look false; quiet null scores, twice as many, keep the real ones.
     let loud = tracks(200, 300, &[(50, 60, 0.3)], 1);
     let quiet = tracks(400, 300, &[], 1);
     let none = call_seqlets(&x, Some(&loud), &opts).unwrap();
@@ -203,35 +203,31 @@ fn single_precision_scores_give_the_same_seqlets() {
 }
 
 #[test]
-fn a_given_null_makes_batches_agree() {
+fn one_null_makes_batches_agree() {
     let x = tracks(200, 300, &[(100, 110, 0.3)], 2);
     let opts = SeqletOptions {
         fdr: None,
         ..Default::default()
     };
-    // The null of the scores themselves is the default.
+    // The scores' own shuffles have the null of the scores themselves.
     assert_eq!(
-        call_seqlets_with_null(&x, Some(&x), None, &opts).unwrap(),
+        call_seqlets(&x, Some(&x), &opts).unwrap(),
         call_seqlets(&x, None, &opts).unwrap()
     );
-    // With one null for every batch, calling in batches gives the seqlets of
-    // one call.
-    let pilot = &x[..60];
-    let whole = call_seqlets_with_null(&x, Some(pilot), None, &opts).unwrap();
+    // With the same null scores for every batch, calling in batches gives the
+    // seqlets of one call.
+    let null = tracks(60, 300, &[], 1);
+    let whole = call_seqlets(&x, Some(&null), &opts).unwrap();
     let mut batched = Vec::new();
     for (k, batch) in x.chunks(50).enumerate() {
-        for mut s in call_seqlets_with_null(batch, Some(pilot), None, &opts).unwrap() {
+        for mut s in call_seqlets(batch, Some(&null), &opts).unwrap() {
             s.sequence += 50 * k;
             batched.push(s);
         }
     }
     assert_eq!(batched, whole);
-    // Without one, each batch has a null of its own and the P-values differ.
+    // Without them, each batch has a null of its own and the P-values differ.
     let own = call_seqlets(&x[50..100], None, &opts).unwrap();
-    let from_pilot = call_seqlets_with_null(&x[50..100], Some(pilot), None, &opts).unwrap();
-    assert!(
-        own.iter()
-            .zip(&from_pilot)
-            .any(|(a, b)| a.pvalue != b.pvalue)
-    );
+    let given = call_seqlets(&x[50..100], Some(&null), &opts).unwrap();
+    assert!(own.iter().zip(&given).any(|(a, b)| a.pvalue != b.pvalue));
 }
