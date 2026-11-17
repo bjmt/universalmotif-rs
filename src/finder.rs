@@ -32,6 +32,9 @@ const AMBIGUITY_SCORE: i32 = -10_000_000;
 const MAX_CDF_SIZE: u64 = 2_097_152;
 const MAX_SPACED_PAIRS: usize = 65_536;
 const COMP4: [usize; 4] = [3, 2, 1, 0];
+/// Sequences handed to a thread at a time when a search step is spread over
+/// the sequences.
+const PAR_CHUNK: usize = 512;
 
 const fn char_table() -> [u8; 256] {
     let mut t = [4u8; 256];
@@ -295,34 +298,46 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
     } else {
         (1u64 << (2 * w)) - 1
     };
+    // The distinct words of each sequence, gathered a chunk of sequences at a
+    // time on the thread pool.
+    let per_chunk: Vec<Vec<u64>> = seqs
+        .par_chunks(PAR_CHUNK)
+        .map(|chunk| {
+            let total: usize = chunk.iter().map(|s| (s.len() + 1).saturating_sub(w)).sum();
+            let mut out: Vec<u64> = Vec::with_capacity(total);
+            let longest = chunk.iter().map(|s| s.len()).max().unwrap_or(0);
+            let mut seen: Vec<u64> = Vec::with_capacity(longest);
+            for s in chunk {
+                seen.clear();
+                // Rolling codes of the last w letters on each strand.
+                let (mut fwd, mut rev, mut run) = (0u64, 0u64, 0usize);
+                for &b in s {
+                    let idx = CHAR2IDX[b as usize];
+                    if idx >= 4 {
+                        run = 0;
+                        continue;
+                    }
+                    fwd = ((fwd << 2) | idx as u64) & mask;
+                    rev = (rev >> 2) | ((COMP4[idx as usize] as u64) << (2 * (w - 1)));
+                    run += 1;
+                    if run >= w {
+                        seen.push(if rc { fwd.min(rev) } else { fwd });
+                    }
+                }
+                seen.sort_unstable();
+                seen.dedup();
+                out.extend_from_slice(&seen);
+            }
+            out
+        })
+        .collect();
     // Sized up front: grown by doubling, the vector leaves a trail of large
     // freed blocks that the system allocator may keep, inflating memory use.
-    let total: usize = seqs.iter().map(|s| (s.len() + 1).saturating_sub(w)).sum();
-    let mut all: Vec<u64> = Vec::with_capacity(total);
-    let longest = seqs.iter().map(|s| s.len()).max().unwrap_or(0);
-    let mut seen: Vec<u64> = Vec::with_capacity(longest);
-    for s in seqs {
-        seen.clear();
-        // Rolling codes of the last w letters on each strand.
-        let (mut fwd, mut rev, mut run) = (0u64, 0u64, 0usize);
-        for &b in s {
-            let idx = CHAR2IDX[b as usize];
-            if idx >= 4 {
-                run = 0;
-                continue;
-            }
-            fwd = ((fwd << 2) | idx as u64) & mask;
-            rev = (rev >> 2) | ((COMP4[idx as usize] as u64) << (2 * (w - 1)));
-            run += 1;
-            if run >= w {
-                seen.push(if rc { fwd.min(rev) } else { fwd });
-            }
-        }
-        seen.sort_unstable();
-        seen.dedup();
-        all.extend_from_slice(&seen);
+    let mut all: Vec<u64> = Vec::with_capacity(per_chunk.iter().map(Vec::len).sum());
+    for v in per_chunk {
+        all.extend_from_slice(&v);
     }
-    all.sort_unstable();
+    all.par_sort_unstable();
     // Collapse runs of the same k-mer in place, counting them.
     let mut counts: Vec<u32> = Vec::with_capacity(all.len());
     let mut n = 0;
@@ -341,13 +356,15 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
 
 fn enumerate_seeds(
     pos: &[Vec<u8>],
-    neg: &[Vec<u8>],
+    neg_words: &(Vec<u64>, Vec<u32>),
+    nn: u64,
     w: usize,
     rc: bool,
     lf: &LogFact,
 ) -> (Vec<(u64, f64)>, u64) {
-    let ((pk, pn), (nk, nn_)) = (kmer_presence(pos, w, rc), kmer_presence(neg, w, rc));
-    let (np, nn) = (pos.len() as u64, neg.len() as u64);
+    let (pk, pn) = kmer_presence(pos, w, rc);
+    let (nk, nn_) = (&neg_words.0, &neg_words.1);
+    let np = pos.len() as u64;
     // Many k-mers share the same counts, so each table is tested once.
     let mut memo: HashMap<(u64, u64), f64> = HashMap::new();
     let mut best: Vec<(u64, f64)> = Vec::with_capacity(TOP_K_SEEDS + 1);
@@ -394,26 +411,52 @@ fn add_site(ppm: &mut [[u64; 4]], seq: &[u8], off: usize, w: usize, reverse: boo
 
 fn build_ppm_from_seed(pos: &[Vec<u8>], seed: u64, w: usize, rc: bool) -> (Vec<[u64; 4]>, u64) {
     let rc_seed = rc.then(|| rc_kmer(seed, w));
-    let mut ppm = vec![[0u64; 4]; w];
-    let mut nsites = 0;
-    for s in pos {
+    sum_sites(pos, w, |s, ppm, nsites| {
         if s.len() < w {
-            continue;
+            return;
         }
         for off in 0..=s.len() - w {
             let Some(k) = kmer_encode(s, w, off) else {
                 continue;
             };
             if hamming(k, seed, w) <= HAMMING_MISMATCH {
-                add_site(&mut ppm, s, off, w, false);
-                nsites += 1;
+                add_site(ppm, s, off, w, false);
+                *nsites += 1;
             } else if rc_seed.is_some_and(|r| hamming(k, r, w) <= HAMMING_MISMATCH) {
-                add_site(&mut ppm, s, off, w, true);
-                nsites += 1;
+                add_site(ppm, s, off, w, true);
+                *nsites += 1;
             }
         }
-    }
-    (ppm, nsites)
+    })
+}
+
+/// The letter counts of the sites `visit` adds from each sequence, and how
+/// many sites it added, summed over chunks of sequences on the thread pool.
+/// The counts are whole numbers, so the order of the chunks doesn't matter.
+fn sum_sites<F>(seqs: &[Vec<u8>], w: usize, visit: F) -> (Vec<[u64; 4]>, u64)
+where
+    F: Fn(&[u8], &mut [[u64; 4]], &mut u64) + Sync,
+{
+    seqs.par_chunks(PAR_CHUNK)
+        .map(|chunk| {
+            let mut ppm = vec![[0u64; 4]; w];
+            let mut nsites = 0;
+            for s in chunk {
+                visit(s, &mut ppm, &mut nsites);
+            }
+            (ppm, nsites)
+        })
+        .reduce(
+            || (vec![[0u64; 4]; w], 0),
+            |(mut a, na), (b, nb)| {
+                for (x, y) in a.iter_mut().zip(&b) {
+                    for k in 0..4 {
+                        x[k] += y[k];
+                    }
+                }
+                (a, na + nb)
+            },
+        )
 }
 
 fn refine(
@@ -429,24 +472,23 @@ fn refine(
         return false;
     }
     let thr = m.threshold - 1;
-    let mut ppm = vec![[0u64; 4]; w];
-    let mut nsites = 0;
-    for s in pos {
+    let scored: &FMotif = m;
+    let (ppm, nsites) = sum_sites(pos, w, |s, ppm, nsites| {
         if s.len() < w {
-            continue;
+            return;
         }
         for off in 0..=s.len() - w {
-            let (sc, src) = score_at(m, s, off);
+            let (sc, src) = score_at(scored, s, off);
             if sc > thr {
-                add_site(&mut ppm, s, off, w, false);
-                nsites += 1;
+                add_site(ppm, s, off, w, false);
+                *nsites += 1;
             }
             if rc && src > thr {
-                add_site(&mut ppm, s, off, w, true);
-                nsites += 1;
+                add_site(ppm, s, off, w, true);
+                *nsites += 1;
             }
         }
-    }
+    });
     if nsites < MIN_REFINE_HITS {
         return false;
     }
@@ -513,40 +555,57 @@ impl Coverage {
 fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool, lf: &LogFact) -> Evaluation {
     let thr = m.threshold - 1;
     let w = m.size;
+    // The sites of one sequence, at most two at each start (one per strand).
+    let sites_of = |s: &[u8], out: &mut Vec<usize>| {
+        if s.len() < w {
+            return;
+        }
+        for off in 0..=s.len() - w {
+            let (sc, src) = score_at(m, s, off);
+            for found in [sc > thr, rc && src > thr] {
+                if found {
+                    out.push(off);
+                }
+            }
+        }
+    };
+    // Each chunk's sites in the sequences, by sequence; the background only
+    // needs counting.
+    let pos_sites: Vec<Vec<Vec<usize>>> = pos
+        .par_chunks(PAR_CHUNK)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|s| {
+                    let mut v = Vec::new();
+                    sites_of(s, &mut v);
+                    v
+                })
+                .collect()
+        })
+        .collect();
+    let (sites_neg, seqs_neg) = neg
+        .par_chunks(PAR_CHUNK)
+        .map(|chunk| {
+            let mut v = Vec::new();
+            let (mut sites, mut seqs) = (0u64, 0u64);
+            for s in chunk {
+                v.clear();
+                sites_of(s, &mut v);
+                sites += v.len() as u64;
+                seqs += !v.is_empty() as u64;
+            }
+            (sites, seqs)
+        })
+        .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
     let mut covered = Coverage::new(pos);
-    let (mut sites_pos, mut seqs_pos, mut sites_neg, mut seqs_neg) = (0, 0, 0, 0);
-    for (si, s) in pos.iter().enumerate() {
-        if s.len() < w {
-            continue;
+    let (mut sites_pos, mut seqs_pos) = (0u64, 0u64);
+    for (si, offs) in pos_sites.iter().flatten().enumerate() {
+        sites_pos += offs.len() as u64;
+        seqs_pos += !offs.is_empty() as u64;
+        for &off in offs {
+            covered.fill(si, off, w);
         }
-        let mut hit = false;
-        for off in 0..=s.len() - w {
-            let (sc, src) = score_at(m, s, off);
-            for found in [sc > thr, rc && src > thr] {
-                if found {
-                    hit = true;
-                    sites_pos += 1;
-                    covered.fill(si, off, w);
-                }
-            }
-        }
-        seqs_pos += hit as u64;
-    }
-    for s in neg {
-        if s.len() < w {
-            continue;
-        }
-        let mut hit = false;
-        for off in 0..=s.len() - w {
-            let (sc, src) = score_at(m, s, off);
-            for found in [sc > thr, rc && src > thr] {
-                if found {
-                    hit = true;
-                    sites_neg += 1;
-                }
-            }
-        }
-        seqs_neg += hit as u64;
     }
     let (np, nn) = (pos.len() as u64, neg.len() as u64);
     Evaluation {
@@ -589,6 +648,8 @@ fn discover_for_width(
     progress: &Option<Progress>,
 ) -> (Vec<Found>, u64) {
     let mut work = pos.to_vec();
+    // The background is never masked, so its words are counted once.
+    let neg_words = kmer_presence(neg, w, rc);
     let mut out = Vec::new();
     let mut tested = 0;
     // Each search counts once; a width that stops early counts the searches
@@ -600,7 +661,7 @@ fn discover_for_width(
         }
         searched += 1;
         progress::add(progress, 1);
-        let (seeds, candidates) = enumerate_seeds(&work, neg, w, rc, lf);
+        let (seeds, candidates) = enumerate_seeds(&work, &neg_words, neg.len() as u64, w, rc, lf);
         tested += candidates;
         if seeds.is_empty() {
             break;
@@ -628,13 +689,13 @@ fn discover_for_width(
             if eval.ln_pvalue > stop_pval.ln() {
                 continue;
             }
-            for (si, s) in work.iter_mut().enumerate() {
+            work.par_iter_mut().enumerate().for_each(|(si, s)| {
                 for (p, b) in s.iter_mut().enumerate() {
                     if eval.covered.contains(si, p) {
                         *b = b'N';
                     }
                 }
-            }
+            });
             let order = out.len();
             out.push(Found {
                 motif: m,

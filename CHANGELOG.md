@@ -25,6 +25,11 @@ Changes in behaviour:
 
 New:
 
+- `motif_finder()` counts the background's words once per width rather than
+  for every motif, and spreads its counting, rescans and tests over the
+  sequences as well as the widths. It gives the same motifs 1.5 times
+  faster on one thread and 2.5 times faster on eight, where one slow width
+  no longer holds up the rest.
 - `scan_contributions()` lays out each motif once per scan rather than once
   per sequence, and keeps a buffer of the best window at each start only
   for gapped motifs. On 187,000 regions and 35 CWMs it takes 4 s rather
