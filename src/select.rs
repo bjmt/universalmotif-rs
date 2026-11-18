@@ -438,6 +438,38 @@ pub fn refine_motifs<S: AsRef<str> + Sync>(
         .collect())
 }
 
+/// How a letter outside `alphabet` is shared between its rows: a nucleotide
+/// IUPAC code evenly between the letters it stands for, anything else evenly
+/// between all of them.
+fn ambiguity_shares(letter: char, alphabet: &Alphabet) -> Vec<f64> {
+    let k = alphabet.len();
+    let rows: &[usize] = if alphabet.is_nucleotide() {
+        match letter.to_ascii_uppercase() {
+            'R' => &[0, 2],
+            'Y' => &[1, 3],
+            'M' => &[0, 1],
+            'K' => &[2, 3],
+            'S' => &[1, 2],
+            'W' => &[0, 3],
+            'H' => &[0, 1, 3],
+            'B' => &[1, 2, 3],
+            'V' => &[0, 1, 2],
+            'D' => &[0, 2, 3],
+            _ => &[],
+        }
+    } else {
+        &[]
+    };
+    if rows.is_empty() {
+        return vec![1.0 / k as f64; k];
+    }
+    let mut out = vec![0.0; k];
+    for &r in rows {
+        out[r] = 1.0 / rows.len() as f64;
+    }
+    out
+}
+
 /// A motif rebuilt from windows of `width` letters, trimmed and capped, in
 /// the type of `m`.
 fn rebuild<S: AsRef<str>>(
@@ -462,6 +494,19 @@ fn rebuild<S: AsRef<str>>(
             })
         })
         .collect();
+    // Letters outside the alphabet, such as N, are read as ambiguity codes so
+    // that every window adds one to each column: a nucleotide IUPAC code is
+    // split between the letters it stands for, and anything else is spread
+    // evenly over the alphabet.
+    let shares: Vec<Vec<f64>> = (0u8..=255)
+        .map(|b| {
+            if lookup[b as usize].is_some() {
+                Vec::new()
+            } else {
+                ambiguity_shares(b as char, alphabet)
+            }
+        })
+        .collect();
     let mut counts = vec![0.0; k * width];
     for &(seq, start, minus) in windows {
         let s = &sequences[seq].as_ref().as_bytes()[start..start + width];
@@ -471,15 +516,20 @@ fn rebuild<S: AsRef<str>>(
             } else {
                 (s[j], j)
             };
+            if minus && !alphabet.is_nucleotide() {
+                continue;
+            }
             if let Some(mut r) = lookup[b as usize] {
                 if minus {
-                    if !alphabet.is_nucleotide() {
-                        continue;
-                    }
                     // Nucleotide rows are in ACGT (or ACGU) order.
                     r = k - 1 - r;
                 }
                 counts[col * k + r] += 1.0;
+            } else {
+                for (r, share) in shares[b as usize].iter().enumerate() {
+                    let r = if minus { k - 1 - r } else { r };
+                    counts[col * k + r] += share;
+                }
             }
         }
     }

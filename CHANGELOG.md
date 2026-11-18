@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Fixes:
+
+- `refine_motifs()` reads letters outside the alphabet, such as N, as
+  ambiguity codes when it rebuilds a motif from its sites, rather than
+  leaving them out and giving columns of different sums, which no motif
+  accepts.
+
 ## 0.5.0 (2026-11-17)
 
 Changes in behaviour:

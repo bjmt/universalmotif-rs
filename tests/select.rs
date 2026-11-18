@@ -160,6 +160,20 @@ fn refinement_finds_the_whole_site() {
 }
 
 #[test]
+fn refinement_reads_letters_outside_the_alphabet_as_ambiguity_codes() {
+    // Sites with an N or an R, on either strand, once gave columns of
+    // different sums, which no motif accepts.
+    let mut seqs = create_sequences(&['A', 'C', 'G', 'T'], 400, 250, None, 5, 1).unwrap();
+    plant(&mut seqs, "GCTTGACTCATGAC", 2, 0, 100);
+    plant(&mut seqs, "GCTTGACTCANGAC", 8, 0, 100);
+    plant(&mut seqs, "GTCRTGAGTCAAGC", 8, 4, 100);
+    let start = motif("TGACTCA", "ap1");
+    let out = refine_motifs(&[start], &seqs, None, &RefineOptions::default()).unwrap();
+    let sums = out[0].motif.matrix.col_sums();
+    assert!(sums.iter().all(|s| (s - sums[0]).abs() < 1e-9), "{sums:?}");
+}
+
+#[test]
 fn refinement_respects_its_limits() {
     let mut seqs = create_sequences(&['A', 'C', 'G', 'T'], 200, 250, None, 7, 1).unwrap();
     plant(&mut seqs, "GCTTGACTCATGAC", 2, 0, 100);
