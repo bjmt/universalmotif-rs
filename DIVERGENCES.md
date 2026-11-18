@@ -40,6 +40,13 @@ copied, and are not listed here. The other differences are below.
   scored once per position and the combinations are built from those
   scores, which is about twice as fast as scanning every combination
   separately.
+- **Gapped comparison.** `compare_motifs_lite()` ignores gaps. The port
+  compares, merges, clusters and aligns gapped motifs with their gaps: each
+  combination of gap sizes is tried with the gaps filled by blank columns,
+  the best is kept, and its P-value is corrected for the combinations
+  tried. A motif may have at most 32 combinations, since every combination
+  of one motif is compared with every one of the other; `use_gaps = false`
+  compares the parts as if they followed one another.
 - **Complete comparison scores.** With `CompareOptions::complete`,
   comparisons score whole queries rather than overlaps, as TOMTOM does by
   default: each query column is scored against the median of its
@@ -62,12 +69,51 @@ copied, and are not listed here. The other differences are below.
 - **Hits in contribution scores.** `scan_contributions()` finds where a
   sequence model relied on each CWM, matching the CWMs against the model's
   contribution scores rather than against the sequence, with thresholds
-  from each TF-MoDISco pattern's seqlets in the Python package.
+  from each TF-MoDISco pattern's seqlets in the Python package. With
+  hypothetical scores it can also match database motifs, through their
+  log-odds, against the letters the model wants at each position.
+- **Seqlets.** `call_seqlets()` calls the stretches of a model's
+  contribution scores that stand out from a null, either the scores
+  shuffled or the model's scores for shuffled sequences, at a false
+  discovery rate. Batches called with the same null give the seqlets of
+  one call, so scores need not be kept once called.
+- **Choosing and refining motifs.** `select_motifs()` keeps the motifs
+  that reach enough sequences or sites, such as seqlets, not reached by
+  those before them, leaving out motifs whose CWMs repeat one kept.
+  `refine_motifs()` rebuilds motifs from their hits, widened and trimmed.
+- **Motifs from sequence models.** The R package has CWMs and
+  `trim_cwm()`. The Python package also reads the contribution scores of
+  chromBPNet, BPNet and other models (`read_contributions()`) and
+  TF-MoDISco's results (`read_modisco()`, `read_seqlets()`,
+  `modisco_thresholds()`), and draws TF-MoDISco patterns as a report with
+  their closest database motifs (`plot_modisco()`, also as an HTML page).
+  `contribution_motifs()`, experimental for now, finds a model's motifs
+  from its scores in one call, from seqlets to patterns and hits, and
+  `combine_patterns()` gathers the patterns of several runs into one set.
+- **Experiments on a model.** The Python package makes the inputs of
+  common experiments on sequence models: one-hot batches, sites inserted
+  into background sequences, pairs of sites at a range of spacings,
+  mutagenesis of single letters and of pairs, shuffled or deleted regions,
+  and the shuffled references DeepLIFT and DeepSHAP take, with plots of
+  the results. `to_filters()` and `from_filters()` turn motifs into
+  convolution filters and back.
+- **Variants.** The Python package scores how variants change motif sites,
+  insertions and deletions included, along a sequence or across a genome
+  (`variant_motif_effects()`), reads VCF files (`read_vcf()`), and makes
+  batches of both alleles for a model (`variant_batches()`).
 - **Merging without chains.** `merge_similar()` can join motifs with
   complete linkage, so that every pair in a cluster is similar, where the
   connected groups of `merge_similar_lite()` can chain unlike motifs
   together, and it warns when one cluster holds more than a quarter of the
   motifs.
+- **Discovery.** `motif_finder()` can rerun its search on random halves of
+  the sequences (`stability`) and report how often each motif is found
+  again. `gapped_motif_finder()`, experimental for now, finds motifs made
+  of two parts with a spacer of varying length, testing each in sequences
+  held out from the search.
+- **Naming motifs.** The Python package's `name_motifs()` names motifs by
+  the database motifs they resemble most, scored as TOMTOM scores them,
+  with q-values corrected for the size of the database.
 - **First hits only.** Scans can keep only the first hit of each motif in
   each sequence and stop scanning that sequence for the motif after it.
 - **Package-wide threads.** The Python package's `set_nthreads()`, or the
@@ -96,11 +142,20 @@ copied, and are not listed here. The other differences are below.
   `to_polars_bio()` hand tables back. `genomic_hits()` moves hits found in
   sequences extracted from a genome back to genomic coordinates, flipping
   the strand of hits in reverse complemented ranges; the R package works
-  with GenomicRanges instead.
+  with GenomicRanges instead. `read_bed()` and `write_bed()` read and
+  write BED and narrowPeak files, `resize_ranges()` gives ranges one width
+  around their centres or summits, and `drop_overlaps()` keeps only those
+  that do not overlap one kept before.
+- **Conversions.** The R package converts motifs to and from other
+  Bioconductor packages. The Python package converts them to and from
+  Biopython's motifs and to logomaker's matrices.
 - **A command line.** The Python package installs `universalmotif`, also
   available as `umotif`, with subcommands that run its main functions on
-  motif, FASTA, genome and BED files and write motifs, FASTA or
-  tab-separated tables.
+  motif, FASTA, genome, BED, VCF and contribution score files, and write
+  motifs, FASTA, tab-separated tables, figures or HTML reports.
+- **Progress bars.** Long calls of the Python package, such as scanning a
+  genome or discovering motifs, show a progress bar once they have run for
+  a second (`set_progress()`), and Ctrl-C stops them.
 - **P-values on a log scale.** `motif_finder()` and `enrich_motifs()` also
   report `log10_pvalue` and `log10_qvalue`, which stay finite where the
   P-values themselves are too small for a double and come out as 0.
@@ -157,6 +212,13 @@ These defaults differ from the R package's, to suit most uses better.
   `motif_peaks()` and `motif_proximity()` return every motif unless
   `qvalue` is given, where the R package keeps only those with q-values up
   to 0.1 by default.
+- **Discovery backgrounds.** Without background sequences,
+  `motif_finder()` and `gapped_motif_finder()` compare the sequences with
+  three shuffles of themselves, where the R package's `motif_finder()` uses
+  one, so that motifs in a few percent of the sequences are found whatever
+  the seed.
+- **Faint letters.** Logos draw every letter, however short, where the R
+  package leaves out those under 1% of the logo's height.
 - **Logos of contribution matrices.** The Python package's `view_motifs()`
   draws CWMs as contributions by default, and other motifs as information
   content, where the R package draws every motif as information content
