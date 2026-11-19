@@ -228,16 +228,10 @@ fn rc_kmer(mut kmer: u64, w: usize) -> u64 {
     rc
 }
 
-fn hamming(mut a: u64, mut b: u64, w: usize) -> u64 {
-    let mut mm = 0;
-    for _ in 0..w {
-        if a & 3 != b & 3 {
-            mm += 1;
-        }
-        a >>= 2;
-        b >>= 2;
-    }
-    mm
+/// The number of letters two k-mer codes differ at.
+fn hamming(a: u64, b: u64) -> u64 {
+    let x = a ^ b;
+    ((x | (x >> 1)) & 0x5555_5555_5555_5555).count_ones() as u64
 }
 
 /// `ln(n!)` for every `n` up to the number of sequences, so Fisher tests need
@@ -274,30 +268,136 @@ fn ln_fisher_greater(lf: &LogFact, a: u64, b: u64, c: u64, d: u64) -> f64 {
         if term > log_sum {
             log_sum = term + (log_sum - term).exp().ln_1p();
         } else {
-            log_sum += (term - log_sum).exp().ln_1p();
+            let add = (term - log_sum).exp().ln_1p();
+            // A term too small to change the sum, even eight times over, lies
+            // well past the mode, where the terms only shrink, so none of the
+            // rest would change it either.
+            if log_sum + 8.0 * add == log_sum {
+                break;
+            }
+            log_sum += add;
         }
     }
     log_sum.min(0.0)
 }
 
-fn score_at(m: &FMotif, seq: &[u8], off: usize) -> (i32, i32) {
-    let (mut s, mut src) = (0, 0);
-    for i in 0..m.size {
-        let idx = CHAR2IDX[seq[off + i] as usize] as usize;
-        s += m.pwm[idx + i * 5];
-        src += m.pwm_rc[idx + i * 5];
-    }
-    (s, src)
+/// A motif's scores for two positions at a time, which halves the lookups in
+/// scoring a site. Scoring stops after the first half of the positions if
+/// neither strand can pass with the most the rest could add. Scores are whole
+/// numbers, so their sums are the same in any order.
+struct Scorer<'a> {
+    m: &'a FMotif,
+    /// The scores on both strands of each pair of letters at each pair of
+    /// positions, 25 to a pair of positions, at 5 times the first letter
+    /// plus the second.
+    pairs: Vec<[i32; 2]>,
+    /// The pairs of positions scored before checking.
+    check_at: usize,
+    /// The most the positions after them can add on each strand.
+    rest: [i32; 2],
 }
 
-/// Every k-mer, or the smaller of it and its reverse complement, found in the
-/// sequences, sorted, with the number of sequences containing each.
-fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
+impl Scorer<'_> {
+    fn new(m: &FMotif) -> Scorer<'_> {
+        let n = m.size / 2;
+        let mut pairs = Vec::with_capacity(n * 25);
+        for p in 0..n {
+            let (i, j) = (2 * p * 5, (2 * p + 1) * 5);
+            for a in 0..5 {
+                for b in 0..5 {
+                    pairs.push([
+                        m.pwm[i + a] + m.pwm[j + b],
+                        m.pwm_rc[i + a] + m.pwm_rc[j + b],
+                    ]);
+                }
+            }
+        }
+        let check_at = n.div_ceil(2);
+        let best = |pwm: &[i32]| -> i32 {
+            (2 * check_at..m.size)
+                .map(|i| *pwm[i * 5..i * 5 + 4].iter().max().unwrap())
+                .sum()
+        };
+        Scorer {
+            m,
+            pairs,
+            check_at,
+            rest: [best(&m.pwm), best(&m.pwm_rc)],
+        }
+    }
+
+    /// Whether the site at `off` scores above `thr` on the forward strand,
+    /// and with `rc` on the reverse strand.
+    #[inline(always)]
+    fn hits_at(&self, seq: &[u8], off: usize, thr: i32, rc: bool) -> (bool, bool) {
+        let (mut s, mut src) = (0, 0);
+        let site = &seq[off..off + self.m.size];
+        let pair =
+            |p: usize| self.pairs[p * 25 + site[2 * p] as usize * 5 + site[2 * p + 1] as usize];
+        for p in 0..self.check_at {
+            let [f, r] = pair(p);
+            s += f;
+            src += r;
+        }
+        if s + self.rest[0] <= thr && (!rc || src + self.rest[1] <= thr) {
+            return (false, false);
+        }
+        for p in self.check_at..self.m.size / 2 {
+            let [f, r] = pair(p);
+            s += f;
+            src += r;
+        }
+        if self.m.size % 2 == 1 {
+            let i = self.m.size - 1;
+            let idx = site[i] as usize;
+            s += self.m.pwm[idx + i * 5];
+            src += self.m.pwm_rc[idx + i * 5];
+        }
+        (s > thr, rc && src > thr)
+    }
+}
+
+/// The distinct k-mers of a sequence, or the smaller of each and its reverse
+/// complement, written sorted to the start of `out`, which must have room for
+/// every word; returns how many there are.
+fn distinct_words(s: &[u8], w: usize, rc: bool, out: &mut [u64]) -> usize {
     let mask = if w == 32 {
         u64::MAX
     } else {
         (1u64 << (2 * w)) - 1
     };
+    let mut k = 0;
+    // Rolling codes of the last w letters on each strand.
+    let (mut fwd, mut rev, mut run) = (0u64, 0u64, 0usize);
+    for &idx in s {
+        if idx >= 4 {
+            run = 0;
+            continue;
+        }
+        fwd = ((fwd << 2) | idx as u64) & mask;
+        rev = (rev >> 2) | ((COMP4[idx as usize] as u64) << (2 * (w - 1)));
+        run += 1;
+        if run >= w {
+            out[k] = if rc { fwd.min(rev) } else { fwd };
+            k += 1;
+        }
+    }
+    // Each word once.
+    let words = &mut out[..k];
+    words.sort_unstable();
+    let mut n = 0;
+    for i in 0..words.len() {
+        if n == 0 || words[n - 1] != words[i] {
+            words[n] = words[i];
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Every k-mer, or the smaller of it and its reverse complement, found in the
+/// sequences, sorted, with the number of sequences containing each.
+fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
     // The distinct words of each sequence, gathered a chunk of sequences at a
     // time on the thread pool. Each chunk writes into its own part of one
     // buffer, sized for every word, so the words are never held twice.
@@ -319,34 +419,7 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
         .map(|(chunk, out)| {
             let mut k = 0;
             for s in chunk {
-                let first = k;
-                // Rolling codes of the last w letters on each strand.
-                let (mut fwd, mut rev, mut run) = (0u64, 0u64, 0usize);
-                for &b in s {
-                    let idx = CHAR2IDX[b as usize];
-                    if idx >= 4 {
-                        run = 0;
-                        continue;
-                    }
-                    fwd = ((fwd << 2) | idx as u64) & mask;
-                    rev = (rev >> 2) | ((COMP4[idx as usize] as u64) << (2 * (w - 1)));
-                    run += 1;
-                    if run >= w {
-                        out[k] = if rc { fwd.min(rev) } else { fwd };
-                        k += 1;
-                    }
-                }
-                // Each word once per sequence.
-                let words = &mut out[first..k];
-                words.sort_unstable();
-                let mut n = 0;
-                for i in 0..words.len() {
-                    if n == 0 || words[n - 1] != words[i] {
-                        words[n] = words[i];
-                        n += 1;
-                    }
-                }
-                k = first + n;
+                k += distinct_words(s, w, rc, &mut out[k..]);
             }
             k
         })
@@ -379,22 +452,28 @@ fn kmer_presence(seqs: &[Vec<u8>], w: usize, rc: bool) -> (Vec<u64>, Vec<u32>) {
     (all, counts)
 }
 
+/// The best few seeds by P-value from the words of the positives, as from
+/// [`kmer_presence`], where words in no sequence are left out, and the number
+/// of words tested. Many k-mers share the same counts, so each table is
+/// tested once, its P-value kept in `memo` for the searches that follow.
 fn enumerate_seeds(
-    pos: &[Vec<u8>],
+    pos_words: &(Vec<u64>, Vec<u32>),
+    np: u64,
     neg_words: &(Vec<u64>, Vec<u32>),
     nn: u64,
-    w: usize,
-    rc: bool,
     lf: &LogFact,
+    memo: &mut HashMap<(u64, u64), f64>,
 ) -> (Vec<(u64, f64)>, u64) {
-    let (pk, pn) = kmer_presence(pos, w, rc);
+    let (pk, pn) = (&pos_words.0, &pos_words.1);
     let (nk, nn_) = (&neg_words.0, &neg_words.1);
-    let np = pos.len() as u64;
-    // Many k-mers share the same counts, so each table is tested once.
-    let mut memo: HashMap<(u64, u64), f64> = HashMap::new();
     let mut best: Vec<(u64, f64)> = Vec::with_capacity(TOP_K_SEEDS + 1);
+    let mut tested = 0;
     let mut j = 0;
-    for (&k, &pc) in pk.iter().zip(&pn) {
+    for (&k, &pc) in pk.iter().zip(pn) {
+        if pc == 0 {
+            continue;
+        }
+        tested += 1;
         let pc = pc as u64;
         while j < nk.len() && nk[j] < k {
             j += 1;
@@ -415,18 +494,18 @@ fn enumerate_seeds(
             best.truncate(TOP_K_SEEDS);
         }
     }
-    (best, pk.len() as u64)
+    (best, tested)
 }
 
 fn add_site(ppm: &mut [[u64; 4]], seq: &[u8], off: usize, w: usize, reverse: bool) {
     for i in 0..w {
         if reverse {
-            let idx = CHAR2IDX[seq[off + w - 1 - i] as usize] as usize;
+            let idx = seq[off + w - 1 - i] as usize;
             if idx < 4 {
                 ppm[i][COMP4[idx]] += 1;
             }
         } else {
-            let idx = CHAR2IDX[seq[off + i] as usize] as usize;
+            let idx = seq[off + i] as usize;
             if idx < 4 {
                 ppm[i][idx] += 1;
             }
@@ -436,18 +515,25 @@ fn add_site(ppm: &mut [[u64; 4]], seq: &[u8], off: usize, w: usize, reverse: boo
 
 fn build_ppm_from_seed(pos: &[Vec<u8>], seed: u64, w: usize, rc: bool) -> (Vec<[u64; 4]>, u64) {
     let rc_seed = rc.then(|| rc_kmer(seed, w));
+    let mask = (1u64 << (2 * w)) - 1;
     sum_sites(pos, w, |s, ppm, nsites| {
-        if s.len() < w {
-            return;
-        }
-        for off in 0..=s.len() - w {
-            let Some(k) = kmer_encode(s, w, off) else {
+        // The rolling code of the last w letters.
+        let (mut k, mut run) = (0u64, 0usize);
+        for (i, &idx) in s.iter().enumerate() {
+            if idx >= 4 {
+                run = 0;
                 continue;
-            };
-            if hamming(k, seed, w) <= HAMMING_MISMATCH {
+            }
+            k = ((k << 2) | idx as u64) & mask;
+            run += 1;
+            if run < w {
+                continue;
+            }
+            let off = i + 1 - w;
+            if hamming(k, seed) <= HAMMING_MISMATCH {
                 add_site(ppm, s, off, w, false);
                 *nsites += 1;
-            } else if rc_seed.is_some_and(|r| hamming(k, r, w) <= HAMMING_MISMATCH) {
+            } else if rc_seed.is_some_and(|r| hamming(k, r) <= HAMMING_MISMATCH) {
                 add_site(ppm, s, off, w, true);
                 *nsites += 1;
             }
@@ -498,17 +584,18 @@ fn refine(
     }
     let thr = m.threshold - 1;
     let scored: &FMotif = m;
+    let scorer = Scorer::new(scored);
     let (ppm, nsites) = sum_sites(pos, w, |s, ppm, nsites| {
         if s.len() < w {
             return;
         }
         for off in 0..=s.len() - w {
-            let (sc, src) = score_at(scored, s, off);
-            if sc > thr {
+            let (fwd, rev) = scorer.hits_at(s, off, thr, rc);
+            if fwd {
                 add_site(ppm, s, off, w, false);
                 *nsites += 1;
             }
-            if rc && src > thr {
+            if rev {
                 add_site(ppm, s, off, w, true);
                 *nsites += 1;
             }
@@ -580,14 +667,15 @@ impl Coverage {
 fn evaluate(pos: &[Vec<u8>], neg: &[Vec<u8>], m: &FMotif, rc: bool, lf: &LogFact) -> Evaluation {
     let thr = m.threshold - 1;
     let w = m.size;
+    let scorer = Scorer::new(m);
     // The sites of one sequence, at most two at each start (one per strand).
     let sites_of = |s: &[u8], out: &mut Vec<usize>| {
         if s.len() < w {
             return;
         }
         for off in 0..=s.len() - w {
-            let (sc, src) = score_at(m, s, off);
-            for found in [sc > thr, rc && src > thr] {
+            let (fwd, rev) = scorer.hits_at(s, off, thr, rc);
+            for found in [fwd, rev] {
                 if found {
                     out.push(off);
                 }
@@ -675,6 +763,12 @@ fn discover_for_width(
     let mut work = pos.to_vec();
     // The background is never masked, so its words are counted once.
     let neg_words = kmer_presence(neg, w, rc);
+    // The positives' words are counted once as well, and a word's count
+    // lowered for each sequence that masking takes it from.
+    let mut pos_words = kmer_presence(&work, w, rc);
+    // The numbers of sequences stay the same, so the P-value of each count
+    // of a word in them does too.
+    let mut memo = HashMap::new();
     let mut out = Vec::new();
     let mut tested = 0;
     // Each search counts once; a width that stops early counts the searches
@@ -686,7 +780,14 @@ fn discover_for_width(
         }
         searched += 1;
         progress::add(progress, 1);
-        let (seeds, candidates) = enumerate_seeds(&work, &neg_words, neg.len() as u64, w, rc, lf);
+        let (seeds, candidates) = enumerate_seeds(
+            &pos_words,
+            work.len() as u64,
+            &neg_words,
+            neg.len() as u64,
+            lf,
+            &mut memo,
+        );
         tested += candidates;
         if seeds.is_empty() {
             break;
@@ -714,13 +815,35 @@ fn discover_for_width(
             if eval.ln_pvalue > stop_pval.ln() {
                 continue;
             }
-            work.par_iter_mut().enumerate().for_each(|(si, s)| {
-                for (p, b) in s.iter_mut().enumerate() {
-                    if eval.covered.contains(si, p) {
-                        *b = b'N';
+            // Masking only removes words, so those a sequence loses are the
+            // ones it held before and not after.
+            let lost: Vec<u64> = work
+                .par_iter_mut()
+                .enumerate()
+                .flat_map_iter(|(si, s)| {
+                    if !(0..s.len()).any(|p| eval.covered.contains(si, p)) {
+                        return Vec::new();
                     }
-                }
-            });
+                    let room = (s.len() + 1).saturating_sub(w);
+                    let mut before = vec![0; room];
+                    let n = distinct_words(s, w, rc, &mut before);
+                    before.truncate(n);
+                    for (p, b) in s.iter_mut().enumerate() {
+                        if eval.covered.contains(si, p) {
+                            *b = 4;
+                        }
+                    }
+                    let mut after = vec![0; room];
+                    let n = distinct_words(s, w, rc, &mut after);
+                    after.truncate(n);
+                    before.retain(|x| after.binary_search(x).is_err());
+                    before
+                })
+                .collect();
+            for word in lost {
+                let i = pos_words.0.binary_search(&word).unwrap();
+                pos_words.1[i] -= 1;
+            }
             let order = out.len();
             out.push(Found {
                 motif: m,
@@ -942,8 +1065,11 @@ pub fn motif_finder<S: AsRef<str> + Sync>(
     }
     let pos_strs: Vec<&str> = sequences.iter().map(|s| s.as_ref()).collect();
     let bkg = finder_background(&pos_strs, &neg_strs);
-    let pos: Vec<Vec<u8>> = pos_strs.iter().map(|s| s.as_bytes().to_vec()).collect();
-    let neg: Vec<Vec<u8>> = neg_strs.iter().map(|s| s.as_bytes().to_vec()).collect();
+    // The sequences as letter indices, 0 to 3 for A, C, G and T or U and 4
+    // for anything else, as the search steps read them.
+    let encode = |s: &&str| s.bytes().map(|b| CHAR2IDX[b as usize]).collect();
+    let pos: Vec<Vec<u8>> = pos_strs.iter().map(encode).collect();
+    let neg: Vec<Vec<u8>> = neg_strs.iter().map(encode).collect();
 
     let lf = LogFact::new(pos.len() + neg.len());
     let widths: Vec<usize> = (opts.min_width..=opts.max_width).collect();
@@ -1168,12 +1294,15 @@ fn subset_counts(
 /// The negatives' counts from an earlier call of [`spaced_pairs_with`] with
 /// the same negatives and options, which a later call can reuse: the pairs
 /// counted window by window, sorted, with their counts, and the counts of
-/// every pair over all spacings when they were needed.
+/// every pair over all spacings when they were needed. The P-values of the
+/// tables tested are kept as well, for calls with as many positives.
 #[derive(Default)]
 pub(crate) struct NegativePairs {
     kept: Vec<usize>,
     by_window: Vec<u32>,
     any: Option<Vec<u32>>,
+    sizes: (u64, u64),
+    ln_p: HashMap<(u64, u64), f64>,
 }
 
 /// [`spaced_pairs`], reusing the negatives' counts in `cache` when the pairs
@@ -1234,25 +1363,28 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
     let n_pairs = n_kmers * n_kmers;
     let threads = nthreads.max(1);
     // Every pair in a sequence with the index of its spacing.
-    let each_pair = |seq: &S, codes: &mut Vec<Option<u64>>, f: &mut dyn FnMut(usize, usize)| {
+    let each_pair = |seq: &S, codes: &mut Vec<_>, f: &mut dyn FnMut(usize, usize)| {
         let bytes = seq.as_ref().as_bytes();
         if bytes.len() < 2 * k + min_gap {
             return;
         }
+        // Each k-mer with its reverse complement.
         codes.clear();
-        codes.extend((0..=bytes.len() - k).map(|i| kmer_encode(bytes, k, i)));
+        codes.extend(
+            (0..=bytes.len() - k).map(|i| kmer_encode(bytes, k, i).map(|c| (c, rc_kmer(c, k)))),
+        );
         for i in 0..codes.len() {
-            let Some(a) = codes[i] else { continue };
+            let Some((a, ra)) = codes[i] else { continue };
             for g in min_gap..=max_gap {
                 let j = i + k + g;
                 if j >= codes.len() {
                     break;
                 }
-                let Some(b) = codes[j] else { continue };
+                let Some((b, rb)) = codes[j] else { continue };
                 // The pair as one 2k-mer, whose reverse complement is the
                 // reverse complement of the second k-mer then of the first.
                 let pair = (a << (2 * k)) | b;
-                let rev = rc_kmer(pair, 2 * k);
+                let rev = (rb << (2 * k)) | ra;
                 let canon = |p: u64, r: u64| (if rc { p.min(r) } else { p }) as usize;
                 f(canon(pair, rev), g - min_gap);
                 if mismatch {
@@ -1279,7 +1411,7 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
                     let mut counts = vec![0u32; len];
                     let mut seen = vec![0u64; len.div_ceil(64)];
                     let mut touched: Vec<usize> = Vec::new();
-                    let mut codes: Vec<Option<u64>> = Vec::new();
+                    let mut codes: Vec<Option<(u64, u64)>> = Vec::new();
                     for seq in part {
                         each_pair(seq, &mut codes, &mut |pair, gi| {
                             slots(pair, gi, &mut |p| {
@@ -1310,6 +1442,16 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
     };
     let (n_pos, n_neg) = (positives.len() as u64, negatives.len() as u64);
     let lf = LogFact::new((n_pos + n_neg) as usize);
+    // Many pairs share the same counts, so each table is tested once.
+    let mut memo = match cache.as_deref_mut() {
+        Some(c) if c.sizes == (n_pos, n_neg) => std::mem::take(&mut c.ln_p),
+        _ => HashMap::new(),
+    };
+    let mut ln_p = |c: u64, d: u64| {
+        *memo
+            .entry((c, d))
+            .or_insert_with(|| ln_fisher_greater(&lf, c, n_pos - c, d, n_neg - d))
+    };
     // Pairs at any spacing, in the positives.
     let mut index = count(positives, n_pairs, &|pair, _, f| f(pair))?;
     let n_kept = index.iter().filter(|&&c| c >= min_count).count();
@@ -1334,7 +1476,7 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
         let mut scored: Vec<(f64, usize)> = Vec::with_capacity(kept.len());
         scored.extend(kept.iter().map(|&p| {
             let (c, d) = (index[p] as u64, any_neg[p] as u64);
-            (ln_fisher_greater(&lf, c, n_pos - c, d, n_neg - d), p)
+            (ln_p(c, d), p)
         }));
         scored.select_nth_unstable_by(MAX_SPACED_PAIRS - 1, |a, b| a.0.total_cmp(&b.0));
         kept.clear();
@@ -1373,7 +1515,7 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
         Some(neg) => neg,
         None => {
             let neg = count(negatives, len, &by_window)?;
-            if let Some(c) = cache {
+            if let Some(c) = cache.as_deref_mut() {
                 c.kept = kept.clone();
                 c.by_window = neg.clone();
             }
@@ -1399,10 +1541,14 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
                     width: w,
                     positives: c,
                     negatives: d as u32,
-                    ln_pvalue: ln_fisher_greater(&lf, c as u64, n_pos - c as u64, d, n_neg - d),
+                    ln_pvalue: ln_p(c as u64, d),
                 }
             }),
     );
     out.sort_by(|a, b| a.ln_pvalue.total_cmp(&b.ln_pvalue));
+    if let Some(c) = cache {
+        c.sizes = (n_pos, n_neg);
+        c.ln_p = memo;
+    }
     Ok(out)
 }

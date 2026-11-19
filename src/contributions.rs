@@ -373,7 +373,54 @@ fn scan_one(
     // keep every window that passes.
     let mut best: Vec<Option<ContribHit>> = Vec::new();
     let mut touched: Vec<usize> = Vec::new();
+    let mut heavy: Vec<usize> = vec![0; len + 1];
+    // The width and least importance that the first `n` starts in `heavy`
+    // were gathered for, so that both strands of a motif share them.
+    let (mut heavy_for, mut n) = (None, 0);
     for pl in plans {
+        if let ([w], [(gaps, _, _)]) = (&pl.widths[..], &pl.layouts[..]) {
+            // A motif of one piece, scored as below in fewer steps: first the
+            // starts of the windows with enough importance, gathered without
+            // branching as which windows have it is hard to predict, then the
+            // other checks on those.
+            let w = *w;
+            if w == 0 || w > len {
+                continue;
+            }
+            let min_importance = pl.min_importance;
+            if heavy_for != Some((w, min_importance.to_bits())) {
+                n = 0;
+                for p in 0..=len - w {
+                    heavy[n] = p;
+                    n += 1 - usize::from(abs[p + w] - abs[p] < min_importance);
+                }
+                heavy_for = Some((w, min_importance.to_bits()));
+            }
+            let filt = &pl.filt[pl.columns[0] * 4..(pl.columns[0] + w) * 4];
+            for &p in &heavy[..n] {
+                let ss = sq[p + w] - sq[p];
+                if ss <= 0.0 {
+                    continue;
+                }
+                let score = f64::from(dot(&xt[p * 4..(p + w) * 4], filt));
+                let similarity = score / ss.sqrt();
+                if similarity < pl.min_similarity {
+                    continue;
+                }
+                hits.push(ContribHit {
+                    motif: pl.motif,
+                    sequence,
+                    start: p,
+                    end: p + w,
+                    strand: pl.strand,
+                    score,
+                    similarity,
+                    importance: (abs[p + w] - abs[p]) / pl.reference,
+                    gaps: gaps.clone(),
+                });
+            }
+            continue;
+        }
         let single = pl.layouts.len() == 1;
         if !single && best.len() < len {
             best.resize(len, None);
@@ -604,7 +651,9 @@ fn run(
             .collect()
     })?;
     let mut hits: Vec<ContribHit> = per_seq.into_iter().flatten().collect();
-    hits.sort_by_key(|h| (h.motif, h.sequence, h.start, h.strand == Strand::Minus));
+    // Each motif has at most one hit per start and strand, so no two hits
+    // share a key and the order is that of a stable sort.
+    hits.sort_unstable_by_key(|h| (h.motif, h.sequence, h.start, h.strand == Strand::Minus));
     Ok(hits)
 }
 

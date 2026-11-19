@@ -2,7 +2,10 @@
 
 use universalmotif::Motif;
 use universalmotif::create::{CreateOptions, from_strings};
-use universalmotif::select::{RefineOptions, SelectOptions, Site, refine_motifs, select_motifs};
+use universalmotif::scan::{ScanOptions, scan_table};
+use universalmotif::select::{
+    RefineOptions, SelectOptions, Site, refine_motifs, select_motifs, select_reached,
+};
 use universalmotif::shuffle::create_sequences;
 
 fn motif(site: &str, name: &str) -> Motif {
@@ -127,6 +130,36 @@ fn similar_motifs_are_left_out() {
     assert_eq!(sel.rank[1], None);
     assert!(!sel.kept[1] && sel.kept[0] && sel.kept[2]);
     assert!(select_motifs(&motifs, &seqs, None, Some(&sim[..2]), &opts).is_err());
+}
+
+#[test]
+fn known_targets_give_the_same_choice() {
+    let seqs = sequences();
+    let motifs = vec![
+        motif("TGACTCA", "ap1"),
+        motif("TGAGTCA", "ap1_other"),
+        motif("AGATAAG", "gata"),
+    ];
+    let sim = vec![
+        vec![1.0, 0.95, 0.1],
+        vec![0.95, 1.0, 0.1],
+        vec![0.1, 0.1, 1.0],
+    ];
+    let opts = SelectOptions {
+        max_similarity: Some(0.9),
+        min_gains: Some(vec![0.01, 0.0, 0.05]),
+        ..Default::default()
+    };
+    // Without sites, a motif reaches the sequences it hits.
+    let hits = scan_table(&motifs, &seqs, &ScanOptions::default()).unwrap();
+    let mut reached = vec![Vec::new(); motifs.len()];
+    for i in 0..hits.len() {
+        reached[hits.motif[i] as usize].push(hits.sequence[i] as usize);
+    }
+    let sel = select_motifs(&motifs, &seqs, None, Some(&sim), &opts).unwrap();
+    let known = select_reached(&reached, seqs.len(), Some(&sim), &opts).unwrap();
+    assert_eq!(known, sel);
+    assert!(select_reached(&reached, 10, Some(&sim), &opts).is_err());
 }
 
 #[test]

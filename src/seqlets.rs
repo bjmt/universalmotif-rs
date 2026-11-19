@@ -311,13 +311,36 @@ impl Null {
     }
 }
 
+/// Outputs of [`convolve`] summed side by side.
+const LANES: usize = 8;
+
 fn convolve(a: &[f64], b: &[f64]) -> Vec<f64> {
     let mut out = vec![0.0; a.len() + b.len() - 1];
-    out.par_iter_mut().enumerate().for_each(|(k, o)| {
-        let lo = k.saturating_sub(b.len() - 1);
-        let hi = k.min(a.len() - 1);
-        *o = (lo..=hi).map(|i| a[i] * b[k - i]).sum();
-    });
+    out.par_chunks_mut(LANES)
+        .enumerate()
+        .for_each(|(c, block)| {
+            let k0 = c * LANES;
+            // Each output sums its terms in order from the first, so blocks
+            // taking every term of b give the same totals as one at a time,
+            // with several sums kept going at once.
+            if block.len() == LANES && k0 + 1 >= b.len() && k0 + LANES <= a.len() {
+                let base = k0 + 1 - b.len();
+                let mut acc = [0.0; LANES];
+                for (t, &w) in b.iter().rev().enumerate() {
+                    for (s, &v) in acc.iter_mut().zip(&a[base + t..base + t + LANES]) {
+                        *s += v * w;
+                    }
+                }
+                block.copy_from_slice(&acc);
+                return;
+            }
+            for (d, o) in block.iter_mut().enumerate() {
+                let k = k0 + d;
+                let lo = k.saturating_sub(b.len() - 1);
+                let hi = k.min(a.len() - 1);
+                *o = (lo..=hi).map(|i| a[i] * b[k - i]).sum();
+            }
+        });
     out
 }
 
@@ -366,30 +389,34 @@ fn call_one(seq: usize, x: &[f64], null: &Null, opts: &SeqletOptions) -> Vec<Seq
     for i in 0..n {
         csum[i + 1] = csum[i] + x[i];
     }
-    // own: the P-value of the stretch at k of a length. worst: the largest
-    // P-value of any stretch of at least lo positions inside it, from prefixes
-    // (worst over the stretch one shorter at k) and suffixes (at k + 1). Only
-    // the previous length's worst is needed, and only stretches passing the
-    // threshold are kept, so long sequences take little memory.
+    // A stretch at k passes when its own P-value and those of every stretch
+    // of at least lo positions inside it are below the threshold, which past
+    // the shortest length means its own and those of the stretches one
+    // shorter at k (its prefixes) and at k + 1 (its suffixes) passing. Each
+    // length thus needs only the stretches passing at the length before, as
+    // (start, own P-value) in order of start, so little is computed beyond
+    // the shortest length and long sequences take little memory.
     let width = hi - lo + 1;
     let mut cands: Vec<Vec<(usize, f64)>> = vec![Vec::new(); width];
-    let mut prev: Vec<f64> = Vec::new();
-    for (j, len) in (lo..=hi).enumerate() {
-        let m = n - len + 1;
-        let mut cur = Vec::with_capacity(m);
-        for k in 0..m {
-            let own = null.pvalue(len, csum[k + len] - csum[k]);
-            let worst = if j == 0 {
-                own
-            } else {
-                own.max(prev[k]).max(prev[k + 1])
-            };
-            if worst < opts.threshold {
-                cands[j].push((k, own));
-            }
-            cur.push(worst);
+    for k in 0..=n - lo {
+        let own = null.pvalue(lo, csum[k + lo] - csum[k]);
+        if own < opts.threshold {
+            cands[0].push((k, own));
         }
-        prev = cur;
+    }
+    for j in 1..width {
+        let len = lo + j;
+        let (done, rest) = cands.split_at_mut(j);
+        for pair in done[j - 1].windows(2) {
+            let k = pair[0].0;
+            if pair[1].0 != k + 1 {
+                continue;
+            }
+            let own = null.pvalue(len, csum[k + len] - csum[k]);
+            if own < opts.threshold {
+                rest[0].push((k, own));
+            }
+        }
     }
     let mut used = vec![false; n];
     let mut out = Vec::new();

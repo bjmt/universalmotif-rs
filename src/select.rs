@@ -117,30 +117,7 @@ pub fn select_motifs<S: AsRef<str> + Sync>(
     similarity: Option<&[Vec<f64>]>,
     opts: &SelectOptions,
 ) -> Result<Selection> {
-    if !(0.0..=1.0).contains(&opts.min_gain) {
-        return arg_err("min_gain must be between 0 and 1");
-    }
-    if let Some(gains) = &opts.min_gains {
-        if gains.len() != motifs.len() {
-            return arg_err(format!(
-                "{} values in min_gains for {} motifs",
-                gains.len(),
-                motifs.len()
-            ));
-        }
-        if gains.iter().any(|g| !(0.0..=1.0).contains(g)) {
-            return arg_err("min_gains must all be between 0 and 1");
-        }
-    }
-    let min_gain = |i: usize| opts.min_gains.as_ref().map_or(opts.min_gain, |g| g[i]);
-    if opts.min_overlap == 0 {
-        return arg_err("min_overlap must be at least 1");
-    }
-    if let Some(sim) = similarity
-        && (sim.len() != motifs.len() || sim.iter().any(|r| r.len() != motifs.len()))
-    {
-        return arg_err("the similarity matrix must have one row and one column per motif");
-    }
+    check_select(motifs.len(), similarity, opts)?;
     let n = motifs.len();
     let index = SiteIndex::new(sites, sequences.len())?;
     let scan = ScanOptions {
@@ -171,10 +148,75 @@ pub fn select_motifs<S: AsRef<str> + Sync>(
             },
         );
     }
+    Ok(choose(&reached, index.n_targets, similarity, opts))
+}
+
+/// [`select_motifs`] for motifs whose hits are already known: `reached`
+/// holds the targets each motif reaches, as indices below `n_targets`. Only
+/// the options on choosing are used, not those on scanning.
+#[doc(hidden)]
+pub fn select_reached(
+    reached: &[Vec<usize>],
+    n_targets: usize,
+    similarity: Option<&[Vec<f64>]>,
+    opts: &SelectOptions,
+) -> Result<Selection> {
+    check_select(reached.len(), similarity, opts)?;
+    let words = n_targets.div_ceil(64);
+    let mut bits = vec![vec![0u64; words]; reached.len()];
+    for (b, targets) in bits.iter_mut().zip(reached) {
+        for &t in targets {
+            if t >= n_targets {
+                return arg_err(format!("target {t} is beyond the {n_targets} targets"));
+            }
+            b[t / 64] |= 1 << (t % 64);
+        }
+    }
+    Ok(choose(&bits, n_targets, similarity, opts))
+}
+
+/// Check the options of [`select_motifs`] for `n` motifs.
+fn check_select(n: usize, similarity: Option<&[Vec<f64>]>, opts: &SelectOptions) -> Result<()> {
+    if !(0.0..=1.0).contains(&opts.min_gain) {
+        return arg_err("min_gain must be between 0 and 1");
+    }
+    if let Some(gains) = &opts.min_gains {
+        if gains.len() != n {
+            return arg_err(format!(
+                "{} values in min_gains for {n} motifs",
+                gains.len()
+            ));
+        }
+        if gains.iter().any(|g| !(0.0..=1.0).contains(g)) {
+            return arg_err("min_gains must all be between 0 and 1");
+        }
+    }
+    if opts.min_overlap == 0 {
+        return arg_err("min_overlap must be at least 1");
+    }
+    if let Some(sim) = similarity
+        && (sim.len() != n || sim.iter().any(|r| r.len() != n))
+    {
+        return arg_err("the similarity matrix must have one row and one column per motif");
+    }
+    Ok(())
+}
+
+/// The greedy choice of [`select_motifs`], from the targets each motif
+/// reaches as bits.
+fn choose(
+    reached: &[Vec<u64>],
+    n_targets: usize,
+    similarity: Option<&[Vec<f64>]>,
+    opts: &SelectOptions,
+) -> Selection {
+    let n = reached.len();
+    let min_gain = |i: usize| opts.min_gains.as_ref().map_or(opts.min_gain, |g| g[i]);
+    let words = n_targets.div_ceil(64);
     let count = |bits: &[u64]| bits.iter().map(|w| w.count_ones() as usize).sum::<usize>();
-    let total = index.n_targets.max(1) as f64;
+    let total = n_targets.max(1) as f64;
     let mut out = Selection {
-        n_targets: index.n_targets,
+        n_targets,
         targets: reached.iter().map(|r| count(r)).collect(),
         rank: vec![None; n],
         gain: vec![0.0; n],
@@ -220,7 +262,7 @@ pub fn select_motifs<S: AsRef<str> + Sync>(
         rank += 1;
         out.rank[best] = Some(rank);
         out.gain[best] = new as f64 / total;
-        out.kept[best] = index.n_targets > 0 && out.gain[best] >= min_gain(best) && new > 0;
+        out.kept[best] = n_targets > 0 && out.gain[best] >= min_gain(best) && new > 0;
         // A motif not kept leaves its targets to the motifs after it.
         if out.kept[best] {
             so_far += new;
@@ -231,7 +273,7 @@ pub fn select_motifs<S: AsRef<str> + Sync>(
         out.cumulative[best] = so_far as f64 / total;
         chosen.push(best);
     }
-    Ok(out)
+    out
 }
 
 /// The sites of one sequence as (start, end, target index), sorted by start.

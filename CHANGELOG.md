@@ -23,6 +23,14 @@ New:
   motifs from a later search among the targets left unreached can be held
   to a lower one.
 
+Other changes:
+
+- `finder::motif_finder()`, `gapped::gapped_motif_finder()`,
+  `seqlets::call_seqlets()`, `scan::scan_encoded()` and the contribution scans
+  are faster, with identical results: the finders count k-mers once and
+  score two positions at a time, seqlets are extended only from stretches
+  that passed, and scans skip windows that can no longer reach the cutoff.
+
 Fixes:
 
 - `refine_motifs()` reads letters outside the alphabet, such as N, as

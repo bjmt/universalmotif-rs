@@ -690,12 +690,11 @@ impl Search<'_> {
                 (motif, ln_spacing) = (rep, ln);
             }
         }
-        let best = self.judge(normalize(&motif)?)?;
         // Motifs without a gap are left to the ungapped finder.
-        let (m, hp, sp, sn, ln_p) = best;
-        if !m.gap.isgapped {
+        if !motif.gap.isgapped {
             return Ok(None);
         }
+        let (m, hp, sp, sn, ln_p) = self.judge(normalize(&motif)?)?;
         let hits = (0..hp.len())
             .map(|i| {
                 (
@@ -1054,6 +1053,10 @@ fn occurrences(
 /// The number of letters of `seq` differing from `pattern`, if at most
 /// `allowed` and all of them A, C, G or T.
 fn distance(seq: &[u8], pattern: &[u8], allowed: usize) -> Option<usize> {
+    if allowed == 0 {
+        // The first letter rules out most places before the rest is compared.
+        return (seq.first() == pattern.first() && seq == pattern).then_some(0);
+    }
     let mut d = 0;
     for (&x, &p) in seq.iter().zip(pattern) {
         if x != p {

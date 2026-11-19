@@ -326,6 +326,11 @@ fn rc_bytes(seq: &[u8], rna: bool) -> String {
 /// fewer than four positions ignores the extra letters.
 struct Scorer {
     groups: Vec<[i32; 256]>,
+    /// The groups scored before checking that a window can still reach the
+    /// threshold, and the least score they must add up to for that, as set by
+    /// [`add_cutoffs`]; all of them and no cutoff otherwise.
+    head: usize,
+    cutoff: i32,
 }
 
 impl Scorer {
@@ -334,7 +339,7 @@ impl Scorer {
             .columns()
             .map(|c| c.iter().map(|&v| grid_value(v)).collect())
             .collect();
-        let groups = cols
+        let groups: Vec<[i32; 256]> = cols
             .chunks(4)
             .map(|g| {
                 let mut t = [0i32; 256];
@@ -348,7 +353,72 @@ impl Scorer {
                 t
             })
             .collect();
-        Scorer { groups }
+        Scorer {
+            head: groups.len(),
+            cutoff: i32::MIN,
+            groups,
+        }
+    }
+}
+
+/// How far below the mean of a window of background letters, in standard
+/// deviations, the cutoff of a strand must be for [`add_cutoffs`] to check it.
+const CUTOFF_SDS: f64 = 2.0;
+
+/// Set where the scanning loops check that a window can still reach
+/// `min_score` on some strand, given the best the later groups can add, and
+/// skip the rest of it otherwise. The check comes after the fewest groups at
+/// which a window of letters drawn from `bkg` is unlikely to pass it on any
+/// strand, so that most windows stop there; checking sooner, or after every
+/// group, costs more in mispredicted branches than it saves. No window that
+/// could reach the threshold is skipped, so the hits are unchanged.
+fn add_cutoffs(scorers: &mut [(Strand, Scorer)], min_score: i32, bkg: &[f64]) {
+    let prob: Vec<f64> = (0..256)
+        .map(|code| {
+            (0..4)
+                .map(|j| bkg[(code >> (6 - 2 * j)) & 3])
+                .product::<f64>()
+        })
+        .collect();
+    // Each strand's mean, variance and best score of each group.
+    let stats: Vec<Vec<(f64, f64, i64)>> = scorers
+        .iter()
+        .map(|(_, s)| {
+            s.groups
+                .iter()
+                .map(|t| {
+                    let mean: f64 = t.iter().zip(&prob).map(|(&v, p)| f64::from(v) * p).sum();
+                    let var = t
+                        .iter()
+                        .zip(&prob)
+                        .map(|(&v, p)| (f64::from(v) - mean).powi(2) * p)
+                        .sum();
+                    (mean, var, i64::from(*t.iter().max().unwrap()))
+                })
+                .collect()
+        })
+        .collect();
+    let n = scorers.first().map_or(0, |(_, s)| s.groups.len());
+    for head in 1..n {
+        let cutoffs: Vec<i64> = stats
+            .iter()
+            .map(|g| i64::from(min_score) - g[head..].iter().map(|x| x.2).sum::<i64>())
+            .collect();
+        let unlikely = stats.iter().zip(&cutoffs).all(|(g, &cut)| {
+            let mean: f64 = g[..head].iter().map(|x| x.0).sum();
+            let sd = g[..head].iter().map(|x| x.1).sum::<f64>().sqrt();
+            cut as f64 >= mean + CUTOFF_SDS * sd
+        });
+        if unlikely {
+            for ((_, s), cut) in scorers.iter_mut().zip(cutoffs) {
+                s.head = head;
+                s.cutoff = cut.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+            }
+            return;
+        }
+    }
+    for (_, s) in scorers.iter_mut() {
+        s.cutoff = min_score;
     }
 }
 
@@ -601,12 +671,23 @@ fn scan_packed(
     let (from, to) = range;
     let c = at.first;
     if let [(Strand::Plus, plus), (Strand::Minus, minus)] = scorers {
-        // Both strands from one read of each window's letters.
+        // Both strands from one read of each window's letters, leaving the
+        // window at the cutoffs if neither strand can reach the threshold.
+        let (head_p, tail_p) = plus.groups.split_at(plus.head);
+        let (head_m, tail_m) = minus.groups.split_at(plus.head);
         for i in from..to {
             let q = &quads[i - c..];
             let (mut sp, mut sm) = (0i32, 0i32);
-            for (g, (tp, tm)) in plus.groups.iter().zip(&minus.groups).enumerate() {
+            for (g, (tp, tm)) in head_p.iter().zip(head_m).enumerate() {
                 let code = q[4 * g] as usize;
+                sp += tp[code];
+                sm += tm[code];
+            }
+            if sp < plus.cutoff && sm < minus.cutoff {
+                continue;
+            }
+            for (g, (tp, tm)) in tail_p.iter().zip(tail_m).enumerate() {
+                let code = q[4 * (plus.head + g)] as usize;
                 sp += tp[code];
                 sm += tm[code];
             }
@@ -620,11 +701,18 @@ fn scan_packed(
         return;
     }
     for (strand, scorer) in scorers {
+        let (head, tail) = scorer.groups.split_at(scorer.head);
         for i in from..to {
             let q = &quads[i - c..];
             let mut s = 0i32;
-            for (g, t) in scorer.groups.iter().enumerate() {
+            for (g, t) in head.iter().enumerate() {
                 s += t[q[4 * g] as usize];
+            }
+            if s < scorer.cutoff {
+                continue;
+            }
+            for (g, t) in tail.iter().enumerate() {
+                s += t[q[4 * (scorer.head + g)] as usize];
             }
             if s >= at.min_score {
                 out.push(at.hit(i, *strand == Strand::Minus, s));
@@ -908,6 +996,7 @@ fn prepare_motif(m: &Motif, opts: &ScanOptions, keep_tail: bool) -> Result<Optio
         if minus {
             s.push((Strand::Minus, Scorer::new(&sm.pwm.reversed())));
         }
+        add_cutoffs(&mut s, min as i32, &sm.bkg);
         Scorers::Packed(s)
     } else {
         Scorers::Coded(CodedScorer::new(&sm.pwm))
@@ -2276,6 +2365,90 @@ mod tests {
                 .collect();
             got.sort();
             assert_eq!(got, naive(m, &seq, 0.01), "motif {mi}");
+        }
+    }
+
+    #[test]
+    fn cutoffs_lose_no_hits() {
+        // At small P-values most windows are left at the cutoffs, which must
+        // not lose a hit on either strand, or of a motif for one strand.
+        let opts = CreateOptions {
+            pseudocount: 1.0,
+            ..Default::default()
+        };
+        let plus = CreateOptions {
+            strand: Strand::Plus,
+            ..opts.clone()
+        };
+        // Sites that differ, so that scores take many values.
+        let sites = [
+            "TTGACGTCAAGG",
+            "TTGACGTCAAGG",
+            "ATGACGTCAAGG",
+            "TTGACGTCATGG",
+            "TTCACGTCAAGG",
+            "TTGACTTCAAGC",
+            "GTGACGTCAAGG",
+            "TTGAAGTCAAGG",
+            "TTGACGTGAAGG",
+            "CTGACGTCAAGA",
+        ];
+        let motifs = [
+            from_strings(&sites, None, &opts).unwrap(),
+            from_strings(&["GGGGCGGGGCCGGTTAACCA"], None, &opts).unwrap(),
+            from_strings(&["GGGGCGGGGCCGGTTAACCA"], None, &plus).unwrap(),
+        ];
+        let mut seq = create_sequences(&['A', 'C', 'G', 'T'], 1, 200_000, None, 3, 1)
+            .unwrap()
+            .remove(0);
+        // Sites on both strands, so that every P-value has hits.
+        for (at, site) in [
+            (1_000, "TTGACGTCAAGG"),
+            (50_000, "CCTTGACGTCAA"),
+            (100_000, "GGGGCGGGGCCGGTTAACCA"),
+            (150_000, "TGGTTAACCGGCCCCGCCCC"),
+        ] {
+            seq.replace_range(at..at + site.len(), site);
+        }
+        // Windows ending in the first motif's best letters for one strand or
+        // the other, after any eight, so that many score close to the cutoffs
+        // over those eight.
+        for (k, before) in seq.clone().as_bytes()[..48_000].chunks(8).enumerate() {
+            seq.push_str(std::str::from_utf8(before).unwrap());
+            seq.push_str(if k % 2 == 0 { "AAGG" } else { "TCAA" });
+        }
+        for pvalue in [1e-3, 1e-4, 1e-5] {
+            let opts = ScanOptions {
+                pvalue,
+                ..Default::default()
+            };
+            let Some(Prepared {
+                scorers: Scorers::Packed(s),
+                ..
+            }) = prepare_motif(&motifs[1], &opts, false).unwrap()
+            else {
+                panic!("an ungapped DNA motif is scanned packed");
+            };
+            assert!(pvalue > 1e-4 || s[0].1.head < s[0].1.groups.len());
+            let hits = scan_sequences(&motifs, &[&seq], &opts).unwrap();
+            for (mi, m) in motifs.iter().enumerate() {
+                let mut got: Vec<(usize, bool, i32)> = hits
+                    .iter()
+                    .filter(|h| h.motif == mi)
+                    .map(|h| {
+                        (
+                            h.start,
+                            h.strand == Strand::Minus,
+                            (h.score * 1000.0).round() as i32,
+                        )
+                    })
+                    .collect();
+                got.sort();
+                let mut want = naive(m, &seq, pvalue);
+                want.retain(|h| m.strand == Strand::Both || !h.1);
+                assert!(!want.is_empty());
+                assert_eq!(got, want, "motif {mi} at {pvalue}");
+            }
         }
     }
 
