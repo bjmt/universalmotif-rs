@@ -1,6 +1,6 @@
 //! Discovery of gapped motifs planted in random sequences.
 
-use universalmotif::gapped::{GappedFinderOptions, gapped_motif_finder};
+use universalmotif::gapped::{GappedFinderOptions, Mismatch, gapped_motif_finder};
 
 /// Random DNA from a simple generator, so that the test needs no data.
 struct Lcg(u64);
@@ -109,6 +109,63 @@ fn finds_nothing_in_random_sequences() {
         gapped_motif_finder(&seqs, None, &options())
             .unwrap()
             .is_empty()
+    );
+}
+
+/// Sequences with `AGGTCA`, three letters and `TGTCGG` planted in every
+/// sixth one, each site with one letter changed, so that no pair of 6-mers
+/// is common enough to count exactly.
+fn varied_sites(n: usize, seed: u64) -> Vec<String> {
+    let mut rng = Lcg(seed);
+    (0..n)
+        .map(|i| {
+            let mut s = rng.dna(150);
+            if i % 6 == 0 {
+                let mut site: Vec<u8> = format!("AGGTCA{}TGTCGG", rng.dna(3)).into_bytes();
+                let mut at = (rng.next() % 12) as usize;
+                if at >= 6 {
+                    at += 3;
+                }
+                let old = site[at];
+                site[at] = *b"ACGT"
+                    .iter()
+                    .filter(|&&c| c != old)
+                    .nth((rng.next() % 3) as usize)
+                    .unwrap();
+                let pos = (rng.next() % 100) as usize;
+                s.replace_range(pos..pos + site.len(), std::str::from_utf8(&site).unwrap());
+            }
+            s
+        })
+        .collect()
+}
+
+#[test]
+fn retries_with_a_mismatch_only_when_nothing_is_found() {
+    let opts = |mismatch| GappedFinderOptions {
+        k: vec![6],
+        nmotifs: 1,
+        mismatch,
+        ..Default::default()
+    };
+    let varied = varied_sites(300, 5);
+    assert!(find(&varied, opts(Mismatch::Off)).is_empty());
+    // The retry keeps motifs at half of stop_pvalue.
+    let loose = find(
+        &varied,
+        GappedFinderOptions {
+            stop_pvalue: 5e-4,
+            ..opts(Mismatch::On)
+        },
+    );
+    assert_eq!(loose.len(), 1);
+    assert_eq!(loose[0].seed_pair, "AGGTCA[3-3]TGTCGG");
+    assert_eq!(find(&varied, opts(Mismatch::Auto)), loose);
+    // A search that finds something is not run again.
+    let exact = direct_repeats(300, 7);
+    assert_eq!(
+        find(&exact, opts(Mismatch::Auto)),
+        find(&exact, opts(Mismatch::Off))
     );
 }
 

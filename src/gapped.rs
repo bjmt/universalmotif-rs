@@ -43,9 +43,9 @@ pub struct GappedFinderOptions {
     /// The shortest spacer searched; 0 by default.
     pub min_gap: usize,
     /// The longest spacer searched, at most 31, so that the motifs found
-    /// can be compared with their gaps; 20 by default.
+    /// can be compared with their gaps; 31 by default.
     pub max_gap: usize,
-    /// The most motifs to find; 3 by default.
+    /// The most motifs to find; 5 by default.
     pub nmotifs: usize,
     /// P-value for a site to count as a hit; 1e-4 by default.
     pub hit_pvalue: f64,
@@ -74,11 +74,11 @@ pub struct GappedFinderOptions {
     /// were found in, corrected for the pairs and seeds tried, and are
     /// somewhat optimistic.
     pub holdout: f64,
-    /// Count pairs of 6-mers in each sequence holding them with at most one
-    /// mismatch, which finds the spacing of rarer motifs better but takes
-    /// several times longer; off by default. Shorter k-mers always match
-    /// exactly.
-    pub mismatch: bool,
+    /// Whether pairs of 6-mers are counted in each sequence holding them
+    /// with at most one mismatch, which finds the spacing of rarer motifs
+    /// better but takes several times longer; [`Mismatch::Auto`] by
+    /// default. Shorter k-mers always match exactly.
+    pub mismatch: Mismatch,
     /// Mask low-complexity regions, such as homopolymers and short tandem
     /// repeats, in the sequences and the negatives before the search, with
     /// DUST at its default settings; on by default. Their repeated units
@@ -104,8 +104,8 @@ impl Default for GappedFinderOptions {
         GappedFinderOptions {
             k: vec![4, 5, 6],
             min_gap: 0,
-            max_gap: 20,
-            nmotifs: 3,
+            max_gap: 31,
+            nmotifs: 5,
             hit_pvalue: 1e-4,
             stop_pvalue: 1e-3,
             flank: 3,
@@ -113,7 +113,7 @@ impl Default for GappedFinderOptions {
             n_seed_pairs: 6,
             min_fraction: 0.02,
             holdout: 0.3,
-            mismatch: false,
+            mismatch: Mismatch::Auto,
             mask: true,
             rc: true,
             shuffle_k: 2,
@@ -122,6 +122,20 @@ impl Default for GappedFinderOptions {
             nthreads: 1,
         }
     }
+}
+
+/// When [`gapped_motif_finder`] lets 6-mers match with one mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mismatch {
+    /// Only exact matches.
+    Off,
+    /// Always allow one mismatch.
+    On,
+    /// Search with exact matches, and search again allowing one mismatch,
+    /// at half of `stop_pvalue`, only if no motif is found, so that the
+    /// slower search is run only when the faster one has nothing to show.
+    #[default]
+    Auto,
 }
 
 /// A motif found by [`gapped_motif_finder`].
@@ -269,6 +283,12 @@ struct Search<'a> {
 /// P-values come from all the sequences instead, corrected for the pairs and
 /// seeds tried, and are somewhat optimistic.
 ///
+/// With `mismatch` at [`Mismatch::Auto`], the default, a search that finds
+/// nothing is run again with 6-mers allowed one mismatch, which can recover
+/// the spacing of motifs whose parts vary too much to be counted exactly.
+/// The second search keeps motifs at half of `stop_pvalue`, so that the two
+/// together report no more false motifs than one search would.
+///
 /// Low-complexity regions are masked first with `mask`. For genomic
 /// sequences, negatives drawn from the genome and matched for composition
 /// give far better calibrated P-values than the default shuffles, which lose
@@ -288,6 +308,38 @@ struct Search<'a> {
 ///   Computational Biology* 13(5):1028–1040.
 ///   <https://doi.org/10.1089/cmb.2006.13.1028>
 pub fn gapped_motif_finder<S: AsRef<str> + Sync>(
+    sequences: &[S],
+    negatives: Option<&[S]>,
+    opts: &GappedFinderOptions,
+) -> Result<Vec<GappedMotif>> {
+    if opts.mismatch != Mismatch::Auto {
+        return search_once(sequences, negatives, opts);
+    }
+    let exact = search_once(
+        sequences,
+        negatives,
+        &GappedFinderOptions {
+            mismatch: Mismatch::Off,
+            ..opts.clone()
+        },
+    )?;
+    if !exact.is_empty() || !opts.k.contains(&6) {
+        return Ok(exact);
+    }
+    search_once(
+        sequences,
+        negatives,
+        &GappedFinderOptions {
+            mismatch: Mismatch::On,
+            // Halved, so that two searches of sequences with nothing to
+            // find report a motif no more often than one would.
+            stop_pvalue: opts.stop_pvalue / 2.0,
+            ..opts.clone()
+        },
+    )
+}
+
+fn search_once<S: AsRef<str> + Sync>(
     sequences: &[S],
     negatives: Option<&[S]>,
     opts: &GappedFinderOptions,
@@ -462,7 +514,7 @@ impl Search<'_> {
         let o = self.opts;
         // One mismatch in a pair of shorter k-mers matches too much of the
         // background to help.
-        let mismatch = o.mismatch && k == 6;
+        let mismatch = o.mismatch == Mismatch::On && k == 6;
         let mut cache = self.neg_pairs.borrow_mut();
         let pairs = spaced_pairs_with(
             &self.work.text,

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Changes in behaviour:
+
+- `GappedFinderOptions` searches spacers up to 31 and finds up to 5
+  motifs by default, and `mismatch` is a `Mismatch` (`Off`, `On` or
+  `Auto`). `Auto`, the default, runs the search again with one mismatch,
+  at half of `stop_pvalue`, when it finds nothing.
+
 Fixes:
 
 - `refine_motifs()` reads letters outside the alphabet, such as N, as
