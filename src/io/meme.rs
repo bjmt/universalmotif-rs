@@ -301,7 +301,8 @@ pub fn read(text: &str, opts: &ReadOptions) -> Result<Vec<Motif>> {
                 .bkg(Some(h.bkg.clone()))
                 .strand(h.strand)
                 .extrainfo(extrainfo)
-                .build()?,
+                .build()
+                .map(super::with_noted_gaps)?,
         );
     }
     Ok(motifs)
@@ -634,9 +635,9 @@ pub fn write(motifs: &[Motif], opts: &WriteOptions) -> Result<String> {
 
     for m in &motifs {
         let mut head = format!("MOTIF {}", meme_name(&m.name));
-        if let Some(alt) = &m.altname {
+        if let Some(alt) = super::file_altname(m) {
             head.push(' ');
-            head.push_str(&meme_name(alt));
+            head.push_str(&meme_name(&alt));
         }
         lines.push(head);
         // The E-value is optional in MEME files, so it is left out rather

@@ -8,6 +8,14 @@ Changes in behaviour:
   motifs by default, and `mismatch` is a `Mismatch` (`Off`, `On` or
   `Auto`). `Auto`, the default, runs the search again with one mismatch,
   at half of `stop_pvalue`, when it finds nothing.
+- The MEME, JASPAR and TRANSFAC writers give gapped motifs their gaps as
+  their alternative name (`AGGTCA[1-5]AGGTCA`), and the readers restore
+  them (`io::gap_notation()`, `io::parse_gap_notation()`).
+
+New:
+
+- `io::universalmotif` reads and writes the R package's own format, as its
+  `read_motifs()` and `write_motifs()` do.
 
 Fixes:
 

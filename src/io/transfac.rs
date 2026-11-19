@@ -38,7 +38,7 @@ pub fn read(text: &str) -> Result<Vec<Motif>> {
     let mut start = 0;
     for &s in &seps {
         if let Some(m) = read_record(&lines[start..s])? {
-            motifs.push(m);
+            motifs.push(super::with_noted_gaps(m));
         }
         start = s + 1;
     }
@@ -178,9 +178,10 @@ pub fn write(motifs: &[Motif], opts: &WriteOptions) -> Result<String> {
                 "TRANSFAC format only supports DNA and RNA motifs".into(),
             ));
         }
+        let alt = super::file_altname(m);
         let m = convert_type(m, MotifType::Pcm, None, false)?;
         lines.push(format!("{} {}", opts.name_tag, m.name));
-        if let Some(a) = &m.altname {
+        if let Some(a) = &alt {
             lines.push(format!("{} {}", opts.altname_tag, a));
         }
         if let Some(f) = &m.family {

@@ -37,7 +37,11 @@ pub fn read(text: &str) -> Result<Vec<Motif>> {
         let mut names = lines[h][1..].split_whitespace();
         let name = names.next().unwrap_or("").to_string();
         let altname = names.next().map(String::from);
-        motifs.push(read_one(&lines[h + 1..end], name, altname)?);
+        motifs.push(super::with_noted_gaps(read_one(
+            &lines[h + 1..end],
+            name,
+            altname,
+        )?));
     }
     Ok(motifs)
 }
@@ -129,8 +133,9 @@ pub fn write(motifs: &[Motif]) -> Result<String> {
                 "JASPAR format only supports DNA, RNA and AA motifs".into(),
             ));
         }
+        let alt = super::file_altname(m);
         let m = convert_type(m, MotifType::Pcm, None, false)?;
-        lines.push(match &m.altname {
+        lines.push(match &alt {
             Some(a) => format!(">{} {}", m.name, a),
             None => format!(">{}", m.name),
         });
