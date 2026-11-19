@@ -51,7 +51,14 @@ fn motifs_are_ranked_by_the_sequences_they_add() {
     // The longer AP-1 reaches the same sequences, so it adds little.
     assert!(sel.gain[2] < 0.01 && !sel.kept[2]);
     assert!(sel.kept[0] && sel.kept[1]);
-    let total: f64 = sel.gain.iter().sum();
+    // Only kept motifs count as reaching their targets.
+    let total: f64 = sel
+        .gain
+        .iter()
+        .zip(&sel.kept)
+        .filter(|(_, k)| **k)
+        .map(|(g, _)| g)
+        .sum();
     let last = sel.cumulative.iter().cloned().fold(0.0, f64::max);
     assert!((total - last).abs() < 1e-12);
     // Gains never grow along the order.
@@ -120,6 +127,56 @@ fn similar_motifs_are_left_out() {
     assert_eq!(sel.rank[1], None);
     assert!(!sel.kept[1] && sel.kept[0] && sel.kept[2]);
     assert!(select_motifs(&motifs, &seqs, None, Some(&sim[..2]), &opts).is_err());
+}
+
+#[test]
+fn each_motif_can_have_its_own_min_gain() {
+    // AP-1 in half the sequences, GATA in a fifth, and a rare site in one in 25.
+    let mut seqs = sequences();
+    plant(&mut seqs, "GGTACCGTAG", 25, 3, 30);
+    let motifs = vec![
+        motif("TGACTCA", "ap1"),
+        motif("AGATAAG", "gata"),
+        motif("GGTACCGTAG", "rare"),
+    ];
+    let strict = SelectOptions {
+        min_gain: 0.1,
+        ..Default::default()
+    };
+    let sel = select_motifs(&motifs, &seqs, None, None, &strict).unwrap();
+    assert_eq!(sel.kept, vec![true, true, false]);
+    // Held to a lower cutoff of its own, the rare motif is kept after it.
+    let own = SelectOptions {
+        min_gains: Some(vec![0.1, 0.1, 0.02]),
+        ..strict.clone()
+    };
+    let sel = select_motifs(&motifs, &seqs, None, None, &own).unwrap();
+    assert_eq!(sel.kept, vec![true, true, true]);
+    assert!(sel.gain[2] >= 0.02 && sel.gain[2] < 0.1);
+    // A motif not kept does not take targets from those after it: GATA held
+    // to a cutoff it misses leaves the rare motif's gain unchanged.
+    let skip = SelectOptions {
+        min_gains: Some(vec![0.1, 0.9, 0.02]),
+        ..strict.clone()
+    };
+    let without = select_motifs(&motifs, &seqs, None, None, &skip).unwrap();
+    assert_eq!(without.kept, vec![true, false, true]);
+    assert!(
+        (without.cumulative.iter().cloned().fold(0.0, f64::max)
+            - (without.gain[0] + without.gain[2]))
+            .abs()
+            < 1e-12
+    );
+    let wrong = SelectOptions {
+        min_gains: Some(vec![0.1, 0.1]),
+        ..strict.clone()
+    };
+    assert!(select_motifs(&motifs, &seqs, None, None, &wrong).is_err());
+    let out_of_range = SelectOptions {
+        min_gains: Some(vec![0.1, 0.1, 1.5]),
+        ..strict
+    };
+    assert!(select_motifs(&motifs, &seqs, None, None, &out_of_range).is_err());
 }
 
 #[test]

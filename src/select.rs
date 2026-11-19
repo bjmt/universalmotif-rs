@@ -36,6 +36,10 @@ pub struct SelectOptions {
     /// The share of all targets a motif must add, when its turn comes, to be
     /// kept; 0.01 by default.
     pub min_gain: f64,
+    /// A `min_gain` for each motif, in the order given, in place of the one
+    /// above: motifs found in a later search among the targets others left
+    /// unreached, say, may be held to a lower one. `None` by default.
+    pub min_gains: Option<Vec<f64>>,
     /// With sites, how many positions a hit must share with a site to reach
     /// it; 1 by default.
     pub min_overlap: usize,
@@ -56,6 +60,7 @@ impl Default for SelectOptions {
         SelectOptions {
             pvalue: 1e-4,
             min_gain: 0.01,
+            min_gains: None,
             min_overlap: 1,
             max_similarity: None,
             rc: true,
@@ -76,11 +81,11 @@ pub struct Selection {
     /// The motif's place in the greedy order, from 1, or `None` for a motif
     /// left out as similar to one kept.
     pub rank: Vec<Option<usize>>,
-    /// The share of all targets the motif added when its turn came; 0 for
-    /// motifs left out as similar.
+    /// The share of all targets the motif added, or would have added, when
+    /// its turn came; 0 for motifs left out as similar.
     pub gain: Vec<f64>,
-    /// The share of all targets reached by the motifs up to and including
-    /// this one in the greedy order.
+    /// The share of all targets reached by the kept motifs up to and
+    /// including this one in the greedy order.
     pub cumulative: Vec<f64>,
     /// Whether the motif is kept: it added at least the minimum gain and is
     /// not too similar to a motif kept before it.
@@ -96,8 +101,11 @@ pub struct Selection {
 ///
 /// Targets are `sites` when given, reached by a hit sharing at least
 /// `min_overlap` positions with them, and otherwise the sequences, reached
-/// by any hit. The gains of motifs chosen later can only be smaller, so the
-/// kept motifs are the first ones in the order. With a `similarity` matrix,
+/// by any hit. Only kept motifs count as reaching their targets. With a
+/// single `min_gain`, the gains of motifs chosen later can only be smaller,
+/// so the kept motifs are the first ones in the order; with `min_gains`, a
+/// motif held to a lower one can still be kept after others were not. With
+/// a `similarity` matrix,
 /// one row and column per motif, a motif whose similarity to a kept motif
 /// reaches `max_similarity` when its turn comes is left out instead, and the
 /// targets it reaches are not counted as reached; this removes, say, motifs
@@ -112,6 +120,19 @@ pub fn select_motifs<S: AsRef<str> + Sync>(
     if !(0.0..=1.0).contains(&opts.min_gain) {
         return arg_err("min_gain must be between 0 and 1");
     }
+    if let Some(gains) = &opts.min_gains {
+        if gains.len() != motifs.len() {
+            return arg_err(format!(
+                "{} values in min_gains for {} motifs",
+                gains.len(),
+                motifs.len()
+            ));
+        }
+        if gains.iter().any(|g| !(0.0..=1.0).contains(g)) {
+            return arg_err("min_gains must all be between 0 and 1");
+        }
+    }
+    let min_gain = |i: usize| opts.min_gains.as_ref().map_or(opts.min_gain, |g| g[i]);
     if opts.min_overlap == 0 {
         return arg_err("min_overlap must be at least 1");
     }
@@ -197,14 +218,17 @@ pub fn select_motifs<S: AsRef<str> + Sync>(
             continue;
         }
         rank += 1;
-        so_far += new;
-        for (c, a) in covered.iter_mut().zip(&reached[best]) {
-            *c |= a;
-        }
         out.rank[best] = Some(rank);
         out.gain[best] = new as f64 / total;
+        out.kept[best] = index.n_targets > 0 && out.gain[best] >= min_gain(best) && new > 0;
+        // A motif not kept leaves its targets to the motifs after it.
+        if out.kept[best] {
+            so_far += new;
+            for (c, a) in covered.iter_mut().zip(&reached[best]) {
+                *c |= a;
+            }
+        }
         out.cumulative[best] = so_far as f64 / total;
-        out.kept[best] = index.n_targets > 0 && out.gain[best] >= opts.min_gain && new > 0;
         chosen.push(best);
     }
     Ok(out)

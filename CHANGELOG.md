@@ -11,11 +11,17 @@ Changes in behaviour:
 - The MEME, JASPAR and TRANSFAC writers give gapped motifs their gaps as
   their alternative name (`AGGTCA[1-5]AGGTCA`), and the readers restore
   them (`io::gap_notation()`, `io::parse_gap_notation()`).
+- `select_motifs()` counts only kept motifs as reaching their targets, so
+  a motif left out no longer takes targets from the motifs after it, and
+  `Selection::cumulative` is the share the kept motifs reach.
 
 New:
 
 - `io::universalmotif` reads and writes the R package's own format, as its
   `read_motifs()` and `write_motifs()` do.
+- `SelectOptions::min_gains` gives each motif its own `min_gain`, so that
+  motifs from a later search among the targets left unreached can be held
+  to a lower one.
 
 Fixes:
 
