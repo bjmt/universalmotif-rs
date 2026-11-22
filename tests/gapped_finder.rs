@@ -213,3 +213,21 @@ fn spaced_pairs_count_each_sequence_once() {
     assert_eq!(find(&loose, aa, ca), Some((1, 0)));
     assert!(spaced_pairs(&pos, &neg, 7, 0, 2, false, 1, false, 1).is_err());
 }
+
+#[test]
+fn summarizes_the_spacing_of_its_parts() {
+    let seqs = direct_repeats(300, 7);
+    let found = gapped_motif_finder(&seqs, None, &options()).unwrap();
+    let m = &found[0];
+    let best = m.best_spacer.expect("a best spacer");
+    let (lo, hi) = (m.motif.gap.mingap[0], m.motif.gap.maxgap[0]);
+    assert!((lo..=hi).contains(&best), "best {best} outside {lo}-{hi}");
+    assert!(
+        m.spacer_pairs >= 5 && m.spacer_fold > 2.0,
+        "{} pairs, fold {}",
+        m.spacer_pairs,
+        m.spacer_fold
+    );
+    assert!(m.strong_spacers.contains(&best));
+    assert!(m.strong_spacers.iter().all(|&g| g <= 31));
+}

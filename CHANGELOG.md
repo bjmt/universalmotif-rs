@@ -17,6 +17,9 @@ Changes in behaviour:
 
 New:
 
+- `GappedMotif` gives the most favoured spacer and the spacers with
+  clearly more hits than expected (`best_spacer`, `spacer_pairs`,
+  `spacer_fold`, `strong_spacers`).
 - `io::universalmotif` reads and writes the R package's own format, as its
   `read_motifs()` and `write_motifs()` do.
 - `SelectOptions::min_gains` gives each motif its own `min_gain`, so that

@@ -176,6 +176,27 @@ pub struct GappedMotif {
     pub spacing_pvalue: f64,
     /// Base 10 log of `spacing_pvalue`.
     pub log10_spacing_pvalue: f64,
+    /// The spacer with the most hits beyond those expected, in the
+    /// sequences the motif was found in, or `None` when its parts could not
+    /// be counted there.
+    pub best_spacer: Option<usize>,
+    /// The hits at `best_spacer`.
+    pub spacer_pairs: u64,
+    /// The hits at `best_spacer` over those expected there.
+    pub spacer_fold: f64,
+    /// Every spacer from `min_gap` to `max_gap` with clearly more hits than
+    /// expected, by two standard errors, whether or not they are next to
+    /// each other.
+    pub strong_spacers: Vec<usize>,
+}
+
+/// How the hits of a motif's parts spread over the spacers searched.
+#[derive(Default)]
+struct Spacing {
+    best: Option<usize>,
+    pairs: u64,
+    fold: f64,
+    strong: Vec<usize>,
 }
 
 /// A candidate motif and what it was judged on.
@@ -479,6 +500,7 @@ fn search_once<S: AsRef<str> + Sync>(
             }
         }
         let Some(best) = best else { break };
+        let spacing = search.spacing(&best.motif)?;
         // Mask the hits before the next search.
         search.work = masked(&mut search.work, &best.hits, opts.nthreads)?;
         if let Some((test_pos, _)) = &mut search.held_out {
@@ -498,6 +520,10 @@ fn search_once<S: AsRef<str> + Sync>(
             log10_pvalue: best.ln_p.min(0.0) / std::f64::consts::LN_10,
             spacing_pvalue: best.ln_spacing.min(0.0).exp(),
             log10_spacing_pvalue: best.ln_spacing.min(0.0) / std::f64::consts::LN_10,
+            best_spacer: spacing.best,
+            spacer_pairs: spacing.pairs,
+            spacer_fold: spacing.fold,
+            strong_spacers: spacing.strong,
         });
     }
     // A search that stopped early counts the searches it skipped.
@@ -850,6 +876,36 @@ impl Search<'_> {
             observed: cp,
             expected,
         }))
+    }
+
+    /// The hits of a motif's parts at each spacer searched, in the
+    /// sequences it was found in, against those expected as in its spacing
+    /// test.
+    fn spacing(&self, motif: &Motif) -> Result<Spacing> {
+        if !motif.gap.isgapped {
+            return Ok(Spacing::default());
+        }
+        let wl = motif.gap.gaploc[0];
+        let Some(p) = self.profile(motif, wl, motif.width() - wl, &self.work, self.neg)? else {
+            return Ok(Spacing::default());
+        };
+        let (obs, exp) = (&p.observed, &p.expected);
+        let mut best = 0;
+        for j in 1..obs.len() {
+            if obs[j] - exp[j] > obs[best] - exp[best] {
+                best = j;
+            }
+        }
+        let lo = self.opts.min_gap;
+        Ok(Spacing {
+            best: Some(lo + best),
+            pairs: obs[best] as u64,
+            fold: obs[best] / exp[best],
+            strong: (0..obs.len())
+                .filter(|&j| obs[j] > exp[j] + 2.0 * (exp[j] + 1.0).sqrt())
+                .map(|j| lo + j)
+                .collect(),
+        })
     }
 
     /// Test a candidate in the sequences held out: the spacing of its hits
