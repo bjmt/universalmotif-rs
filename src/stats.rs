@@ -135,6 +135,54 @@ pub fn pbinom_upper(k: u64, n: u64, p: f64) -> f64 {
     }
 }
 
+/// The natural log of `dbinom_raw`, which stays finite where the
+/// probability itself is too small for a double.
+fn ln_dbinom_raw(x: f64, n: f64, p: f64, q: f64) -> f64 {
+    if p == 0.0 {
+        return if x == 0.0 { 0.0 } else { f64::NEG_INFINITY };
+    }
+    if q == 0.0 {
+        return if x == n { 0.0 } else { f64::NEG_INFINITY };
+    }
+    if x < 0.0 || x > n {
+        return f64::NEG_INFINITY;
+    }
+    if x == 0.0 {
+        return n * (-p).ln_1p();
+    }
+    if x == n {
+        return n * (-q).ln_1p();
+    }
+    let lc = stirlerr(n) - stirlerr(x) - stirlerr(n - x) - bd0(x, n * p) - bd0(n - x, n * q);
+    let lf = LN_2PI + x.ln() + (-x / n).ln_1p();
+    lc - 0.5 * lf
+}
+
+/// The natural log of [`pbinom_upper`], which stays finite in the far
+/// upper tail.
+pub fn ln_pbinom_upper(k: u64, n: u64, p: f64) -> f64 {
+    if k == 0 || p >= 1.0 {
+        return 0.0;
+    }
+    if k > n || p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    let (q, nf) = (1.0 - p, n as f64);
+    if (k as f64) <= nf * p {
+        return pbinom_upper(k, n, p).ln();
+    }
+    // The terms only fall from k on, so they are summed relative to the
+    // first, whose log is added at the end.
+    let ratio = p / q;
+    let (mut term, mut sum, mut i) = (1.0f64, 1.0f64, k as f64);
+    while i < nf && term > f64::EPSILON * 1e-3 * sum {
+        term *= (nf - i) / (i + 1.0) * ratio;
+        sum += term;
+        i += 1.0;
+    }
+    (ln_dbinom_raw(k as f64, nf, p, q) + sum.ln()).min(0.0)
+}
+
 /// Probability of drawing `x` red balls in `n` draws without replacement
 /// from `r` red and `b` black ones.
 pub fn dhyper(x: u64, r: u64, b: u64, n: u64) -> f64 {
@@ -329,6 +377,26 @@ pub fn median(values: &[f64]) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ln_binomial_upper_tail() {
+        // scipy.stats.binom.logsf(k - 1, n, p), and the far tail summed
+        // with lgamma.
+        for (k, n, p, want) in [
+            (30, 100, 0.1, -17.526589716397783),
+            (5, 10, 0.5, -0.4731335222546632),
+            (3, 1000, 0.01, -0.002683028096808201),
+            (500, 1000, 0.01, -1618.1328677622275),
+        ] {
+            let got = super::ln_pbinom_upper(k, n, p);
+            assert!(
+                (got - want).abs() < 1e-9 * want.abs().max(1.0),
+                "{k} {n} {p}: {got}"
+            );
+        }
+        assert_eq!(super::ln_pbinom_upper(0, 10, 0.5), 0.0);
+        assert_eq!(super::ln_pbinom_upper(11, 10, 0.5), f64::NEG_INFINITY);
+    }
+
     #[test]
     fn bh_matches_r() {
         // p.adjust(c(0.01, 0.04, 0.03, 0.005, 0.5), "BH")
