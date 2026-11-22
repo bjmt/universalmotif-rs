@@ -201,3 +201,42 @@ fn checks_its_options() {
     ));
     assert!(motif_pair_finder::<String>(&[], None, &[anchor()], &options()).is_err());
 }
+
+#[test]
+fn reads_palindromic_parts_on_one_strand() {
+    // A palindromic AP-1 site and G-box 21 letters apart, in a tenth of
+    // the sequences, give one pair, not one per strand of each hit.
+    let mut rng = Lcg(7);
+    let seqs: Vec<String> = (0..1500)
+        .map(|i| {
+            let mut s = rng.dna(200);
+            if i % 10 == 0 {
+                let site = format!("TGACTCA{}CACGTG", rng.dna(21));
+                let at = (rng.next() % 150) as usize;
+                s.replace_range(at..at + site.len(), &site);
+            }
+            s
+        })
+        .collect();
+    let opts = CreateOptions {
+        nsites: Some(20.0),
+        pseudocount: 1.0,
+        ..Default::default()
+    };
+    let ap1 = from_strings(&["TGACTCA", "TGAGTCA"], None, &opts).unwrap();
+    let gbox = from_strings(&["CACGTG"], None, &opts).unwrap();
+    let res = motif_pair_finder(
+        &seqs,
+        None,
+        &[ap1, gbox],
+        &PairFinderOptions {
+            nmotifs: 0,
+            ..options()
+        },
+    )
+    .unwrap();
+    assert_eq!(res.pairs.len(), 1, "{:?}", res.pairs);
+    let p = &res.pairs[0];
+    assert_eq!((p.left, p.right, p.arrangement), (0, 1, "tandem"));
+    assert!((p.min_gap..=p.max_gap).contains(&21));
+}

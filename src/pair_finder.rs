@@ -108,7 +108,8 @@ pub struct MotifPair {
     /// The index of the second part.
     pub right: usize,
     /// The strand of the first part. Pairs are read so that it is the plus
-    /// strand where the arrangement allows.
+    /// strand where the arrangement allows. Sites of a part that reads the
+    /// same on both strands are all taken to be on the plus strand.
     pub left_strand: Strand,
     /// The strand of the second part.
     pub right_strand: Strand,
@@ -480,6 +481,7 @@ fn ppm_motif(m: &Motif) -> Result<Motif> {
 
 /// The sites of a part, without overlaps.
 fn sites(m: &Motif, seqs: &EncodedSequences, opts: &PairFinderOptions) -> Result<Vec<Site>> {
+    let palindrome = palindromic(m);
     let short = 16.0 * 0.25f64.powi(m.width() as i32);
     let scan = ScanOptions {
         pvalue: short.min(1e-3).max(opts.hit_pvalue),
@@ -494,9 +496,23 @@ fn sites(m: &Motif, seqs: &EncodedSequences, opts: &PairFinderOptions) -> Result
             seq: h.sequence[i] as usize,
             start: h.start[i] as usize,
             end: h.end[i] as usize,
-            plus: !h.minus[i],
+            plus: palindrome || !h.minus[i],
         })
         .collect())
+}
+
+/// Whether a part reads nearly the same on both strands, so that the strand
+/// of its sites says nothing: its columns differ from those of its reverse
+/// complement by a total variation distance of under 0.15 on average.
+fn palindromic(m: &Motif) -> bool {
+    let w = m.width();
+    let dist: f64 = (0..w)
+        .map(|j| {
+            let (a, b) = (m.matrix.col(j), m.matrix.col(w - 1 - j));
+            0.5 * (0..4).map(|r| (a[r] - b[3 - r]).abs()).sum::<f64>()
+        })
+        .sum();
+    dist / (w as f64) < 0.15
 }
 
 /// The parts to keep, in order, leaving out any half or more of whose sites
