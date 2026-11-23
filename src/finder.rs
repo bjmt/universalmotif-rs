@@ -1226,9 +1226,6 @@ pub struct SpacedPair {
     pub ln_pvalue: f64,
 }
 
-/// Maps a pair and the index of its spacing to the slots it counts in.
-type Slots<'a> = dyn Fn(usize, usize, &mut dyn FnMut(usize)) + Sync + 'a;
-
 /// Count every pair of `k`-mers separated by `min_gap` to `max_gap` letters
 /// in each set of sequences, once per sequence, both at each spacing and
 /// within windows of 2, 4, 8 and 16 neighbouring spacings, so that a pair
@@ -1300,9 +1297,129 @@ fn subset_counts(
 pub(crate) struct NegativePairs {
     kept: Vec<usize>,
     by_window: Vec<u32>,
-    any: Option<Vec<u32>>,
+    /// Counts over all spacings, of the pairs in the bit set alone.
+    any: Option<(Vec<u64>, Vec<u32>)>,
     sizes: (u64, u64),
     ln_p: HashMap<(u64, u64), f64>,
+}
+
+/// Presence counts over a set of slots, each slot counted at most once per
+/// sequence through a bit set cleared after each one.
+struct Counter {
+    counts: Vec<u32>,
+    seen: Vec<u64>,
+    touched: Vec<usize>,
+}
+
+impl Counter {
+    #[inline]
+    fn add(&mut self, p: usize) {
+        let (word, bit) = (p / 64, 1u64 << (p % 64));
+        if self.seen[word] & bit == 0 {
+            self.seen[word] |= bit;
+            self.touched.push(p);
+            self.counts[p] += 1;
+        }
+    }
+
+    fn next_sequence(&mut self) {
+        for &p in &self.touched {
+            self.seen[p / 64] = 0;
+        }
+        self.touched.clear();
+    }
+}
+
+/// Count, over `len` slots, the sequences holding each pair of k-mers
+/// separated by min_gap to max_gap letters, and with `mismatch` each pair
+/// one letter away from one held, both given as one 4k-bit number in the
+/// reading `rc` picks. `slots` turns a pair and the index of its spacing
+/// into the slots it counts in. Each pair is handled without calls through
+/// closures, which matters for the 37 pairs a mismatch makes of each.
+#[allow(clippy::too_many_arguments)]
+fn count_pairs<S, F>(
+    seqs: &[S],
+    k: usize,
+    min_gap: usize,
+    max_gap: usize,
+    rc: bool,
+    mismatch: bool,
+    threads: usize,
+    len: usize,
+    slots: &F,
+) -> Result<Vec<u32>>
+where
+    S: AsRef<str> + Sync,
+    F: Fn(usize, usize, &mut Counter) + Sync,
+{
+    // The shifts that change one letter of a pair and the same letter of
+    // its reverse complement, which sits at the other end.
+    let shifts: Vec<(u32, u32)> = (0..2 * k)
+        .map(|i| (2 * i as u32, 2 * (2 * k - 1 - i) as u32))
+        .collect();
+    let chunk = seqs.len().div_ceil(threads).max(1);
+    let parts: Vec<Vec<u32>> = with_threads(threads, || {
+        seqs.par_chunks(chunk)
+            .map(|part| {
+                let mut c = Counter {
+                    counts: vec![0u32; len],
+                    seen: vec![0u64; len.div_ceil(64)],
+                    touched: Vec::new(),
+                };
+                let mut codes: Vec<Option<(u64, u64)>> = Vec::new();
+                for seq in part {
+                    let bytes = seq.as_ref().as_bytes();
+                    if bytes.len() < 2 * k + min_gap {
+                        continue;
+                    }
+                    // Each k-mer with its reverse complement.
+                    codes.clear();
+                    codes.extend(
+                        (0..=bytes.len() - k)
+                            .map(|i| kmer_encode(bytes, k, i).map(|c| (c, rc_kmer(c, k)))),
+                    );
+                    for i in 0..codes.len() {
+                        let Some((a, ra)) = codes[i] else { continue };
+                        for g in min_gap..=max_gap {
+                            let j = i + k + g;
+                            if j >= codes.len() {
+                                break;
+                            }
+                            let Some((b, rb)) = codes[j] else { continue };
+                            // The pair as one 2k-mer, whose reverse complement
+                            // is the reverse complement of the second k-mer
+                            // then of the first.
+                            let pair = (a << (2 * k)) | b;
+                            let rev = (rb << (2 * k)) | ra;
+                            let gi = g - min_gap;
+                            let canon = |p: u64, r: u64| (if rc { p.min(r) } else { p }) as usize;
+                            slots(canon(pair, rev), gi, &mut c);
+                            if mismatch {
+                                for &(sh, rsh) in &shifts {
+                                    for x in 1..4u64 {
+                                        slots(
+                                            canon(pair ^ (x << sh), rev ^ (x << rsh)),
+                                            gi,
+                                            &mut c,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    c.next_sequence();
+                }
+                c.counts
+            })
+            .collect()
+    })?;
+    let mut total = vec![0u32; len];
+    for part in parts {
+        for (t, v) in total.iter_mut().zip(part) {
+            *t += v;
+        }
+    }
+    Ok(total)
 }
 
 /// [`spaced_pairs`], reusing the negatives' counts in `cache` when the pairs
@@ -1362,84 +1479,6 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
     let n_kmers = 1usize << (2 * k);
     let n_pairs = n_kmers * n_kmers;
     let threads = nthreads.max(1);
-    // Every pair in a sequence with the index of its spacing.
-    let each_pair = |seq: &S, codes: &mut Vec<_>, f: &mut dyn FnMut(usize, usize)| {
-        let bytes = seq.as_ref().as_bytes();
-        if bytes.len() < 2 * k + min_gap {
-            return;
-        }
-        // Each k-mer with its reverse complement.
-        codes.clear();
-        codes.extend(
-            (0..=bytes.len() - k).map(|i| kmer_encode(bytes, k, i).map(|c| (c, rc_kmer(c, k)))),
-        );
-        for i in 0..codes.len() {
-            let Some((a, ra)) = codes[i] else { continue };
-            for g in min_gap..=max_gap {
-                let j = i + k + g;
-                if j >= codes.len() {
-                    break;
-                }
-                let Some((b, rb)) = codes[j] else { continue };
-                // The pair as one 2k-mer, whose reverse complement is the
-                // reverse complement of the second k-mer then of the first.
-                let pair = (a << (2 * k)) | b;
-                let rev = (rb << (2 * k)) | ra;
-                let canon = |p: u64, r: u64| (if rc { p.min(r) } else { p }) as usize;
-                f(canon(pair, rev), g - min_gap);
-                if mismatch {
-                    // A letter changed at one end changes its complement at
-                    // the other end of the reverse complement the same way.
-                    for i in 0..2 * k {
-                        let (sh, rsh) = (2 * i, 2 * (2 * k - 1 - i));
-                        for x in 1..4u64 {
-                            f(canon(pair ^ (x << sh), rev ^ (x << rsh)), g - min_gap);
-                        }
-                    }
-                }
-            }
-        }
-    };
-    // Presence counts over `len` slots, each slot counted once per sequence
-    // through a bit set cleared after each one, summed over chunks of
-    // sequences run in parallel.
-    let count = |seqs: &[S], len: usize, slots: &Slots| {
-        let chunk = seqs.len().div_ceil(threads).max(1);
-        let parts: Vec<Vec<u32>> = with_threads(threads, || {
-            seqs.par_chunks(chunk)
-                .map(|part| {
-                    let mut counts = vec![0u32; len];
-                    let mut seen = vec![0u64; len.div_ceil(64)];
-                    let mut touched: Vec<usize> = Vec::new();
-                    let mut codes: Vec<Option<(u64, u64)>> = Vec::new();
-                    for seq in part {
-                        each_pair(seq, &mut codes, &mut |pair, gi| {
-                            slots(pair, gi, &mut |p| {
-                                let (word, bit) = (p / 64, 1u64 << (p % 64));
-                                if seen[word] & bit == 0 {
-                                    seen[word] |= bit;
-                                    touched.push(p);
-                                    counts[p] += 1;
-                                }
-                            })
-                        });
-                        for &p in &touched {
-                            seen[p / 64] = 0;
-                        }
-                        touched.clear();
-                    }
-                    counts
-                })
-                .collect()
-        })?;
-        let mut total = vec![0u32; len];
-        for part in parts {
-            for (t, v) in total.iter_mut().zip(part) {
-                *t += v;
-            }
-        }
-        Ok::<_, crate::error::Error>(total)
-    };
     let (n_pos, n_neg) = (positives.len() as u64, negatives.len() as u64);
     let lf = LogFact::new((n_pos + n_neg) as usize);
     // Many pairs share the same counts, so each table is tested once.
@@ -1453,23 +1492,61 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
             .or_insert_with(|| ln_fisher_greater(&lf, c, n_pos - c, d, n_neg - d))
     };
     // Pairs at any spacing, in the positives.
-    let mut index = count(positives, n_pairs, &|pair, _, f| f(pair))?;
+    let mut index = count_pairs(
+        positives,
+        k,
+        min_gap,
+        max_gap,
+        rc,
+        mismatch,
+        threads,
+        n_pairs,
+        &|pair, _, c: &mut Counter| c.add(pair),
+    )?;
     let n_kept = index.iter().filter(|&&c| c >= min_count).count();
     let mut kept: Vec<usize> = Vec::with_capacity(n_kept);
     kept.extend((0..n_pairs).filter(|&p| index[p] >= min_count));
     if kept.len() > MAX_SPACED_PAIRS {
         // Too many to count spacing by spacing: keep those most enriched
-        // over all spacings together.
+        // over all spacings together. Only these pairs are counted in the
+        // negatives, which a bit per pair rules in or out cheaply.
+        let mut wanted = vec![0u64; n_pairs.div_ceil(64)];
+        for &p in &kept {
+            wanted[p / 64] |= 1 << (p % 64);
+        }
+        let count_wanted = |bits: Vec<u64>| -> Result<(Vec<u64>, Vec<u32>)> {
+            let counts = count_pairs(
+                negatives,
+                k,
+                min_gap,
+                max_gap,
+                rc,
+                mismatch,
+                threads,
+                n_pairs,
+                &|pair, _, c: &mut Counter| {
+                    if bits[pair / 64] & (1 << (pair % 64)) != 0 {
+                        c.add(pair)
+                    }
+                },
+            )?;
+            Ok((bits, counts))
+        };
         let fresh;
         let any_neg: &Vec<u32> = match cache.as_deref_mut() {
             Some(c) => {
-                if c.any.is_none() {
-                    c.any = Some(count(negatives, n_pairs, &|pair, _, f| f(pair))?);
+                // Counts from an earlier call serve if they cover every
+                // pair wanted now.
+                let covered = c.any.as_ref().is_some_and(|(bits, _)| {
+                    kept.iter().all(|&p| bits[p / 64] & (1 << (p % 64)) != 0)
+                });
+                if !covered {
+                    c.any = Some(count_wanted(wanted)?);
                 }
-                c.any.as_ref().unwrap()
+                &c.any.as_ref().unwrap().1
             }
             None => {
-                fresh = count(negatives, n_pairs, &|pair, _, f| f(pair))?;
+                fresh = count_wanted(wanted)?.1;
                 &fresh
             }
         };
@@ -1492,7 +1569,7 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
         is_kept[p / 64] |= 1 << (p % 64);
     }
     // The pairs kept, window by window.
-    let by_window = |pair: usize, gi: usize, f: &mut dyn FnMut(usize)| {
+    let by_window = |pair: usize, gi: usize, c: &mut Counter| {
         if is_kept[pair / 64] & (1 << (pair % 64)) == 0 {
             return;
         }
@@ -1500,12 +1577,14 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
         if i != u32::MAX {
             let base = i as usize * n_windows;
             for &win in &of_gap[gi] {
-                f(base + win as usize);
+                c.add(base + win as usize);
             }
         }
     };
     let len = kept.len() * n_windows;
-    let pos = count(positives, len, &by_window)?;
+    let pos = count_pairs(
+        positives, k, min_gap, max_gap, rc, mismatch, threads, len, &by_window,
+    )?;
     // A pair's count in each window doesn't depend on the other pairs kept,
     // so counts from an earlier call serve for any of its pairs.
     let reused = cache
@@ -1514,7 +1593,9 @@ pub(crate) fn spaced_pairs_with<S: AsRef<str> + Sync>(
     let neg = match reused {
         Some(neg) => neg,
         None => {
-            let neg = count(negatives, len, &by_window)?;
+            let neg = count_pairs(
+                negatives, k, min_gap, max_gap, rc, mismatch, threads, len, &by_window,
+            )?;
             if let Some(c) = cache.as_deref_mut() {
                 c.kept = kept.clone();
                 c.by_window = neg.clone();

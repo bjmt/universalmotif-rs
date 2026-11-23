@@ -35,6 +35,8 @@ Other changes:
   are faster, with identical results: the finders count k-mers once and
   score two positions at a time, seqlets are extended only from stretches
   that passed, and scans skip windows that can no longer reach the cutoff.
+  Counting pairs of 6-mers with a mismatch, as `Mismatch::Auto` does when
+  it searches again, takes about a third less time.
 
 Fixes:
 
