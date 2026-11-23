@@ -87,7 +87,7 @@ pub struct Selection {
     /// The share of all targets reached by the kept motifs up to and
     /// including this one in the greedy order.
     pub cumulative: Vec<f64>,
-    /// Whether the motif is kept: it added at least the minimum gain and is
+    /// Whether the motif is kept: it added at least its minimum gain and is
     /// not too similar to a motif kept before it.
     pub kept: Vec<bool>,
     /// For motifs left out as similar, the index of the kept motif they

@@ -77,9 +77,15 @@ pub fn parse_gap_notation(text: &str, width: usize) -> Option<GapInfo> {
 }
 
 /// The alternative name a motif file gets: the gap notation for a gapped
-/// motif, and the motif's own alternative name otherwise.
+/// motif, and the motif's own alternative name otherwise, unless that name
+/// is itself a gap notation that fits the motif, as when a motif read with
+/// gaps has had them removed, since reading it back would restore them.
 pub(crate) fn file_altname(m: &Motif) -> Option<String> {
-    gap_notation(m).or_else(|| m.altname.clone())
+    gap_notation(m).or_else(|| {
+        m.altname
+            .clone()
+            .filter(|a| parse_gap_notation(a, m.width()).is_none())
+    })
 }
 
 /// A motif read from a file, with the gaps its alternative name gives if

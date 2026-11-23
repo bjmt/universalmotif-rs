@@ -51,6 +51,18 @@ fn planted(every: usize, seed: u64) -> Vec<String> {
         .collect()
 }
 
+fn revcomp(s: &str) -> String {
+    s.bytes()
+        .rev()
+        .map(|b| match b {
+            b'A' => 'T',
+            b'C' => 'G',
+            b'G' => 'C',
+            _ => 'A',
+        })
+        .collect()
+}
+
 fn anchor() -> universalmotif::Motif {
     from_strings(
         &["TGTCGG"],
@@ -89,7 +101,11 @@ fn finds_a_planted_pair_in_a_twentieth_of_the_sequences() {
         "convergent"
     };
     assert_eq!(top.arrangement, expected);
-    assert!((top.min_gap..=top.max_gap).contains(&7) && top.max_gap - top.min_gap <= 2);
+    // The partner found may carry a flanking column of the spacer.
+    assert!(
+        (5..=7).contains(&top.min_gap) && top.max_gap - top.min_gap <= 2,
+        "{top:?}"
+    );
     assert!(top.log10_pvalue < -5.0 && top.fold > 5.0, "{top:?}");
     assert!(!top.repeat);
     let consensus = top.motif.consensus.as_deref().unwrap();
@@ -205,13 +221,17 @@ fn checks_its_options() {
 #[test]
 fn reads_palindromic_parts_on_one_strand() {
     // A palindromic AP-1 site and G-box 21 letters apart, in a tenth of
-    // the sequences, give one pair, not one per strand of each hit.
+    // the sequences and on either strand, give one pair, not one per
+    // strand of each hit or of the pair.
     let mut rng = Lcg(7);
     let seqs: Vec<String> = (0..1500)
         .map(|i| {
             let mut s = rng.dna(200);
             if i % 10 == 0 {
-                let site = format!("TGACTCA{}CACGTG", rng.dna(21));
+                let mut site = format!("TGACTCA{}CACGTG", rng.dna(21));
+                if i % 20 == 0 {
+                    site = revcomp(&site);
+                }
                 let at = (rng.next() % 150) as usize;
                 s.replace_range(at..at + site.len(), &site);
             }
@@ -239,4 +259,92 @@ fn reads_palindromic_parts_on_one_strand() {
     let p = &res.pairs[0];
     assert_eq!((p.left, p.right, p.arrangement), (0, 1, "tandem"));
     assert!((p.min_gap..=p.max_gap).contains(&21));
+}
+
+#[test]
+fn reads_a_pair_with_one_palindromic_part_on_either_strand_as_one() {
+    // TGTCGG, then 7 letters, then the palindromic G-box, planted on
+    // either strand.
+    let mut rng = Lcg(8);
+    let seqs: Vec<String> = (0..1500)
+        .map(|i| {
+            let mut s = rng.dna(200);
+            if i % 10 == 0 {
+                let mut site = format!("TGTCGG{}CACGTG", rng.dna(7));
+                if i % 20 == 0 {
+                    site = revcomp(&site);
+                }
+                let at = (rng.next() % 150) as usize;
+                s.replace_range(at..at + site.len(), &site);
+            }
+            s
+        })
+        .collect();
+    let opts = CreateOptions {
+        nsites: Some(20.0),
+        pseudocount: 1.0,
+        ..Default::default()
+    };
+    let gbox = from_strings(&["CACGTG"], None, &opts).unwrap();
+    for motifs in [vec![anchor(), gbox.clone()], vec![gbox, anchor()]] {
+        let res = motif_pair_finder(
+            &seqs,
+            None,
+            &motifs,
+            &PairFinderOptions {
+                nmotifs: 0,
+                ..options()
+            },
+        )
+        .unwrap();
+        assert_eq!(res.pairs.len(), 1, "{:?}", res.pairs);
+        let p = &res.pairs[0];
+        assert_eq!(res.parts[p.left].name, "ARF");
+        assert_eq!(
+            (p.left_strand, p.right_strand),
+            (Strand::Plus, Strand::Plus)
+        );
+        assert!((p.min_gap..=p.max_gap).contains(&7));
+    }
+}
+
+#[test]
+fn reports_which_motifs_given_were_kept() {
+    let seqs = planted(20, 3);
+    // A four-letter part cannot reach the scan cutoff and has no sites.
+    let short = from_strings(&["GATA"], None, &CreateOptions::default()).unwrap();
+    let res = motif_pair_finder(&seqs, None, &[anchor(), short], &options()).unwrap();
+    assert_eq!(res.given, vec![Some(0), None]);
+}
+
+#[test]
+fn rejects_gapped_parts_and_clamps_the_window() {
+    let seqs = planted(20, 3);
+    let gapped = universalmotif::ops::add_gap(&anchor(), Some(&[3]), &[1], &[2]).unwrap();
+    assert!(motif_pair_finder(&seqs, None, &[gapped], &options()).is_err());
+    let narrow = PairFinderOptions {
+        max_gap: 1,
+        ..options()
+    };
+    assert!(motif_pair_finder(&seqs, None, &[anchor()], &narrow).is_ok());
+    for bad in [
+        PairFinderOptions {
+            hit_pvalue: 1.0,
+            ..options()
+        },
+        PairFinderOptions {
+            min_fold: f64::NAN,
+            ..options()
+        },
+        PairFinderOptions {
+            merge_overlap: f64::NAN,
+            ..options()
+        },
+        PairFinderOptions {
+            bkg_shuffles: 0,
+            ..options()
+        },
+    ] {
+        assert!(motif_pair_finder(&seqs, None, &[anchor()], &bad).is_err());
+    }
 }

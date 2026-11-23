@@ -161,10 +161,19 @@ fn ln_dbinom_raw(x: f64, n: f64, p: f64, q: f64) -> f64 {
 /// The natural log of [`pbinom_upper`], which stays finite in the far
 /// upper tail.
 pub fn ln_pbinom_upper(k: u64, n: u64, p: f64) -> f64 {
-    if k == 0 || p >= 1.0 {
+    if k == 0 {
         return 0.0;
     }
-    if k > n || p <= 0.0 {
+    if k > n {
+        return f64::NEG_INFINITY;
+    }
+    if p.is_nan() {
+        return f64::NAN;
+    }
+    if p >= 1.0 {
+        return 0.0;
+    }
+    if p <= 0.0 {
         return f64::NEG_INFINITY;
     }
     let (q, nf) = (1.0 - p, n as f64);
@@ -395,6 +404,9 @@ mod tests {
         }
         assert_eq!(super::ln_pbinom_upper(0, 10, 0.5), 0.0);
         assert_eq!(super::ln_pbinom_upper(11, 10, 0.5), f64::NEG_INFINITY);
+        assert_eq!(super::ln_pbinom_upper(11, 10, 1.0), f64::NEG_INFINITY);
+        assert_eq!(super::ln_pbinom_upper(10, 10, 1.0), 0.0);
+        assert!(super::ln_pbinom_upper(3, 10, f64::NAN).is_nan());
     }
 
     #[test]

@@ -113,3 +113,40 @@ fn refuses_files_from_old_versions() {
     assert!(e.contains("before 1.1.67"), "{e}");
     assert!(read("").is_err());
 }
+
+#[test]
+fn quotes_what_yaml_1_1_reads_as_numbers_or_keys() {
+    let (motifs, _) = read(MIXED).unwrap();
+    for name in [
+        "0x1F",
+        "0o17",
+        "1_000",
+        "1:30",
+        "012",
+        "<<",
+        "=",
+        "a\u{2028}b",
+    ] {
+        let mut parts = motifs[0].clone().into_parts();
+        parts.name = name.into();
+        let m = universalmotif::motif::Motif::from_parts(parts).unwrap();
+        let text = write(std::slice::from_ref(&m), true).unwrap();
+        let line = text.lines().find(|l| l.starts_with("name:")).unwrap();
+        assert!(line.contains('\'') || line.contains('"'), "{line}");
+        assert_eq!(read(&text).unwrap().0[0].name, name);
+    }
+}
+
+#[test]
+fn refuses_gap_sizes_too_large() {
+    let (motifs, _) = read(MIXED).unwrap();
+    let gapped = motifs
+        .iter()
+        .find(|m| m.gap.isgapped)
+        .expect("a gapped motif");
+    let text = write(std::slice::from_ref(gapped), true).unwrap();
+    assert!(text.contains("maxgap:\n- 1\n- 5\n"), "{text}");
+    let bad = text.replace("maxgap:\n- 1\n- 5\n", "maxgap:\n- 1\n- 1.0e30\n");
+    let e = read(&bad).unwrap_err().to_string();
+    assert!(e.contains("below 2^32"), "{e}");
+}

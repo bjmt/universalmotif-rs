@@ -276,8 +276,10 @@ fn number(s: &str, what: &str) -> Result<f64> {
 
 fn whole(s: &str, what: &str) -> Result<usize> {
     let v = number(s, what)?;
-    if v < 0.0 || v.fract() != 0.0 {
-        return fmt_err(format!("{what} must be a whole number, not '{s}'"));
+    if v < 0.0 || v.fract() != 0.0 || v > f64::from(u32::MAX) {
+        return fmt_err(format!(
+            "{what} must be a whole number below 2^32, not '{s}'"
+        ));
     }
     Ok(v as usize)
 }
@@ -549,7 +551,9 @@ fn float(x: f64) -> String {
 /// A string as a YAML scalar, quoted whenever it would otherwise be read as
 /// something else.
 fn quote(s: &str) -> String {
-    if s.chars().any(|c| c.is_control()) {
+    // Line and paragraph separators end a line for YAML too.
+    let escape = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
+    if s.chars().any(escape) {
         let mut out = String::from('"');
         for c in s.chars() {
             match c {
@@ -558,7 +562,7 @@ fn quote(s: &str) -> String {
                 '\n' => out.push_str("\\n"),
                 '\t' => out.push_str("\\t"),
                 '\r' => out.push_str("\\r"),
-                c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c if escape(c) => out.push_str(&format!("\\u{:04x}", c as u32)),
                 c => out.push(c),
             }
         }
@@ -578,12 +582,32 @@ fn quote(s: &str) -> String {
         )
         || lower.trim_start_matches(['+', '-']).starts_with('.')
             && matches!(lower.trim_start_matches(['+', '-']), ".inf" | ".nan")
-        || s.parse::<f64>().is_ok();
+        || s.parse::<f64>().is_ok()
+        || yaml11_number(&lower)
+        || matches!(s, "<<" | "=");
     if special {
         format!("'{}'", s.replace('\'', "''"))
     } else {
         s.to_string()
     }
+}
+
+/// Whether YAML 1.1 readers, such as R's yaml package, would read a plain
+/// scalar as a number although Rust does not: hexadecimal, octal and
+/// binary integers, numbers with underscores, and sexagesimal numbers such
+/// as 1:30.
+fn yaml11_number(lower: &str) -> bool {
+    let t = lower.trim_start_matches(['+', '-']);
+    let radix = ["0x", "0o", "0b"].iter().any(|p| {
+        t.len() > 2
+            && t.starts_with(p)
+            && t[2..]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    let digits = t.starts_with(|c: char| c.is_ascii_digit())
+        && t.chars().all(|c| c.is_ascii_digit() || "_:.".contains(c));
+    radix || digits
 }
 
 #[cfg(test)]

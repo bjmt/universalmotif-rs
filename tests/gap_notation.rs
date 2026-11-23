@@ -78,3 +78,19 @@ fn ordinary_alternative_names_are_left_alone() {
     let text = ">x AC[1-2]G\nA [ 1 2 3 4 ]\nC [ 1 1 1 1 ]\nG [ 1 1 1 1 ]\nT [ 1 0 0 0 ]\n";
     assert!(!jaspar::read(text).unwrap()[0].gap.isgapped);
 }
+
+#[test]
+fn ungapped_motifs_do_not_get_their_gaps_back() {
+    // A motif read with gaps keeps the notation as its alternative name;
+    // once ungapped, writing it again must not restore them.
+    let text = meme::write(&[dr()], &Default::default()).unwrap();
+    let read = meme::read(&text, &Default::default()).unwrap();
+    let off = universalmotif::ops::ungap(&read[0], true);
+    let again = meme::write(std::slice::from_ref(&off), &Default::default()).unwrap();
+    assert!(again.contains("MOTIF DR\n"), "{again}");
+    assert!(
+        !meme::read(&again, &Default::default()).unwrap()[0]
+            .gap
+            .isgapped
+    );
+}

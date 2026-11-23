@@ -33,9 +33,12 @@ pub struct PairFinderOptions {
     pub nmotifs: usize,
     /// The longest spacer searched, at most 31; 31 by default.
     pub max_gap: usize,
-    /// The P-value a site of a part must reach; 1e-4 by default. Parts too
-    /// short to reach it are scanned at sixteen times the P-value of a
-    /// perfect site of their width, up to 1e-3.
+    /// The P-value a site of a part must reach; 1e-4 by default. Each part
+    /// is scanned at this or at sixteen times the P-value of a perfect site
+    /// of its width, capped at 1e-3, whichever is larger, so that parts of
+    /// six to eight letters, whose sites seldom reach 1e-4, still have
+    /// sites. Parts of four letters or fewer cannot reach 1e-3 and have
+    /// none.
     pub hit_pvalue: f64,
     /// The P-value a spacing must reach in the sequences it is chosen in
     /// to be tested in those held out; 1e-3 by default.
@@ -49,7 +52,8 @@ pub struct PairFinderOptions {
     /// The fewest times more pairs than expected a spacing needs in the
     /// sequences held out; 2 by default.
     pub min_fold: f64,
-    /// The most spacers a spacing may span; 3 by default.
+    /// The most spacers a spacing may span, at most `max_gap + 1`; 3 by
+    /// default.
     pub max_window: usize,
     /// The share of the sequences and of the background held out to test
     /// the spacings chosen in the rest; 0.3 by default.
@@ -99,16 +103,16 @@ impl Default for PairFinderOptions {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct MotifPair {
-    /// The two parts as one motif, gapped from `min_gap` to `max_gap` (or
-    /// to 1 when `min_gap` is 0 and the window wider), or ungapped when the
-    /// parts sit side by side.
+    /// The two parts as one motif, gapped from `min_gap` to `max_gap`, or
+    /// ungapped when the window holds only a spacer of 0.
     pub motif: Motif,
     /// The index of the first part in [`PairFinderResult::parts`].
     pub left: usize,
     /// The index of the second part.
     pub right: usize,
-    /// The strand of the first part. Pairs are read so that it is the plus
-    /// strand where the arrangement allows. Sites of a part that reads the
+    /// The strand of the first part. Pairs are read with as few parts on
+    /// the minus strand as the arrangement allows, and then with the first
+    /// part on the plus strand. Sites of a part that reads the
     /// same on both strands are all taken to be on the plus strand.
     pub left_strand: Strand,
     /// The strand of the second part.
@@ -146,6 +150,10 @@ pub struct PairFinderResult {
     pub parts: Vec<Motif>,
     /// The pairs found, most significant first.
     pub pairs: Vec<MotifPair>,
+    /// For each motif given, its index in `parts`, or `None` when it was
+    /// left out, as it had no sites or its sites mostly overlapped those of
+    /// an earlier part.
+    pub given: Vec<Option<usize>>,
 }
 
 /// A pair of parts in one arrangement: the first part, whether it is on
@@ -199,11 +207,14 @@ pub fn motif_pair_finder<S: AsRef<str> + Sync>(
     if opts.max_gap > 31 {
         return arg_err("max_gap must be at most 31");
     }
-    if opts.max_window == 0 || opts.max_window > opts.max_gap + 1 {
-        return arg_err("max_window must be from 1 to max_gap + 1");
+    if opts.max_window == 0 {
+        return arg_err("max_window must be at least 1");
+    }
+    let max_window = opts.max_window.min(opts.max_gap + 1);
+    if !(opts.hit_pvalue > 0.0 && opts.hit_pvalue < 1.0) {
+        return arg_err("hit_pvalue must be in (0, 1)");
     }
     for (name, p) in [
-        ("hit_pvalue", opts.hit_pvalue),
         ("train_pvalue", opts.train_pvalue),
         ("stop_pvalue", opts.stop_pvalue),
     ] {
@@ -214,11 +225,23 @@ pub fn motif_pair_finder<S: AsRef<str> + Sync>(
     if !(opts.holdout > 0.0 && opts.holdout < 0.9) {
         return arg_err("holdout must be in (0, 0.9)");
     }
-    if opts.merge_overlap <= 0.0 {
+    if opts.merge_overlap.is_nan() || opts.merge_overlap <= 0.0 {
         return arg_err("merge_overlap must be above 0");
+    }
+    if opts.min_fold.is_nan() || opts.min_fold < 0.0 {
+        return arg_err("min_fold must be 0 or more");
+    }
+    if negatives.is_none() && opts.bkg_shuffles == 0 {
+        return arg_err("bkg_shuffles must be at least 1 without negative sequences");
     }
     if let Some(m) = motifs.iter().find(|m| m.alphabet != Alphabet::Dna) {
         return arg_err(format!("{} is not a DNA motif", m.name));
+    }
+    if let Some(m) = motifs.iter().find(|m| m.gap.isgapped) {
+        return arg_err(format!(
+            "{} is gapped; give its parts as motifs of their own",
+            m.name
+        ));
     }
     let progress = progress::current();
     progress::begin(&progress, "finding pairs", 4);
@@ -251,12 +274,28 @@ pub fn motif_pair_finder<S: AsRef<str> + Sync>(
         (pos, neg)
     };
     progress::check(&progress)?;
+    // Parts are found, and those alike dropped, in the sequences the
+    // spacings are chosen in, so that those held out stay unseen.
+    let held_pos: Vec<bool> = (0..pos.len())
+        .map(|i| held_out(i, opts.seed, opts.holdout))
+        .collect();
+    let held_neg: Vec<bool> = (0..neg.len())
+        .map(|i| held_out(i, opts.seed ^ 0x9e37_79b9_7f4a_7c15, opts.holdout))
+        .collect();
     let mut parts: Vec<Motif> = motifs.iter().map(ppm_motif).collect::<Result<_>>()?;
     if opts.nmotifs > 0 {
+        let kept = |seqs: &[String], held: &[bool]| -> Vec<String> {
+            seqs.iter()
+                .zip(held)
+                .filter(|(_, h)| !**h)
+                .map(|(s, _)| s.clone())
+                .collect()
+        };
+        let (train_pos, train_neg) = (kept(&pos, &held_pos), kept(&neg, &held_neg));
         let found = progress::without_progress(|| {
             motif_finder(
-                &pos,
-                Some(&neg),
+                &train_pos,
+                Some(&train_neg),
                 &FinderOptions {
                     nmotifs: opts.nmotifs,
                     seed: opts.seed,
@@ -277,7 +316,10 @@ pub fn motif_pair_finder<S: AsRef<str> + Sync>(
     for m in &parts {
         hits_pos.push(sites(m, &enc_pos, opts)?);
     }
-    let keep = distinct(&hits_pos);
+    let keep = distinct(&hits_pos, &held_pos);
+    let given = (0..motifs.len())
+        .map(|i| keep.iter().position(|&k| k == i))
+        .collect();
     let parts: Vec<Motif> = keep.iter().map(|&i| parts[i].clone()).collect();
     let hits_pos: Vec<Vec<Site>> = keep.iter().map(|&i| hits_pos[i].clone()).collect();
     let mut hits_neg = Vec::with_capacity(parts.len());
@@ -287,15 +329,10 @@ pub fn motif_pair_finder<S: AsRef<str> + Sync>(
     progress::add(&progress, 1);
     progress::check(&progress)?;
 
-    let held_pos: Vec<bool> = (0..pos.len())
-        .map(|i| held_out(i, opts.seed, opts.holdout))
-        .collect();
-    let held_neg: Vec<bool> = (0..neg.len())
-        .map(|i| held_out(i, opts.seed ^ 0x9e37_79b9_7f4a_7c15, opts.holdout))
-        .collect();
     let n_spacers = opts.max_gap + 1;
-    let pairs_pos = pair_sites(&hits_pos, pos.len(), opts.max_gap);
-    let pairs_neg = pair_sites(&hits_neg, neg.len(), opts.max_gap);
+    let pal: Vec<bool> = parts.iter().map(palindromic).collect();
+    let pairs_pos = pair_sites(&hits_pos, &pal, pos.len(), opts.max_gap);
+    let pairs_neg = pair_sites(&hits_neg, &pal, neg.len(), opts.max_gap);
     let count = |pairs: &HashMap<Config, Vec<PairSite>>, held: &[bool]| {
         let mut out: HashMap<Config, Counts> = HashMap::new();
         for (cfg, list) in pairs {
@@ -326,7 +363,7 @@ pub fn motif_pair_finder<S: AsRef<str> + Sync>(
         let nt = &counts_pos[cfg].train;
         let nb = counts_neg.get(cfg).map_or(&zero, |c| &c.train);
         let mut best: Option<(f64, usize, usize)> = None;
-        for w in 1..=opts.max_window {
+        for w in 1..=max_window {
             for lo in 0..=(n_spacers - w) {
                 if nt[lo..lo + w].iter().sum::<u64>() < opts.min_pairs {
                     continue;
@@ -452,7 +489,11 @@ pub fn motif_pair_finder<S: AsRef<str> + Sync>(
         });
     }
     progress::add(&progress, 1);
-    Ok(PairFinderResult { parts, pairs: out })
+    Ok(PairFinderResult {
+        parts,
+        pairs: out,
+        given,
+    })
 }
 
 /// A site of a part: its sequence, start, end and whether it is on the
@@ -515,12 +556,14 @@ fn palindromic(m: &Motif) -> bool {
     dist / (w as f64) < 0.15
 }
 
-/// The parts to keep, in order, leaving out any half or more of whose sites
-/// overlap those of a part already kept.
-fn distinct(hits: &[Vec<Site>]) -> Vec<usize> {
+/// The parts to keep, in order, leaving out any with no sites and any half
+/// or more of whose sites overlap those of a part already kept, counting
+/// only the sequences not held out.
+fn distinct(hits: &[Vec<Site>], held: &[bool]) -> Vec<usize> {
     let mut keep = Vec::new();
     let mut taken: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     for (i, h) in hits.iter().enumerate() {
+        let h: Vec<&Site> = h.iter().filter(|s| !held[s.seq]).collect();
         if h.is_empty() {
             continue;
         }
@@ -545,9 +588,16 @@ fn distinct(hits: &[Vec<Site>]) -> Vec<usize> {
 
 /// Every pair of sites up to max_gap letters apart, by arrangement. A pair
 /// read on the other strand is the same pair, so each is filed under one
-/// reading: the one with the first part on the plus strand where there is
-/// one, and otherwise the one with the lower first part.
-fn pair_sites(hits: &[Vec<Site>], n_seqs: usize, max_gap: usize) -> HashMap<Config, Vec<PairSite>> {
+/// reading: the one with fewer parts on the minus strand, then the one with
+/// the first part on the plus strand, then the one with the lower first
+/// part. The sites of a
+/// palindromic part (`pal`) are on the plus strand in either reading.
+fn pair_sites(
+    hits: &[Vec<Site>],
+    pal: &[bool],
+    n_seqs: usize,
+    max_gap: usize,
+) -> HashMap<Config, Vec<PairSite>> {
     let mut by_seq: Vec<Vec<(u32, Site)>> = vec![Vec::new(); n_seqs];
     for (m, h) in hits.iter().enumerate() {
         for s in h {
@@ -567,8 +617,13 @@ fn pair_sites(hits: &[Vec<Site>], n_seqs: usize, max_gap: usize) -> HashMap<Conf
                     continue;
                 }
                 let fwd = (mi, a.plus, mj, b.plus);
-                let rev = (mj, !b.plus, mi, !a.plus);
-                let rank = |c: &Config| (!c.1, c.0, c.2, !c.3);
+                let rev = (
+                    mj,
+                    pal[mj as usize] || !b.plus,
+                    mi,
+                    pal[mi as usize] || !a.plus,
+                );
+                let rank = |c: &Config| ((!c.1) as u8 + (!c.3) as u8, !c.1, c.0, c.2, !c.3);
                 let cfg = if rank(&fwd) <= rank(&rev) { fwd } else { rev };
                 out.entry(cfg).or_default().push(PairSite {
                     seq: a.seq,

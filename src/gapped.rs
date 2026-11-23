@@ -134,6 +134,8 @@ pub enum Mismatch {
     /// Search with exact matches, and search again allowing one mismatch,
     /// at half of `stop_pvalue`, only if no motif is found, so that the
     /// slower search is run only when the faster one has nothing to show.
+    /// Only 6-mers are counted with a mismatch, so without 6 among the
+    /// k-mer sizes this is the same as `Off`.
     #[default]
     Auto,
 }
@@ -308,7 +310,10 @@ struct Search<'a> {
 /// nothing is run again with 6-mers allowed one mismatch, which can recover
 /// the spacing of motifs whose parts vary too much to be counted exactly.
 /// The second search keeps motifs at half of `stop_pvalue`, so that the two
-/// together report no more false motifs than one search would.
+/// together report at most half as many false motifs again as one search
+/// would. Without 6 among the k-mer sizes there is no second search. The
+/// second search starts from scratch, so it takes as long as the first
+/// on top of the mismatches.
 ///
 /// Low-complexity regions are masked first with `mask`. For genomic
 /// sequences, negatives drawn from the genome and matched for composition
