@@ -20,10 +20,6 @@ copied, and are not listed here. The other differences are below.
   not write them. The port writes both (UniPROBE in its minimal form), and its
   files read correctly with the R package's `read_cisbp()` and
   `read_uniprobe()`.
-- **Gaps in motif files.** The MEME, JASPAR and TRANSFAC writers give a
-  gapped motif its gaps as its alternative name, written into its consensus
-  as in `AGGTCA[1-5]AGGTCA`, and the readers turn such a name back into
-  gaps. The R package writes these formats without the gaps.
 - **Other alphabets.** The R package's lite functions for scanning,
   comparison, merging, trees, enrichment and `view_motifs_lite()` only take
   DNA and RNA motifs. The port also takes amino acid and custom-alphabet
@@ -195,8 +191,7 @@ copied, and are not listed here. The other differences are below.
   read and write the R package's own YAML-based format, are
   `read_universalmotif()` and `write_universalmotif()`. Higher-order
   matrices, backgrounds of longer words and the extra P-values of gaps are
-  left out when reading, as the port does not hold them, and numbers are
-  written in full rather than to four significant digits.
+  left out when reading, as the port does not hold them.
 
 ## Defaults
 
