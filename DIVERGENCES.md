@@ -30,37 +30,6 @@ copied, and are not listed here. The other differences are below.
   The parametric null for comparison P-values remains DNA and RNA only,
   since its Dirichlet grid assumes four letters; other alphabets use the
   empirical null.
-- **Gapped scanning.** `scan_sequences_lite()` ignores gaps. The port scans
-  gapped motifs as the full `scan_sequences()` does: every combination of
-  gap sizes is tried and matched letters show the gaps as dots. The R
-  package gives each hit the P-value of the motif without its gaps, which
-  lets several times too many chance hits through; the port
-  Bonferroni-corrects P-values and cutoffs for the number of combinations
-  by default, and `correct_gaps` turns this off. Each piece between gaps is
-  scored once per position and the combinations are built from those
-  scores, which is about twice as fast as scanning every combination
-  separately.
-- **Gapped comparison.** `compare_motifs_lite()` ignores gaps. The port
-  compares, merges, clusters and aligns gapped motifs with their gaps: each
-  combination of gap sizes is tried with the gaps filled by blank columns,
-  the best is kept, and its P-value is corrected for the combinations
-  tried. A motif may have at most 32 combinations, since every combination
-  of one motif is compared with every one of the other; `use_gaps = false`
-  compares the parts as if they followed one another.
-- **Complete comparison scores.** With `CompareOptions::complete`,
-  comparisons score whole queries rather than overlaps, as TOMTOM does by
-  default: each query column is scored against the median of its
-  correlations with the null columns, so that columns hanging over the end
-  of the target count as typical ones, and the P-value is that of the best
-  of all the alignments tried rather than a Bonferroni correction. The
-  Python package's `compare_motifs(complete=True)` agrees with TOMTOM's
-  P-values to a correlation of 0.999.
-- **Comparison options.** Besides Pearson correlation, comparisons can
-  use the Euclidean distance between columns (`method = "EUCL"` in the
-  Python package), with exact P-values from either null, and can compare
-  columns hanging over either motif's ends with the background
-  (`overhang = "background"`), so that every alignment counts the same
-  number of column scores.
 - **Contribution matrices.** CWMs are compared by the cosine similarity
   of their signed contributions by default, or by TF-MoDISco's continuous
   Jaccard similarity, so that a negative pattern does not match the
@@ -101,19 +70,11 @@ copied, and are not listed here. The other differences are below.
   insertions and deletions included, along a sequence or across a genome
   (`variant_motif_effects()`), reads VCF files (`read_vcf()`), and makes
   batches of both alleles for a model (`variant_batches()`).
-- **Merging without chains.** `merge_similar()` can join motifs with
-  complete linkage, so that every pair in a cluster is similar, where the
-  connected groups of `merge_similar_lite()` can chain unlike motifs
-  together, and it warns when one cluster holds more than a quarter of the
-  motifs.
 - **Discovery.** `motif_finder()` can rerun its search on random halves of
   the sequences (`stability`) and report how often each motif is found
   again. `gapped_motif_finder()`, experimental for now, finds motifs made
   of two parts with a spacer of varying length, testing each in sequences
   held out from the search.
-- **Naming motifs.** The Python package's `name_motifs()` names motifs by
-  the database motifs they resemble most, scored as TOMTOM scores them,
-  with q-values corrected for the size of the database.
 - **First hits only.** Scans can keep only the first hit of each motif in
   each sequence and stop scanning that sequence for the motif after it.
 - **Package-wide threads.** The Python package's `set_nthreads()`, or the
