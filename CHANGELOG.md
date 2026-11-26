@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Changes in behaviour:
+
+- `merge_similar()` warns about a cluster holding over a quarter of the
+  motifs only when there are at least ten of them.
+
 ## 0.6.0 (2026-11-23)
 
 Changes in behaviour:

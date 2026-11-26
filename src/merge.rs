@@ -523,8 +523,8 @@ pub struct MergedClusters {
     /// One motif per cluster, in cluster order.
     pub motifs: Vec<Motif>,
     /// Notes on clusters that may be too broad to merge well, such as one
-    /// cluster holding over a quarter of the motifs, for the caller to pass
-    /// on.
+    /// cluster holding over a quarter of ten motifs or more, for the caller
+    /// to pass on.
     pub warnings: Vec<String>,
 }
 
@@ -638,9 +638,9 @@ impl Default for MergeSimilarOptions {
 /// within a cluster is linked. Single motifs are kept as they were, and
 /// larger clusters merged with [`merge_motifs`], which keeps CWMs as CWMs.
 ///
-/// A cluster of more than two motifs that holds over a quarter of them has
-/// likely grown from chains of partial likenesses, and is named in
-/// [`MergedClusters::warnings`].
+/// Among ten motifs or more, a cluster of more than two that holds over a
+/// quarter of them has likely grown from chains of partial likenesses, and
+/// is named in [`MergedClusters::warnings`].
 #[allow(clippy::needless_range_loop)]
 pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<MergedClusters> {
     if motifs.is_empty() {
@@ -678,6 +678,7 @@ pub fn merge_similar(motifs: &[Motif], opts: &MergeSimilarOptions) -> Result<Mer
         .iter()
         .enumerate()
         .max_by_key(|&(c, &s)| (s, std::cmp::Reverse(c)))
+        && n >= 10
         && size > 2
         && size * 4 > n
     {
